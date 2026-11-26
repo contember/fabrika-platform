@@ -1060,7 +1060,7 @@ async function deployUnder(
 				// in the control log there — flush first so ours can never land after a relay flush.
 				await runLogs.flush()
 				await invocation.boundary()
-				// Before the republish or the provider puts the new endpoint table before anyone (backlog 226). A dev
+				// Before the republish or the provider puts the new endpoint table before anyone. A dev
 				// bootstrap is skipped: the environment's last succeeded run may be another workspace's.
 				if (!dryRun && sandbox === null) {
 					await applyNarrowing(deps, startedRun, registration.environment.access, invocation.work.signal, (line) => runLogs.log(line))
@@ -1464,7 +1464,7 @@ async function applyApprovedSchema(
 
 /**
  * Write to IAM what the run's approved schema removes from the running version's, and nothing it adds, before anything
- * publishes the new version (backlog 226). A failure, an unavailable IAM included, throws, so the run fails while the
+ * publishes the new version. A failure, an unavailable IAM included, throws, so the run fails while the
  * old version serves. The running version's schema is compiled from the snapshot of the environment's last succeeded run,
  * the one IAM was last given; without one, or when it cannot be read, nothing is narrowed ahead.
  */

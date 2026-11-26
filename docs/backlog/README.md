@@ -110,7 +110,6 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [233](233-platform-services-share-postgres-server-sessions.md): On Zerops one Postgres server session serves IAM, Operations and Control in turn; the services connect through pgBouncer on `portTls`; measure its mode, check what leaks between services, and decide whether to connect directly.
 - [224](224-terminal-follow-ups.md): Smaller gaps of terminals: sign-out without `Sec-Fetch-Site`, re-enrolment, sign-out of a personal login.
 - [225](225-password-minimum-follow-ups.md): Smaller gaps of the installation's minimum password length: audit, an upper cap, the console page.
-- [226](226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md): A narrowing is not in force while the IAM write after a deploy fails; decided: narrowings before the manifest is published, widenings after.
 - [227](227-authorization-model-follow-ups.md): Smaller gaps of the authorization model's fixes: the workload token bound, a stale doc line, an early terminal re-mint.
 - [228](228-application-object-review-follow-ups.md): The P2s and open decisions of the application object waves 0–3 reviews: checker lexer, timers, ledger digest, read path, entry pin.
 - [219](219-the-cloudflare-executor-s-managed-environment-parse-is-untested.md): No test shows the Cloudflare executor refuses a managed value Control would not hand.

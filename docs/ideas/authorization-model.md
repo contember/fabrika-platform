@@ -162,10 +162,6 @@ surface as admitting any value unchecked, derived by Control from the artifact e
 
 Gaps:
 
-- A failed or pending IAM reconcile after a deploy leaves a narrowing unapplied while the new version serves. Decided:
-  narrowings are written to IAM before the manifest is published, widenings after
-  ([backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md), after the provider-neutral-core
-  sprint).
 - One parent per dimension (optional vocabulary).
 - Expanded `perms` overflow the token for a principal in hundreds of nodes. Decided: raise the bound, not project the
   token. IAM now signs a token the proxy injects toward a contract application up to 24 KiB (about 150 entries; it

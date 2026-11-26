@@ -411,10 +411,14 @@ know takes it. `ApprovalDto.stepUp` and `ApprovalRequestDto.stepUp` say which ap
 - **The repository host's checks.** Control reads no CI status, check run or branch protection before it deploys. A
   team that relies on reviewed merges sets that up on GitHub, outside fabrika.
 - **Anything after activation.** No health verdict follows a deploy, and nothing rolls back by itself; a cancellation
-  never rolls back ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md)). When the IAM schema write
-  fails after the version went live, IAM keeps the previous roles, so a narrowing the new version declared is not in
-  force and fresh tokens keep the old authority until a later deploy writes it
-  ([backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)).
+  never rolls back ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md)). What the approved schema
+  takes away from the running version's roles and actions (read from the snapshot of the environment's last succeeded
+  run) goes to IAM before the new version is published, and a failure there fails the run while the old version serves
+  (`applyNarrowing`, `packages/control/src/run-lifecycle.ts`). The full schema follows once the version is live. While
+  that write fails, IAM holds the running schema, narrowed where the write ahead applied: what the new version adds is
+  not in force, and neither is a narrowing the write ahead leaves out. Those are a removed workload, link mount,
+  delegation, member declaration or terminal page; a narrowing that does not form a valid schema on its own; and every
+  narrowing of a dev bootstrap or of an environment without a readable last succeeded run.
 
 ## The platform's own releases
 
@@ -436,15 +440,14 @@ each keeps the `@fabrika/*` release it pins until it raises the pin and deploys
 
 ## Decided, not built
 
-| What                                                                            | Where it is decided                                                                                        |
-| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| The access diff posted as a GitHub check on a pull request                      | [spec](../specs/access-diff-as-a-github-check.md)                                                          |
-| A release watch window after a deploy, with a manual rollback                   | [spec](../specs/release-watch-window-and-rollback.md)                                                      |
-| Automatic rollback of a suspect release                                         | [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md)                                   |
-| Browser journeys as a stage gate and production checks                          | [backlog 268](../backlog/268-opice-journeys-as-a-stage-gate-and-production-checks.md)                      |
-| Destructive-change rules for application migrations                             | [backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)                     |
-| A Cloudflare deploy that keeps the account token away from repository code      | [backlog 86](../backlog/86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md)     |
-| A redelivered push webhook that does not create a second run                    | [backlog 204](../backlog/204-a-redelivered-push-webhook-creates-a-second-run.md)                           |
-| An environment's default branch checked like a trigger ref                      | [backlog 297](../backlog/297-control-accepts-any-default-branch.md)                                        |
-| A narrowing applied to IAM when its reconcile fails after the version went live | [backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)                       |
-| Requests for grants and keys                                                    | [ADR-0083 §8 and its rollout](../decisions/0083-an-environment-chooses-what-waits-for-approval.md#rollout) |
+| What                                                                       | Where it is decided                                                                                        |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| The access diff posted as a GitHub check on a pull request                 | [spec](../specs/access-diff-as-a-github-check.md)                                                          |
+| A release watch window after a deploy, with a manual rollback              | [spec](../specs/release-watch-window-and-rollback.md)                                                      |
+| Automatic rollback of a suspect release                                    | [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md)                                   |
+| Browser journeys as a stage gate and production checks                     | [backlog 268](../backlog/268-opice-journeys-as-a-stage-gate-and-production-checks.md)                      |
+| Destructive-change rules for application migrations                        | [backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)                     |
+| A Cloudflare deploy that keeps the account token away from repository code | [backlog 86](../backlog/86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md)     |
+| A redelivered push webhook that does not create a second run               | [backlog 204](../backlog/204-a-redelivered-push-webhook-creates-a-second-run.md)                           |
+| An environment's default branch checked like a trigger ref                 | [backlog 297](../backlog/297-control-accepts-any-default-branch.md)                                        |
+| Requests for grants and keys                                               | [ADR-0083 §8 and its rollout](../decisions/0083-an-environment-chooses-what-waits-for-approval.md#rollout) |

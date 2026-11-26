@@ -1,4 +1,4 @@
-// The part of a deploy's approved IAM schema that only narrows what the running version's schema grants (backlog 226).
+// The part of a deploy's approved IAM schema that only narrows what the running version's schema grants.
 // Control writes it before anything publishes the new version, so a narrowing IAM refuses stops the deploy while the old
 // version still serves; the whole schema, widenings included, follows once the version is live (`applyApprovedSchema`).
 

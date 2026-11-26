@@ -277,7 +277,7 @@ other environment, before the provider prepares anything, and the write maps a r
   A provider never calls IAM's admin surface for an application, and nothing else here does per deploy, with one
   exception: before the namespace republish and `provider.deploy`, `applyNarrowing` writes what the approved schema
   takes away from the roles and actions of the schema of the environment's last succeeded run, and nothing it adds
-  (`narrowingOf`, `src/iam-narrowing.ts`; backlog 226). Any failure there, an unavailable IAM included, fails the run
+  (`narrowingOf`, `src/iam-narrowing.ts`). Any failure there, an unavailable IAM included, fails the run
   with nothing published, so no version serves while IAM still grants what a role lost. Every workload, link mount,
   delegation, member declaration and terminal page of the running schema stays in that write: IAM revokes a dropped
   workload's or mount's keys and deletes the membership transport key with the last of them, which no later write

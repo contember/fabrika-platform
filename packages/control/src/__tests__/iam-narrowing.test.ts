@@ -144,7 +144,7 @@ async function running(w: World): Promise<AppSchema> {
 	return held
 }
 
-describe('a deploy that narrows access (backlog 226)', () => {
+describe('a deploy that narrows access', () => {
 	test('a narrowing IAM refuses fails the run before anything is published, and leaves IAM as it was', async () => {
 		for (const refusal of [new ReconcileSchemaError('role owner is held by an external principal', 409), new Error('connect ECONNREFUSED')]) {
 			const w = world()
