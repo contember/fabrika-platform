@@ -59,6 +59,8 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'60-public-egress-on-a-mutation.ts': "egress: 'public' is a cron job's only: record a row and kick a job that declares it",
 	'61-caller-without-declaration.ts': "declare caller in defineApp's options: { caller: { table, principal, missing } }",
 	'62-caller-opt-out-without-declaration.ts': 'the kit declares no caller: defineApp(vocabulary, tables, { caller })',
+	'63-notify-without-notifications.ts': 'the vocabulary declares no notifications: add notifications: true to defineVocabulary',
+	'64-notify-in-a-query.ts': 'a query writes nothing, so it notifies no one: notify from a mutation',
 }
 
 /**

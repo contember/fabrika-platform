@@ -35,6 +35,8 @@ export const CAPABILITY_REFUSALS = {
 	undeclared_binding: 'the site named a webhook it does not declare in binds',
 	undeclared_signs: 'the site signed a token of a purpose it does not declare in signs, or for longer than the purpose allows',
 	undeclared_egress: 'the site called an origin it does not declare in egress',
+	undeclared_notify: 'the site notified a person, and the contract declares no notifications',
+	refused_notification: 'ctx.notify was handed a person, a title, a body, a path or what the notification is about that the inbox does not store',
 	refused_egress:
 		"the site's public egress refused the host: an IP address, a local or internal name, a non-default port, credentials in the URL, a host of this installation, or a name that resolves to a private address",
 	oversized_egress: "a response to the site's public egress was larger than it reads",

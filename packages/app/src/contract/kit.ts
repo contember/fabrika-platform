@@ -80,7 +80,7 @@ type Owned<K extends string> = { readonly [P in K]?: never }
  * of the caller's row.
  */
 export type KitOf<V, Ix, Imp extends KitImports, Tk extends TokenPurposes = Record<never, never>, Cr extends string = never> = V extends
-	AppVocabulary<infer A, infer D, infer R, infer Dims, infer M, infer T> ? {
+	AppVocabulary<infer A, infer D, infer R, infer Dims, infer M, infer T, infer N> ? {
 		readonly action: A
 		readonly dimension: D
 		readonly creatable: CreatableDimension<Dims>
@@ -88,6 +88,7 @@ export type KitOf<V, Ix, Imp extends KitImports, Tk extends TokenPurposes = Reco
 		readonly dimensions: Dims
 		readonly members: M
 		readonly terminal: [T] extends [never] ? false : true
+		readonly notifications: [N] extends [never] ? false : true
 		readonly index: Ix
 		readonly tables: Ix extends { readonly tables: infer T } ? keyof T & string : never
 		readonly imports: Imp
