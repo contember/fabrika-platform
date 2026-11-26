@@ -297,8 +297,9 @@ deadline and does the same. The run's status is the migration's: it succeeds onl
   alone: the runner tolerates a ledger ahead of the code. With a `dataLoss` line, or when the redeployed commit does
   not answer `ok` by the deadline, Control publishes the object `closed`, and the run fails as `migration_failed` for
   an operator to fix forward. Nothing is rewound, so no write is lost.
-- **`committed` and `booted`.** There is nothing to recover: the run succeeded. A migration found wrong later is undone
-  by a side restore to the record's bookmark (ADR-0070 §9).
+- **`committed` and `booted` before any recovery started.** There is nothing to recover: the run succeeded. A version
+  that boots only once a rollback deploy started is the failed version recovering, which `check` closes for an operator
+  (above). A migration found wrong later is undone by a side restore to the record's bookmark (ADR-0070 §9).
 
 **The read-only migration phase.** A candidate whose release serves the barrier but does not record the bookmark keeps
 the earlier phase: `read-only`, a consistent backup and its rehearsal, the operation's own deploy, `migrate` under that
