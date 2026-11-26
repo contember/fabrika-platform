@@ -145,13 +145,29 @@ export class WorkloadCredentialRepository {
 			.run()
 	}
 
-	/** Records that `run` handed the pending key `credentialId`; a row that names another key is left as it is. */
+	/**
+	 * Records that `run` handed the pending key `credentialId`; a row that names another key, or that a succeeded run
+	 * handed already, is left as it is.
+	 */
 	async markHandedBy(appId: string, env: string, kind: WorkloadCredentialRow['kind'], name: string, credentialId: string, run: string): Promise<void> {
 		await this.d1
 			.prepare(`UPDATE app_env_workload_credentials SET handed_by = ?
-				WHERE app_id = ? AND env = ? AND kind = ? AND name = ? AND credential_id = ? AND pending = 1`)
+				WHERE app_id = ? AND env = ? AND kind = ? AND name = ? AND credential_id = ? AND pending = 1
+					AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = app_env_workload_credentials.handed_by AND r.status = 'succeeded')`)
 			.bind(run, appId, env, kind, name, credentialId)
 			.run()
+	}
+
+	/**
+	 * Records that the running version holds every pending key a succeeded run handed, on any provider: the next issuance
+	 * then counts the key as the one held. Answers how many keys it confirmed.
+	 */
+	async confirmHanded(): Promise<number> {
+		const result = await this.d1
+			.prepare(`UPDATE app_env_workload_credentials SET pending = 0, handed_by = NULL, held_expires_at = NULL
+				WHERE pending = 1 AND handed_by IN (SELECT id FROM runs WHERE status = 'succeeded')`)
+			.run()
+		return result.meta.changes
 	}
 
 	/** Records that the running version holds `credentialId`; a row that names another key is left as it is. */

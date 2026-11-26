@@ -170,6 +170,9 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 		console.info(`mail maintenance: requeued=${mail.requeued} purged=${mail.purged} collected=${mail.collected}`)
 	}
 	// Before the backups, which may spend the rest of the pass: an expired key stops the application's jobs.
+	// On every provider: a key a succeeded run handed is the one the running version holds, before anything renews it.
+	const handedKeys = await persistence.workloadCredentials.confirmHanded()
+	if (handedKeys > 0) console.info(`workload keys: confirmed=${handedKeys} handed by succeeded runs`)
 	const workloadKeys = await renewWorkloadKeys(env, options.provider, now)
 	if (workloadKeys.written > 0 || workloadKeys.confirmed > 0 || workloadKeys.busy > 0 || workloadKeys.failed > 0) {
 		console.info(

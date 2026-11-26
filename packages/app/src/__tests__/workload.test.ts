@@ -90,6 +90,19 @@ describe('a refused key reaches Operations', () => {
 		}
 	})
 
+	test('a token too large for its permissions says so, not to deploy', async () => {
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const { credential, reports } = reporting(() => Promise.resolve(Response.json({ ok: false, reason: 'token_too_large' })), { now: 0 })
+			await credential.authority()
+			expect(reports.map((report) => report.message)).toEqual([
+				"IAM refused the key of the job 'nightly': token_too_large; its declared permissions do not fit in a token",
+			])
+		} finally {
+			log.mockRestore()
+		}
+	})
+
 	test('an IAM it cannot reach is not a refused key', async () => {
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {

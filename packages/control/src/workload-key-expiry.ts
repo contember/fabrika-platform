@@ -1,7 +1,8 @@
 // The maintenance pass that warns an application's Operations, days ahead, that a workload key its running version holds
 // is about to expire: the maintenance renewal could not hand it a new one (its provider writes no credential without a
 // deploy, or the write keeps failing), and once it expires every job, webhook and public procedure of that key stops.
-// One event per environment and day, to the application's own ingest; an expired key is reported as an error.
+// At most one warning per key and day, the keys of one environment due together in one event, to the application's own
+// ingest; an expired key is reported as an error.
 
 import { operationsEnvelopeUrl } from '@fabrika/operations-contract/ingest'
 import type { ControlRepositories } from './db'
@@ -77,7 +78,10 @@ interface Warning {
 	readonly expiresAt: number
 }
 
-/** `true` when the application's Operations took the event, or when it has none to send it to (the log line stands). */
+/**
+ * `true` when the application's Operations took the event, refused it for good (a 4xx), or has none to send it to: the
+ * log line stands, and the keys are not warned again that day.
+ */
 async function report(deps: WorkloadKeyExpiryDeps, appId: string, env: string, warning: Warning): Promise<boolean> {
 	const ingest = await deps.repositories.operationsCatalog.getActiveIngestConfig(appId, env)
 	const origin = ingestOrigin(ingest)
@@ -118,6 +122,11 @@ async function report(deps: WorkloadKeyExpiryDeps, appId: string, env: string, w
 		return false
 	}
 	if (status >= 200 && status < 300) return true
+	if (status >= 400 && status < 500 && status !== 429) {
+		// A refusal (a stale ingest key, a removed project) answers the same until its configuration changes.
+		console.error(`workload keys: the Operations of ${appId}/${env} refused the expiry warning with ${status}; not sent again today`)
+		return true
+	}
 	console.error(`workload keys: the Operations of ${appId}/${env} answered the expiry warning with ${status}; sent again next pass`)
 	return false
 }

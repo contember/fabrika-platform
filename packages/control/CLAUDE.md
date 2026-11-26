@@ -322,11 +322,15 @@ other environment, before the provider prepares anything, and the write maps a r
   the race records nothing. `dev` environments are skipped (their sandboxes
   are bootstrapped before expiry). A provider without the capability (Zerops, AWS) still renews only at a deploy, so an
   environment of it not deployed for 30 days loses its workloads' keys.
-- **A held key with a week or less left warns the application's Operations** (`src/workload-key-expiry.ts`): one
-  `WorkloadKeyExpiring` event per environment and day (`expiry_warned_at`, cleared by every new key) to the ingest of its
+- **A held key with a week or less left warns the application's Operations** (`src/workload-key-expiry.ts`): at most one
+  `WorkloadKeyExpiring` warning per key and day, the keys of one environment in one event (`expiry_warned_at`, cleared
+  by every new key) to the ingest of its
   active DSN, through the Worker's Operations binding or the global `fetch`, `redirect: 'manual'`; an `error` once the key
   has expired. The held key is the recorded one, or while it is pending and no succeeded run handed it, the one it
-  replaced (`held_expires_at`). Without an active ingest the warning is the log line alone.
+  replaced (`held_expires_at`). Without an active ingest the warning is the log line alone. Every pass first confirms,
+  on any provider, each pending key a succeeded run handed (`confirmHanded`), and a later run never takes over a
+  `handed_by` a succeeded run holds: otherwise a provider without `managedCredentials` would keep every key pending,
+  and a failed redeploy would hide the expiry of the key still running.
 - **The membership transport key comes from the APPROVED contract too (`src/membership-transport.ts`, ADR-0022
   rule 6).** Behind a namespace proxy an application has no IAM binding, so while `needsMembershipTransport` holds for
   the approved contract (an endpoint with a delegation, one on, in or below a dimension with members, or a share-link

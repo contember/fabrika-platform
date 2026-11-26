@@ -4,12 +4,13 @@
 // for a renewed key, and a warning Operations did not take sent again by the next pass.
 
 import type { ContractArtifact } from '@fabrika/auth-core'
+import { uuidv7 } from '@fabrika/platform'
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { Vault } from '../vault'
 import { type CredentialKind, VaultWorkloadCredentials, type WorkloadKeyIssuer } from '../workload-credentials'
 import { warnExpiringWorkloadKeys } from '../workload-key-expiry'
-import { createHarness } from './helpers/harness'
+import { createHarness, queryRows } from './helpers/harness'
 
 const KEY = btoa(String.fromCharCode(...new Uint8Array(32).fill(9)))
 const DAY = 24 * 60 * 60
@@ -88,7 +89,27 @@ async function world(options: { ingest?: boolean } = {}) {
 		await credentials.reconcile('notes', 'prod', contract)
 		await harness.d1.prepare('UPDATE app_env_workload_credentials SET pending = 0, handed_by = NULL, held_expires_at = NULL').run()
 	}
-	return { clock, harness, credentials, sent, answers, pass, deploy }
+	/** A deploy that hands its keys as the run `status` ends: the maintenance pass reads the run's outcome. */
+	const deployAs = async (status: 'succeeded' | 'failed') => {
+		const run = await harness.repositories.runs.createRun({
+			id: uuidv7(),
+			appId: 'notes',
+			env: 'prod',
+			ref: 'refs/heads/main',
+			trigger: 'manual',
+			actor: 'user:test',
+		})
+		await credentials.reconcile('notes', 'prod', contract, { handedBy: run.id })
+		await harness.d1.prepare('UPDATE runs SET status = ? WHERE id = ?').bind(status, run.id).run()
+		return run.id
+	}
+	/** The maintenance order: keys a succeeded run handed are confirmed, then the warning pass runs. */
+	const maintain = async () => {
+		await harness.repositories.workloadCredentials.confirmHanded()
+		return await pass()
+	}
+	const handedBy = () => queryRows(harness.sqlite, 'SELECT pending, handed_by FROM app_env_workload_credentials ORDER BY kind')
+	return { clock, harness, credentials, sent, answers, pass, deploy, deployAs, maintain, handedBy }
 }
 
 describe('Operations is warned before a workload key the running version holds expires', () => {
@@ -186,6 +207,52 @@ describe('Operations is warned before a workload key the running version holds e
 		expect(quiet.sent).toEqual([])
 		quiet.clock.now += 300
 		expect(await quiet.pass()).toEqual({ warned: 0, failed: 0 })
+	})
+
+	test('on a provider that writes no credential, a failed redeploy past half-life still warns before the running key expires', async () => {
+		warn = spyOn(console, 'warn').mockImplementation(() => {})
+		const w = await world()
+		await w.deployAs('succeeded')
+		await w.maintain()
+		expect(w.handedBy()).toEqual([{ pending: 0, handed_by: null }, { pending: 0, handed_by: null }])
+
+		// Day 16: the redeploy issues new keys and fails; the running version still holds the day-0 keys, valid to day 30.
+		w.clock.now = START + 16 * DAY
+		await w.deployAs('failed')
+		w.clock.now = START + 24 * DAY
+		expect(await w.maintain()).toEqual({ warned: 1, failed: 0 })
+		expect(JSON.stringify(w.sent.at(-1)?.event)).toContain('expire in 6 day(s)')
+	})
+
+	test('a later run does not take over a key a succeeded run handed, and the pass confirms it', async () => {
+		const w = await world()
+		const succeeded = await w.deployAs('succeeded')
+		// A run that reads the same fresh keys back and fails, before the pass confirmed them.
+		await w.deployAs('failed')
+		expect(w.handedBy()).toEqual([{ pending: 1, handed_by: succeeded }, { pending: 1, handed_by: succeeded }])
+		expect(await w.harness.repositories.workloadCredentials.confirmHanded()).toBe(2)
+		expect(w.handedBy()).toEqual([{ pending: 0, handed_by: null }, { pending: 0, handed_by: null }])
+	})
+
+	test('a refusal is logged once and not sent again that day; a dev environment is never warned', async () => {
+		warn = spyOn(console, 'warn').mockImplementation(() => {})
+		error = spyOn(console, 'error').mockImplementation(() => {})
+		const w = await world()
+		await w.deploy()
+		w.clock.now = START + 24 * DAY
+		w.answers.push(401)
+		expect(await w.pass()).toEqual({ warned: 1, failed: 0 })
+		expect(error).toHaveBeenCalledWith('workload keys: the Operations of notes/prod refused the expiry warning with 401; not sent again today')
+		w.clock.now += 300
+		expect(await w.pass()).toEqual({ warned: 0, failed: 0 })
+		expect(w.sent).toHaveLength(1)
+
+		const dev = await world()
+		await dev.deploy()
+		await dev.harness.d1.prepare("UPDATE app_envs SET kind = 'dev'").run()
+		dev.clock.now = START + 24 * DAY
+		expect(await dev.pass()).toEqual({ warned: 0, failed: 0 })
+		expect(dev.sent).toEqual([])
 	})
 
 	test('a redirect is an answer Operations did not take, and is not followed', async () => {

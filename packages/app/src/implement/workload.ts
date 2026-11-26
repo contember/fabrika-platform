@@ -174,7 +174,9 @@ export class WorkloadCredential {
 		await reporter.report({
 			fingerprint: ['fabrika-workload-key-refused', kind, name],
 			type: 'WorkloadKeyRefused',
-			message: `IAM refused the key of the ${kind} '${name}': ${reason}; it does nothing until Control hands it a valid key, so deploy the environment`,
+			message: reason === 'token_too_large'
+				? `IAM refused the key of the ${kind} '${name}': token_too_large; its declared permissions do not fit in a token`
+				: `IAM refused the key of the ${kind} '${name}': ${reason}; it does nothing until Control hands it a valid key, so deploy the environment`,
 			tags: { workload_kind: kind, workload: name, reason },
 		})
 	}

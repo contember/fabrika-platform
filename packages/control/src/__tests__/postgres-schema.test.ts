@@ -985,6 +985,11 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await keys.markHandedBy('acme', 'prod', 'job', 'sweep', 'key-2', run.id)
 		await raw.prepare("UPDATE runs SET status = 'succeeded' WHERE id = ?").bind(run.id).run()
 		expect(await keys.listExpiring(at + 7 * 86_400, at - 86_400)).toEqual([])
+		// A later run reading the key back does not take it over from the succeeded one, which the pass confirms.
+		const later = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+		await keys.markHandedBy('acme', 'prod', 'job', 'sweep', 'key-2', later.id)
+		expect((await keys.list('acme', 'prod')).map((key) => key.handed_by)).toEqual([run.id])
+		expect(await keys.confirmHanded()).toBe(1)
 		await keys.confirm('acme', 'prod', 'job', 'sweep', 'key-2')
 		expect(await keys.list('acme', 'prod')).toEqual([{ ...renewed, pending: 0, handed_by: null, held_expires_at: null }])
 		expect(await keys.listDue(at + 15 * 86_400)).toEqual([])
