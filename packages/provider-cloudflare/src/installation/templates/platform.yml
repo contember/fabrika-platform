@@ -153,12 +153,12 @@ jobs:
           # Control's public origin: IAM hands its mail to Control's relay there, under a key derived from the
           # provisioning key, and the relay sends it with Control's copy of the transport.
           FABRIKA_CONTROL_URL: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}
-          # The operator's identity-bound external OAuth clients (ADR-0084), a JSON array; IAM serves them until the
-          # control-plane stage imports them into its registry (ADR-0089). Unset registers none.
+          # The OAuth client list earlier releases read. IAM's registry holds the clients now, and this stage refuses a
+          # set variable, naming the ways out (ADR-0089). Leave it unset.
           FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
           # MCP authoring (ADR-0089): not supported on Cloudflare yet, so `on` is refused.
           FABRIKA_PLATFORM_MCP_AUTHORING: ${{ vars.FABRIKA_PLATFORM_MCP_AUTHORING }}
-          # Only so an identity resource on the Operations host is refused here, before IAM deploys.
+          # One of the installation's hosts IAM's OAuth config lists: no external application's resource may be on one.
           OPERATIONS_HOSTNAME: ${{ vars.OPERATIONS_HOSTNAME }}
           # Every built-in mail provider's variables, written by init from the provider registry: IAM reads only the
           # selected provider's, and an unset one is ''.
@@ -191,7 +191,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           FABRIKA_CONTROL_VAULT_KEY: ${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}
           # The seeded IAM provisioning key — this stage registers the console's schema, with the console's return
-          # origin, IAM's own vocabulary and imports the OAuth client list with it (Bearer px_), at FABRIKA_IAM_ISSUER.
+          # origin, and IAM's own vocabulary with it (Bearer px_), at FABRIKA_IAM_ISSUER.
           FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
           FABRIKA_IAM_RETURN_ORIGINS: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}
           OPERATIONS_SYNC_KEY: ${{ secrets.OPERATIONS_SYNC_KEY }}
@@ -204,8 +204,7 @@ jobs:
           FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}
           OPERATIONS_ARTIFACT_ORIGIN: https://${{ vars.OPERATIONS_HOSTNAME }}
           FABRIKA_CONTROL_BOOTSTRAP_ADMINS: ${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}
-          # The same client list IAM was deployed with: this stage imports it into IAM's registry once (ADR-0089), then
-          # warns while it is set; delete the variable once this release is accepted.
+          # The former OAuth client list: this stage refuses it too, before it deploys anything (ADR-0089).
           FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
           # MCP authoring (ADR-0089): not supported on Cloudflare yet, so `on` is refused.
           FABRIKA_PLATFORM_MCP_AUTHORING: ${{ vars.FABRIKA_PLATFORM_MCP_AUTHORING }}

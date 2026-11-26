@@ -6,7 +6,6 @@
 
 import { FABRIKA_SERVICE_TABLE_DIGEST, IAM_PROXY_SECRET_VARIABLE, installationTableDigest } from '@fabrika/auth-core'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
-import type { McpClient } from '@fabrika/installation-init'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import {
 	contractProxyTable,
@@ -23,7 +22,6 @@ import type { ZeropsApi } from '../../index'
 import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DATABASE_BACKUP_PERIOD, PLATFORM_SEQUENTIAL_DEPLOY } from '../deploy'
 import { parsePlatformDeployArgs, type PlatformDeployInput } from '../deploy-options'
 import { recordingDeployLog } from '../log'
-import { fakeIamAdmin, type RecordedImport } from './fake-iam-admin'
 import { fakeSourceCollaborators } from './fake-platform-source'
 import {
 	FAKE_DAILY_BACKUP_PERIOD,
@@ -81,7 +79,6 @@ const input = (overrides: Partial<PlatformDeployInput> = {}): PlatformDeployInpu
 interface Harness {
 	readonly zerops: FakeZerops
 	readonly reconciled: SchemaReconcileInput[]
-	readonly imports: RecordedImport[]
 	readonly log: ReturnType<typeof recordingDeployLog>
 	run(overrides?: Partial<PlatformDeployInput>): Promise<void>
 }
@@ -93,12 +90,10 @@ const harness = (proxyEnv: Readonly<Record<string, string>> = {}, databaseBackup
 			.map((service) => (service.name === 'db' && databaseBackup !== undefined ? { ...service, backup: databaseBackup } : service)),
 	})
 	const reconciled: SchemaReconcileInput[] = []
-	const iam = fakeIamAdmin()
 	const log = recordingDeployLog()
 	return {
 		zerops,
 		reconciled,
-		imports: iam.imports,
 		log,
 		run: (overrides = {}) =>
 			deployPlatform(input(overrides), {
@@ -106,7 +101,6 @@ const harness = (proxyEnv: Readonly<Record<string, string>> = {}, databaseBackup
 				uploadFetch: zerops.uploadFetch,
 				api: zerops.api,
 				reconcileSchema: async (call) => void reconciled.push(call),
-				iamAdmin: iam.iamAdmin,
 				sleep: async () => {},
 				log,
 				signal: new AbortController().signal,
@@ -165,7 +159,6 @@ const runWithGatedBuilds = (fixture: Harness, slowPolls = 0): Promise<void> =>
 		...fakeSourceCollaborators,
 		api: gatedBuilds(fixture, slowPolls),
 		reconcileSchema: async (call) => void fixture.reconciled.push(call),
-		iamAdmin: fakeIamAdmin().iamAdmin,
 		sleep: () => yieldToTimer(),
 		log: fixture.log,
 		signal: new AbortController().signal,
@@ -220,7 +213,6 @@ describe('the order', () => {
 			...fakeSourceCollaborators,
 			api: zerops.api,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log,
 			signal: new AbortController().signal,
@@ -245,7 +237,6 @@ describe('the order', () => {
 			...fakeSourceCollaborators,
 			api: zerops.api,
 			reconcileSchema: async () => void (publishedFirst = zerops.calls.includes('subdomain:proxy')),
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log: recordingDeployLog(),
 			signal: new AbortController().signal,
@@ -335,7 +326,6 @@ describe('fail closed', () => {
 				...fakeSourceCollaborators,
 				api: zerops.api,
 				reconcileSchema: async () => {},
-				iamAdmin: fakeIamAdmin().iamAdmin,
 				sleep: async () => {},
 				log: recordingDeployLog(),
 				signal: new AbortController().signal,
@@ -378,7 +368,6 @@ describe('idempotence', () => {
 			api: off.api,
 			...fakeSourceCollaborators,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log: recordingDeployLog(),
 			signal: new AbortController().signal,
@@ -455,7 +444,6 @@ describe('what it writes', () => {
 				api: zerops.api,
 				...fakeSourceCollaborators,
 				reconcileSchema: async () => {},
-				iamAdmin: fakeIamAdmin().iamAdmin,
 				sleep: async () => {},
 				log: recordingDeployLog(),
 				signal: new AbortController().signal,
@@ -487,7 +475,6 @@ describe('single sign-on an operator turned on by hand', () => {
 			uploadFetch: zerops.uploadFetch,
 			api: zerops.api,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log,
 			signal: new AbortController().signal,
@@ -593,7 +580,6 @@ describe('an installation an older release wrote, every variable sensitive', () 
 			uploadFetch: zerops.uploadFetch,
 			api: zerops.api,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log: recordingDeployLog(),
 			signal: new AbortController().signal,
@@ -645,7 +631,6 @@ describe('a credential in a readable variable', () => {
 			uploadFetch: zerops.uploadFetch,
 			api: zerops.api,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log: recordingDeployLog(),
 			signal: new AbortController().signal,
@@ -730,7 +715,6 @@ describe('--dry-run', () => {
 		await fixture.run({ dryRun: true, iamAdminKey: '' })
 		expect(fixture.zerops.calls).toEqual([])
 		expect(fixture.reconciled).toEqual([])
-		expect(fixture.imports).toEqual([])
 		expect(await manifestOf(fixture.zerops)).toBe('')
 		expect(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON)).toBe(legacyManifest)
 		expect(fixture.log.lines.some((line) => line.includes('would write'))).toBe(true)
@@ -812,7 +796,6 @@ describe('the platform database backup schedule', () => {
 			uploadFetch: zerops.uploadFetch,
 			api: zerops.api,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log,
 			signal: new AbortController().signal,
@@ -832,7 +815,6 @@ describe('the platform database backup schedule', () => {
 				...fakeSourceCollaborators,
 				api: zerops.api,
 				reconcileSchema: async () => {},
-				iamAdmin: fakeIamAdmin().iamAdmin,
 				sleep: async () => {},
 				log: recordingDeployLog(),
 				signal: new AbortController().signal,
@@ -843,11 +825,6 @@ describe('the platform database backup schedule', () => {
 })
 
 describe('OAuth and MCP authoring', () => {
-	const CLAUDE: McpClient = {
-		provider: 'claude',
-		clientId: 'https://claude.ai/oauth/mcp-oauth-client-metadata',
-		redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
-	}
 	const MCP_RESOURCE = `https://${CONSOLE_HOST}/mcp`
 	const RPC_RESOURCES = [`https://${CONSOLE_HOST}/api/rpc`, `https://${CONSOLE_HOST}/operations/api/rpc`]
 	const consoleOf = async (fixture: Harness) => tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
@@ -863,10 +840,12 @@ describe('OAuth and MCP authoring', () => {
 		)
 	})
 
-	test('https: IAM gets an OAuth config with no MCP client and both RPC resources, before it deploys', async () => {
+	test('https: IAM gets an OAuth config with both RPC resources and no client list, before it deploys', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run()
-		expect(iamConfigOf(fixture)).toMatchObject({ clients: [], resources: RPC_RESOURCES.map((resource) => ({ app: 'vozka', resource })) })
+		expect(iamConfigOf(fixture)).toMatchObject({ resources: RPC_RESOURCES.map((resource) => ({ app: 'vozka', resource })) })
+		// IAM refuses a `clients` key at boot: its registry holds the clients (ADR-0089).
+		expect(iamConfigOf(fixture)).not.toHaveProperty('clients')
 		expect(fixture.zerops.calls.indexOf('env:iam:FABRIKA_IAM_OAUTH_CONFIG')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
 	})
 
@@ -884,7 +863,7 @@ describe('OAuth and MCP authoring', () => {
 
 	test('MCP enabled: the console admits OAuth bearers on `/mcp` too and registers the resource IAM issues for', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
-		await fixture.run({ mcpClients: [CLAUDE] })
+		await fixture.run({ mcpAuthoring: true })
 		const console_ = await consoleOf(fixture)
 		expect(oauthRows(console_).map((row) => [row.path, row.oauth?.scopes])).toContainEqual(['/mcp', ['authoring']])
 		expect(console_?.oauthResources?.at(-1)).toEqual({
@@ -895,11 +874,11 @@ describe('OAuth and MCP authoring', () => {
 		})
 	})
 
-	test('MCP enabled: IAM gets its clients and the MCP resource beside the RPC ones', async () => {
+	test('MCP enabled: IAM gets the MCP resource beside the RPC ones', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
-		await fixture.run({ mcpClients: [CLAUDE] })
+		await fixture.run({ mcpAuthoring: true })
 		const config = iamConfigOf(fixture)
-		expect(config).toMatchObject({ clients: [CLAUDE], resources: [...RPC_RESOURCES, MCP_RESOURCE].map((resource) => ({ resource })) })
+		expect(config).toMatchObject({ resources: [...RPC_RESOURCES, MCP_RESOURCE].map((resource) => ({ resource })) })
 		expect(config).toMatchObject({
 			resources: [{}, {}, {
 				app: 'vozka',
@@ -919,19 +898,10 @@ describe('OAuth and MCP authoring', () => {
 		})
 	})
 
-	test("an external application's identity client: no MCP table, IAM gets the binding, and the deploy imports it instead of reconciling roles", async () => {
-		const opsTool = {
-			provider: 'external' as const,
-			clientId: 'https://ops.example.test/oauth/client.json',
-			redirectUris: ['https://ops.example.test/oauth/callback'],
-			identity: { app: 'ops-tool', resource: 'https://ops.example.test', roles: [{ key: 'admin-ops', name: 'Administrator' }] },
-		}
+	test('the deploy registers only the console and IAM itself with IAM: the OAuth clients are not its to write', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
-		await fixture.run({ mcpClients: [opsTool] })
-		expect(oauthRows(await consoleOf(fixture)).map((row) => row.path)).not.toContain('/mcp')
-		expect(iamConfigOf(fixture)).toMatchObject({ clients: [opsTool], resources: RPC_RESOURCES.map((resource) => ({ resource })) })
+		await fixture.run()
 		expect(fixture.reconciled.map((call) => call.app)).toEqual(['vozka', IAM_APP_ID])
-		expect(fixture.imports).toEqual([{ connection: { origin: `https://${IAM_HOST}`, provisioningKey: 'px_admin' }, request: { clients: [opsTool] } }])
 	})
 
 	test("IAM's OAuth config names the installation's hosts, which IAM checks a registered application against", async () => {
@@ -940,15 +910,9 @@ describe('OAuth and MCP authoring', () => {
 		expect(iamConfigOf(fixture)).toMatchObject({ hosts: [IAM_HOST, CONSOLE_HOST, OPERATIONS_HOST] })
 	})
 
-	test('MCP enabled: the value is never logged', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
-		await fixture.run({ mcpClients: [CLAUDE] })
-		expect(fixture.log.lines.some((line) => line.includes('redirectUris') || line.includes(CLAUDE.redirectUris[0] ?? '-'))).toBe(false)
-	})
-
 	test('in each composition, Control gets the digest of the table the proxy publishes, before it deploys', async () => {
 		const digests: string[] = []
-		for (const overrides of [{ mcpClients: [CLAUDE] }, {}, { scheme: 'http' as const }]) {
+		for (const overrides of [{ mcpAuthoring: true }, {}, { scheme: 'http' as const }]) {
 			const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 			await fixture.run(overrides)
 			const console_ = await consoleOf(fixture)
@@ -985,7 +949,6 @@ describe('OAuth and MCP authoring', () => {
 			...fakeSourceCollaborators,
 			api: zerops.api,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log,
 			signal: new AbortController().signal,
@@ -1023,7 +986,7 @@ describe('OAuth and MCP authoring', () => {
 			{
 				FABRIKA_ZEROPS_ACCESS_TOKEN: 'zerops-token',
 				FABRIKA_IAM_PROVISIONING_KEY: 'px_admin',
-				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([CLAUDE]),
+				FABRIKA_PLATFORM_MCP_AUTHORING: 'on',
 			},
 		)
 		await deployPlatform(parsed, {
@@ -1031,7 +994,6 @@ describe('OAuth and MCP authoring', () => {
 			uploadFetch: zerops.uploadFetch,
 			api: zerops.api,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log: recordingDeployLog(),
 			signal: new AbortController().signal,
@@ -1058,110 +1020,22 @@ describe('OAuth and MCP authoring', () => {
 })
 
 describe('the MCP authoring switch', () => {
-	const CLAUDE: McpClient = {
-		provider: 'claude',
-		clientId: 'https://claude.ai/oauth/mcp-oauth-client-metadata',
-		redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
-	}
 	const mcpRowOf = async (fixture: Harness) =>
 		oauthRows(tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')).some((row) => row.path === '/mcp')
 
-	test('on: the console publishes its MCP row with no client in the list', async () => {
+	test('on: the console publishes its MCP row', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpAuthoring: true })
 		expect(await mcpRowOf(fixture)).toBe(true)
 		expect(fixture.log.lines).toContain('info: MCP authoring: on')
-		expect(fixture.log.lines.some((line) => line.startsWith('warn:') && line.includes('FABRIKA_PLATFORM_MCP_AUTHORING'))).toBe(false)
 	})
 
-	test('off: it decides over an authoring client in the list', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
-		await fixture.run({ mcpAuthoring: false, mcpClients: [CLAUDE] })
-		expect(await mcpRowOf(fixture)).toBe(false)
-		expect(fixture.log.lines).toContain('info: MCP authoring: off')
-	})
-
-	test('unset: an authoring client in the list still turns it on, and the deploy warns that the switch is needed', async () => {
-		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
-		await fixture.run({ mcpClients: [CLAUDE] })
-		expect(await mcpRowOf(fixture)).toBe(true)
-		expect(fixture.log.lines.some((line) => line.startsWith('warn:') && line.includes('set FABRIKA_PLATFORM_MCP_AUTHORING=on'))).toBe(true)
-	})
-})
-
-describe("the import of the OAuth client list into IAM's registry", () => {
-	const OPS_TOOL: McpClient = {
-		provider: 'external',
-		clientId: 'https://ops.example.test/oauth/client.json',
-		redirectUris: ['https://ops.example.test/oauth/callback'],
-		identity: { app: 'ops-tool', resource: 'https://ops.example.test' },
-	}
-	const run = async (iam: ReturnType<typeof fakeIamAdmin>, overrides: Partial<PlatformDeployInput> = {}) => {
-		const zerops = fakeZerops({ ...PROJECT, services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS } }) })
-		const order: string[] = []
-		const log = recordingDeployLog()
-		const result = await deployPlatform(input(overrides), {
-			...fakeSourceCollaborators,
-			uploadFetch: zerops.uploadFetch,
-			api: zerops.api,
-			reconcileSchema: async (call) => void order.push(`reconcile:${call.app}`),
-			iamAdmin: (connection) => {
-				const api = iam.iamAdmin(connection)
-				const importOnce: typeof api.oauthClients.importOnce = (request) => {
-					order.push('import')
-					return api.oauthClients.importOnce(request)
-				}
-				return { oauthClients: { importOnce } }
-			},
-			sleep: async () => {},
-			log,
-			signal: new AbortController().signal,
-		}).then(() => undefined, (error: unknown) => error)
-		return { zerops, order, log, result }
-	}
-
-	test('every deploy imports, after every service is deployed and IAM knows the console; an unset variable imports none', async () => {
-		const iam = fakeIamAdmin('imported')
-		const { zerops, order, result } = await run(iam)
-		expect(result).toBeUndefined()
-		expect(order).toEqual(['reconcile:vozka', `reconcile:${IAM_APP_ID}`, 'import'])
-		expect(iam.imports.map((entry) => entry.request)).toEqual([{ clients: [] }])
-		expect(zerops.calls).toContain('deploy:control')
-		expect(zerops.calls).toContain('backup:db')
-	})
-
-	test('the importing deploy warns too while the variable is set', async () => {
-		const { log } = await run(fakeIamAdmin('imported'), { mcpClients: [OPS_TOOL] })
-		expect(log.lines.some((line) => line.startsWith('warn: FABRIKA_PLATFORM_MCP_CLIENTS_JSON imported; this release no longer reads the variable')))
-			.toBe(
-				true,
-			)
-	})
-
-	test('already imported with the variable set: the deploy goes on and warns to delete the variable', async () => {
-		const { log, result } = await run(fakeIamAdmin('already_imported'), { mcpClients: [OPS_TOOL] })
-		expect(result).toBeUndefined()
-		expect(log.lines.some((line) => line.startsWith('warn: FABRIKA_PLATFORM_MCP_CLIENTS_JSON this release no longer reads the variable'))).toBe(true)
-	})
-
-	test('a failed import fails the deploy before the backup step, never quoting the key', async () => {
-		const refused = {
-			imports: [],
-			iamAdmin: () => ({ oauthClients: { importOnce: () => Promise.reject(new Error('IAM refused')) } }),
+	test('off or unset: no MCP row', async () => {
+		for (const overrides of [{ mcpAuthoring: false }, {}]) {
+			const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+			await fixture.run(overrides)
+			expect(await mcpRowOf(fixture)).toBe(false)
+			expect(fixture.log.lines).toContain('info: MCP authoring: off')
 		}
-		const { zerops, log, result } = await run(refused, { mcpClients: [OPS_TOOL] })
-		expect(result).toBeInstanceOf(Error)
-		expect(result instanceof Error ? result.message : '').toBe('oauthClients.importOnce failed: IAM refused')
-		expect(zerops.calls).not.toContain('backup:db')
-		expect(log.lines.some((line) => line.includes('px_admin'))).toBe(false)
-	})
-
-	test('a dry run does not import and says what it would do', async () => {
-		const iam = fakeIamAdmin()
-		const { log } = await run(iam, { dryRun: true, iamAdminKey: '', mcpClients: [OPS_TOOL] })
-		expect(iam.imports).toEqual([])
-		expect(log.lines).toContain(
-			"info: would import 1 OAuth client(s) from FABRIKA_PLATFORM_MCP_CLIENTS_JSON into IAM's registry, unless an earlier deploy already did",
-		)
 	})
 })

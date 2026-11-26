@@ -33,7 +33,7 @@
 // Every readable variable is READ before it is written and skipped when it already matches, so a second
 // run writes only the derived secret, which it cannot read back; the subdomain is decided by reading
 // `subdomainAccess` back, so a second run enables nothing; the database's backup period is read and set
-// only when it differs; the schema reconcile is an upsert; and IAM writes the OAuth client import on its first call only. What a re-run does do is redeploy — that is
+// only when it differs; and the schema reconcile is an upsert. What a re-run does do is redeploy — that is
 // what "deploy" means, and the platform keeps the previous version serving whenever the new one fails its
 // readiness gate.
 
@@ -43,12 +43,7 @@ import {
 	deployedServiceEnvironment,
 	generateVaultKey,
 	IAM_OAUTH_CONFIG_VARIABLE,
-	type IamAdminConnection,
 	type IamOAuthConfig,
-	importOAuthClientsOnce,
-	MCP_AUTHORING_VARIABLE,
-	MCP_CLIENTS_VARIABLE,
-	type OAuthClientImportApi,
 	OPERATIONS_OAUTH_RESOURCE_VARIABLE,
 	platformIamOAuthConfig,
 	platformOAuthResourceVerifiedBy,
@@ -56,7 +51,6 @@ import {
 	platformProxyAppFor,
 	type PlatformProxyComposition,
 	platformServiceTableDigest,
-	resolveMcpAuthoring,
 	resolvePlatformProxyManifest,
 } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
@@ -190,8 +184,6 @@ export interface PlatformDeployCollaborators extends PlatformServiceDeployCollab
 	readonly prepareSource: PlatformSourcePreparer
 	readonly checkerPublished: CheckerPublication
 	readonly reconcileSchema: SchemaReconciler
-	/** IAM's admin surface at an origin, over the provisioning key: the OAuth client import (ADR-0089). */
-	readonly iamAdmin: (connection: IamAdminConnection) => OAuthClientImportApi
 }
 
 /** The prepared snapshot shared by every build in an installation run. */
@@ -805,10 +797,6 @@ export const deployPreparedPlatform = async (
 	log.info(`iam ${placement.hosts.iam} · operations ${placement.hosts.operations}`)
 
 	log.step('Compose the proxy manifest')
-	const mcpAuthoring = resolveMcpAuthoring(input.mcpAuthoring, input.mcpClients, {
-		setting: MCP_AUTHORING_VARIABLE,
-		clients: MCP_CLIENTS_VARIABLE,
-	})
 	const composition: PlatformProxyComposition = {
 		scheme: placement.scheme,
 		placement: {
@@ -818,22 +806,18 @@ export const deployPreparedPlatform = async (
 		},
 		// Control reads a bare `FABRIKA_CONTROL_DOMAIN` as https, so on plain http no resource would match its own.
 		...(placement.scheme === 'https' ? { authorizationServer: platformOrigin(placement.scheme, placement.hosts.iam) } : {}),
-		mcp: mcpAuthoring.on,
+		mcp: input.mcpAuthoring === true,
 	}
 	const platformManifest = resolvePlatformProxyManifest(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition)
 	const oauthConfig = composition.authorizationServer === undefined
 		? undefined
-		: platformIamOAuthConfig(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition, input.mcpClients ?? [])
+		: platformIamOAuthConfig(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition)
 	log.info(
 		oauthConfig === undefined
 			? 'OAuth: off (plain http), so neither the command line nor MCP clients get tokens'
 			: `OAuth: resource(s) ${oauthConfig.resources.map((entry) => entry.resource).join(', ')}`,
 	)
 	log.info(composition.mcp ? 'MCP authoring: on' : 'MCP authoring: off')
-	if (mcpAuthoring.warning !== undefined) log.warn(mcpAuthoring.warning)
-	log.info(
-		`OAuth clients: ${input.mcpClients?.length ?? 0}, ${input.mcpClients?.filter((client) => client.identity !== undefined).length ?? 0} identity-only`,
-	)
 	log.info(`${platformManifest.apps.length} app(s): ${platformManifest.apps.map((app) => app.id).join(', ')}`)
 
 	log.step('Write the service environment')
@@ -937,14 +921,6 @@ export const deployPreparedPlatform = async (
 		})
 		log.info(`\`${IAM_APP_ID}\` reconciled`)
 	}
-	// The client list goes into IAM's registry once; from then on IAM serves the registry (ADR-0089, release N).
-	await importOAuthClientsOnce({
-		clients: input.mcpClients,
-		variable: MCP_CLIENTS_VARIABLE,
-		dryRun: input.dryRun,
-		connect: () => collaborators.iamAdmin({ origin: platformOrigin(placement.scheme, placement.hosts.iam), provisioningKey: input.iamAdminKey }),
-		log,
-	})
 
 	// Last, and a warning rather than a failure: the backup API's behaviour is not yet measured on a live account
 	// (docs/reference/zerops-platform.md), and every service is already deployed, published and registered.

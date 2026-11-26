@@ -115,9 +115,7 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   writes. One form (`access/components/ExternalAppForm.tsx`) registers and edits the whole application with
   `externalApps.put`: the id is fixed once created, and `access/lib/external-apps.ts` checks the draft with the contract's
   own predicates and names what a save ends (a client's or the resource's sign-ins, a removed role, roles added to an
-  application that had none). Before the deploy imported its client list IAM refuses the write with
-  `OAUTH_REGISTRY_NOT_IMPORTED` (409); the form says so instead of showing the conflict. The Applications page links to
-  it for a caller who may open it.
+  application that had none). The Applications page links to it for a caller who may open it.
 - **People (`/people`) is outside the Access rail on purpose.** It serves an application's own administrator, who holds
   the application's `members.manage` and is no IAM administrator, so the Access layout's gate would refuse
   them. It only asks IAM's `appPeople.*`; IAM decides which applications and roles it lists and audits each change.

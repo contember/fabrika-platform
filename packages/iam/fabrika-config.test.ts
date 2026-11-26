@@ -4,7 +4,6 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import config, { buildIamWorker, iamPipelineSecrets, iamPipelineVars } from './fabrika.config'
 import oblakaDefinition from './oblaka'
 import { parseOAuthConfig } from './src/oauth-config'
-import { DEFAULT_PLATFORM_AUDIENCES } from './src/services'
 
 const REMOTE_SOURCE: Record<string, string> = {
 	FABRIKA_IAM_OIDC_ENABLED: 'true',
@@ -341,8 +340,7 @@ describe('IAM resource graph', () => {
 		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
 		// A value left in the environment is not read: the config is recomputed from the release's own presets.
 		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_IAM_OAUTH_CONFIG: '{"clients":[],"resources":[]}' })
-		const parsed = parseOAuthConfig(worker.options.vars?.['OAUTH_CONFIG'], DEFAULT_PLATFORM_AUDIENCES)
-		expect(parsed?.clients).toEqual([])
+		const parsed = parseOAuthConfig(worker.options.vars?.['OAUTH_CONFIG'])
 		expect(parsed?.resources.map(({ app, resource, client }) => ({ app, resource, client }))).toEqual([
 			{ app: 'vozka', resource: 'https://console.example.com/api/rpc', client: 'cli' },
 			{ app: 'vozka', resource: 'https://console.example.com/operations/api/rpc', client: 'cli' },
@@ -356,7 +354,7 @@ describe('IAM resource graph', () => {
 	test("names the installation's hosts in OAUTH_CONFIG, which IAM checks a registered external application against (ADR-0089)", () => {
 		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
 		const hostsOf = (source: Record<string, string>) =>
-			parseOAuthConfig(buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, source).options.vars?.['OAUTH_CONFIG'], DEFAULT_PLATFORM_AUDIENCES)?.hosts
+			parseOAuthConfig(buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, source).options.vars?.['OAUTH_CONFIG'])?.hosts
 		expect(hostsOf(relayed)).toEqual([REMOTE_DOMAIN, 'console.example.com'])
 		// Spelled as IAM's parser takes a hostname, whatever case the operator wrote.
 		expect(hostsOf({ ...relayed, OPERATIONS_HOSTNAME: 'Operations.Example.com' })).toEqual([
@@ -374,64 +372,16 @@ describe('IAM resource graph', () => {
 		expect(build('off')().options.vars?.['OAUTH_CONFIG']).not.toBe('')
 	})
 
-	test("registers the operator's identity-bound external clients beside the command-line client's resources (ADR-0084)", () => {
-		const opsTool = {
-			provider: 'external',
-			clientId: 'https://ops-tool.example.com/admin/oauth/client',
-			redirectUris: ['https://ops-tool.example.com/admin/oauth/callback'],
-			identity: {
-				app: 'ops-tool',
-				resource: 'https://ops-tool.example.com/admin',
-				roles: [{ key: 'ops-admin', name: 'Operations administrator' }, { key: 'ops-viewer', name: 'Operations viewer' }],
-			},
-		}
+	test('refuses the former OAuth client list before it builds anything, whatever the rest of the input (ADR-0089)', () => {
 		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
-		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([opsTool]) })
-		const parsed = parseOAuthConfig(worker.options.vars?.['OAUTH_CONFIG'], DEFAULT_PLATFORM_AUDIENCES)
-		expect(parsed?.clients).toEqual([{ ...opsTool, provider: 'external', metadataUrl: opsTool.clientId }])
-		expect(parsed?.resources.map(({ resource }) => resource)).toEqual([
-			'https://console.example.com/api/rpc',
-			'https://console.example.com/operations/api/rpc',
-		])
-
-		const refused = (clients: unknown[]) => () =>
-			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify(clients) })
-		// MCP authoring is not supported on Cloudflare yet.
-		const claude = { provider: 'claude', clientId: 'https://claude.ai/oauth/client', redirectUris: ['https://claude.ai/api/mcp/auth_callback'] }
-		expect(refused([opsTool, claude])).toThrow('is not supported on Cloudflare yet')
-		expect(refused([{ ...opsTool, identity: undefined }])).toThrow('is not supported on Cloudflare yet')
-		expect(refused([{ ...opsTool, identity: { ...opsTool.identity, app: 'operations' } }])).toThrow("is a platform service's")
-		// What IAM would refuse to boot with is refused at the deploy: here an admin audience the installation names.
-		expect(() =>
-			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, {
-				...relayed,
-				FABRIKA_IAM_ADMIN_AUDIENCES: 'vozka,gateway',
-				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{ ...opsTool, identity: { ...opsTool.identity, app: 'gateway' } }]),
-			})
-		).toThrow("names an installation service's app or resource")
-		expect(refused([{ ...opsTool, identity: { ...opsTool.identity, resource: `https://${REMOTE_DOMAIN}/x` } }])).toThrow("platform service's host")
-		expect(() =>
-			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, {
-				...relayed,
-				OPERATIONS_HOSTNAME: 'operations.example.com',
-				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{
-					...opsTool,
-					identity: { ...opsTool.identity, resource: 'https://operations.example.com/x' },
-				}]),
-			})
-		).toThrow("platform service's host")
-		// A list that would not fit IAM's Worker variable stops here, not inside wrangler.
-		const many = Array.from({ length: 16 }, (_, index) => ({
-			...opsTool,
-			clientId: `https://ops-tool${index}.example.com/admin/oauth/client`,
-			identity: { ...opsTool.identity, app: `ops-tool-${index}`, resource: `https://ops-tool${index}.example.com/admin` },
-		}))
-		expect(refused(many)).toThrow("with the installation's hosts makes OAUTH_CONFIG longer than a Worker variable holds (5120 bytes)")
-		// Without the console's origin IAM serves no OAuth at all.
-		expect(() =>
-			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...REMOTE_SOURCE, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([opsTool]) })
-		)
-			.toThrow('FABRIKA_PLATFORM_MCP_CLIENTS_JSON needs FABRIKA_CONTROL_URL')
+		for (const source of [relayed, REMOTE_SOURCE, {}]) {
+			expect(() => buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...source, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: '[]' })).toThrow(
+				'FABRIKA_PLATFORM_MCP_CLIENTS_JSON is set, and this release no longer reads it',
+			)
+		}
+		// A workflow passes an unset variable as an empty string.
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: '' })
+		expect(worker.options.vars?.['OAUTH_CONFIG']).not.toBe('')
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {

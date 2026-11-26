@@ -20,14 +20,9 @@ import {
 	type ResourceContext,
 	Worker,
 } from '@fabrika/provider-cloudflare'
-import {
-	assertCloudflareMcpAuthoringOff,
-	MCP_CLIENTS_VARIABLE,
-	type McpClient,
-	parseCloudflareIdentityClients,
-} from '@fabrika/provider-cloudflare/installation'
+import { assertCloudflareMcpAuthoringOff, MCP_CLIENTS_VARIABLE, refuseMcpClientsVariable } from '@fabrika/provider-cloudflare/installation'
 import { parseOAuthConfig } from './src/oauth-config'
-import { parseAdminAudiences, platformAudiencesFor } from './src/services'
+import { parseAdminAudiences } from './src/services'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
 const IAM_APP_ID = 'propustka'
@@ -51,8 +46,6 @@ interface RemoteConfig {
 	email: EmailTransportConfig
 	/** Control's public origin, which IAM's mail goes through when set; absent keeps IAM on its own provider. */
 	controlUrl?: string
-	/** The operator's identity-bound external clients (ADR-0084); empty registers none. */
-	identityClients: readonly McpClient[]
 	/** The installation's hostnames (IAM's, the console's and Operations'), which no external application's resource may be on. */
 	hosts: readonly string[]
 }
@@ -125,22 +118,14 @@ const controlUrl = (source: EnvironmentSource): string | undefined => {
 
 /**
  * IAM's `OAUTH_CONFIG` on a Cloudflare installation: the command-line client's resources on the console's origin,
- * recomputed on every deploy so a release that changes the presets converges with no other step, the operator's
- * identity-bound external clients (ADR-0084), which IAM serves until it has imported them (ADR-0089), and the
- * installation's hosts, which IAM checks a registered external application against. No MCP client yet: MCP authoring
- * is not supported on Cloudflare. Without a console origin OAuth stays off. The result passes IAM's own boot parser
- * here, so a value IAM would refuse stops the deploy instead.
+ * recomputed on every deploy so a release that changes the presets converges with no other step, and the
+ * installation's hosts, which IAM checks a registered external application against (ADR-0089). The clients are rows in
+ * IAM's registry. Without a console origin OAuth stays off. The result passes IAM's own boot parser here, so a value IAM
+ * would refuse stops the deploy instead.
  */
-const oauthConfig = (
-	control: string | undefined,
-	clients: readonly McpClient[],
-	hosts: readonly string[],
-	adminAudiences: string | undefined,
-): string => {
-	if (control === undefined) {
-		if (clients.length > 0) throw new Error(`${MCP_CLIENTS_VARIABLE} needs FABRIKA_CONTROL_URL, without which IAM serves no OAuth`)
-		return ''
-	}
+const oauthConfig = (control: string | undefined, hosts: readonly string[]): string => {
+	if (control === undefined) return ''
+
 	const resources: OAuthResourceDto[] = CONTROL_CLI_RESOURCES.map(({ path, grants }) => ({
 		app: CONTROL_APP_ID,
 		resource: `${control}${path}`,
@@ -151,18 +136,20 @@ const oauthConfig = (
 		})),
 		client: 'cli',
 	}))
-	const config = JSON.stringify({ clients, resources, hosts })
-	parseOAuthConfig(config, platformAudiencesFor(parseAdminAudiences(adminAudiences)))
+	const config = JSON.stringify({ resources, hosts })
+	parseOAuthConfig(config)
 	if (new TextEncoder().encode(config).length > WORKER_VARIABLE_MAX_BYTES) {
 		throw new Error(
-			`${MCP_CLIENTS_VARIABLE} with the installation's hosts makes OAUTH_CONFIG longer than a Worker variable holds `
-				+ `(${WORKER_VARIABLE_MAX_BYTES} bytes); register the clients that do not fit in the console instead`,
+			`OAUTH_CONFIG, the command-line client's resources with the installation's hosts, is longer than a Worker variable `
+				+ `holds (${WORKER_VARIABLE_MAX_BYTES} bytes)`,
 		)
 	}
 	return config
 }
 
 const remoteConfig = (env: string, domain: string | undefined, source: EnvironmentSource): RemoteConfig => {
+	refuseMcpClientsVariable(source[MCP_CLIENTS_VARIABLE], MCP_CLIENTS_VARIABLE)
+	assertCloudflareMcpAuthoringOff(source)
 	const authentication = authenticationConfig(source)
 	const email = emailConfig(source)
 	const control = controlUrl(source)
@@ -175,13 +162,13 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 			...(operationsHost === undefined || operationsHost === '' ? [] : [operationsHost.toLowerCase()]),
 		]),
 	]
-	const identityClients = parseCloudflareIdentityClients(source[MCP_CLIENTS_VARIABLE], hosts) ?? []
-	assertCloudflareMcpAuthoringOff(source)
 	const humanEmailDomains = source['FABRIKA_IAM_HUMAN_EMAIL_DOMAINS']
 	const oidcIssuer = source['FABRIKA_IAM_OIDC_ISSUER']
 	const oidcClientId = source['FABRIKA_IAM_OIDC_CLIENT_ID']
 	const signingKeys = source['FABRIKA_IAM_SIGNING_KEYS']
 	const adminAudiences = source['FABRIKA_IAM_ADMIN_AUDIENCES']
+	// What IAM would refuse to boot with stops the deploy instead.
+	parseAdminAudiences(adminAudiences)
 	const missing: string[] = []
 	if (authentication.oidcEnabled) {
 		if (!humanEmailDomains) missing.push('FABRIKA_IAM_HUMAN_EMAIL_DOMAINS')
@@ -207,7 +194,6 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 		oidcClientId: oidcClientId ?? '',
 		email,
 		...(control === undefined ? {} : { controlUrl: control }),
-		identityClients,
 		hosts,
 	}
 }
@@ -238,7 +224,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
-		OAUTH_CONFIG: oauthConfig(config.controlUrl, config.identityClients, config.hosts, config.adminAudiences),
+		OAUTH_CONFIG: oauthConfig(config.controlUrl, config.hosts),
 		// Only when named: an empty ADMIN_AUDIENCES means "no JWT may administer", so a `?? ''`
 		// default would lock the console out of every install instead of falling back to its app id.
 		...(config.adminAudiences === undefined ? {} : { ADMIN_AUDIENCES: config.adminAudiences }),

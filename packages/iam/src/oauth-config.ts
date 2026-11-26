@@ -7,55 +7,38 @@ import {
 } from '@fabrika/iam-contract'
 import { parseJsonOrNull, prop } from './json'
 
-/** An operator-registered MCP client: its CIMD identity plus where IAM fetches that document. */
+/** A registered managed client (ADR-0089): its CIMD identity plus where IAM fetches that document. */
 export interface ManagedOAuthClient extends OAuthManagedClient {
 	metadataUrl: string
 }
 
 /** `OAUTH_CONFIG`, parsed once. `null` from `parseOAuthConfig` means OAuth is off. */
 export interface OAuthConfig {
-	/** Served only until the deploy variable is imported into the registry (ADR-0089), then never. */
-	clients: ManagedOAuthClient[]
 	resources: OAuthResourceDto[]
 	/** The installation's hostnames, which no external application's resource may be on; empty when the deploy names none. */
 	hosts: string[]
 }
 
-const MAX_CLIENTS = 16
 const MAX_RESOURCES = 32
 const MAX_HOSTS = 64
-const CONFIG_KEYS = ['clients', 'resources', 'hosts']
+const CONFIG_KEYS = ['resources', 'hosts']
 const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl', 'identity']
 const RESOURCE_KEYS = ['app', 'resource', 'defaultScopes', 'scopeGrants', 'client']
 
 /**
  * Parse `OAUTH_CONFIG`. Absent or empty disables OAuth; anything malformed THROWS, so a typo fails the boot instead of
- * quietly serving fewer clients or scopes than the operator wrote. Unknown keys are refused for the same reason.
- * `clients` may be empty: the command-line client is IAM's own and never listed. A client's identity resource names
- * neither a registered resource nor a `platformAudiences` app, so its token is never one an installation service accepts.
+ * quietly serving fewer scopes than the deploy wrote. Unknown keys are refused for the same reason, `clients` included:
+ * the clients are rows in IAM's registry (ADR-0089), and a config that still lists them was written for an older IAM.
  */
-export function parseOAuthConfig(raw: string | undefined, platformAudiences: ReadonlySet<string>): OAuthConfig | null {
+export function parseOAuthConfig(raw: string | undefined): OAuthConfig | null {
 	if (raw === undefined || raw.trim() === '') return null
 	const value = parseJsonOrNull(raw)
-	const rawClients = prop(value, 'clients')
 	const rawResources = prop(value, 'resources')
-	if (
-		!hasOnlyKeys(value, CONFIG_KEYS) || !Array.isArray(rawClients) || rawClients.length > MAX_CLIENTS
-		|| !Array.isArray(rawResources)
-		|| rawResources.length === 0 || rawResources.length > MAX_RESOURCES
-	) {
-		throw new Error('OAUTH_CONFIG must be a JSON object { clients: [...], resources: [...] }')
+	if (!hasOnlyKeys(value, CONFIG_KEYS) || !Array.isArray(rawResources) || rawResources.length === 0 || rawResources.length > MAX_RESOURCES) {
+		throw new Error('OAUTH_CONFIG must be a JSON object { resources: [...], hosts?: [...] }')
 	}
 	const hosts = parseHosts(prop(value, 'hosts'))
 	if (hosts === null) throw new Error('OAUTH_CONFIG.hosts must be an array of hostnames')
-	const clients: ManagedOAuthClient[] = []
-	for (const entry of rawClients) {
-		const client = parseManagedClientEntry(entry)
-		if (client === null || clients.some((existing) => existing.clientId === client.clientId)) {
-			throw new Error(`OAUTH_CONFIG.clients[${clients.length}] is not a valid managed client`)
-		}
-		clients.push(client)
-	}
 	const resources: OAuthResourceDto[] = []
 	for (const entry of rawResources) {
 		const resource = parseOAuthResourceDto(entry)
@@ -64,20 +47,12 @@ export function parseOAuthConfig(raw: string | undefined, platformAudiences: Rea
 		}
 		resources.push(resource)
 	}
-	for (const [index, { identity }] of clients.entries()) {
-		if (
-			identity !== undefined
-			&& (platformAudiences.has(identity.app) || resources.some((entry) => entry.resource === identity.resource || entry.app === identity.app))
-		) {
-			throw new Error(`OAUTH_CONFIG.clients[${index}].identity names an installation service's app or resource`)
-		}
-	}
-	return { clients, resources, hosts }
+	return { resources, hosts }
 }
 
 /**
- * One managed client as `OAUTH_CONFIG.clients` and the deploy variable list it (`OAuthManagedClient` with an optional
- * `metadataUrl`), or null when it is not one. Unknown keys are refused.
+ * One managed client in its wire shape (`OAuthManagedClient` with an optional `metadataUrl`), or null when it is not
+ * one. Unknown keys are refused.
  */
 export function parseManagedClientEntry(entry: unknown): ManagedOAuthClient | null {
 	const client = parseOAuthManagedClient(entry)

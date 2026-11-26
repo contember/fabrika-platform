@@ -150,10 +150,10 @@ jobs:
           FABRIKA_PLATFORM_OPERATIONS_HOST: ${{ vars.FABRIKA_PLATFORM_OPERATIONS_HOST }}
           # Only for an installation outside the default region.
           FABRIKA_ZEROPS_API_URL: ${{ vars.FABRIKA_ZEROPS_API_URL }}
-          # MCP authoring (ADR-0049, ADR-0089): on or off. Unset = off, unless the client list below names an MCP client.
+          # MCP authoring (ADR-0049, ADR-0089): on or off. Unset = off.
           FABRIKA_PLATFORM_MCP_AUTHORING: ${{ vars.FABRIKA_PLATFORM_MCP_AUTHORING }}
-          # The OAuth client list an earlier release registered (JSON array). The deploy imports it into IAM's registry
-          # once and then warns; delete the variable once this release is accepted. Unset = nothing to import.
+          # The OAuth client list earlier releases read. IAM's registry holds the clients now, and the deploy refuses
+          # a set variable, naming the ways out (ADR-0089). Leave it unset.
           FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
           # The deploy refuses a readable service variable that looks like a credential. Comma-separated
           # `<service>/<KEY>` names the ones checked and found not to be. Unset = none.

@@ -20,6 +20,7 @@ import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { mintToken } from '../tokens'
 import { CONSOLE_APP, createHarness, makeServicesFor, TEST_SIGNING_ENV, TestSqlDatabase } from './helpers/harness'
+import { register } from './helpers/oauth'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
 const ISSUER = 'https://iam.test'
@@ -179,12 +180,12 @@ describe('the OIDC session cap — SQLite', () => {
 
 	test("an MCP client's refreshed token ends at the cap of the login its grant was given under", async () => {
 		const harness = createHarness()
+		await register(harness.repositories, { provider: 'claude', clientId: CLIENT_ID, redirectUris: [`${ISSUER}/cb`], metadataUrl: CLIENT_ID })
 		const services = harness.makeServices({
 			issuer: ISSUER,
 			environment: 'stage',
 			oidcSessionCapSeconds: CAP,
 			oauth: {
-				clients: [{ provider: 'claude', clientId: CLIENT_ID, redirectUris: [`${ISSUER}/cb`], metadataUrl: CLIENT_ID }],
 				resources: [{ app: 'control', resource: RESOURCE, defaultScopes: ['read'], scopeGrants: [{ scope: 'read', permissions: [{ action: '*' }] }] }],
 				hosts: [],
 			},

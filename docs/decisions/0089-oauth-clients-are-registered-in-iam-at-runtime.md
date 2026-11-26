@@ -68,9 +68,9 @@ it has is IAM's: an app id, a vocabulary of roles, a resource, and OAuth clients
      `externalApps.put` and `oauthClients.put`; from then on it serves the registry only.
    - From release N+1 a deploy that still sets the variable is refused before it deploys anything. The generated
      workflows keep passing the variable to the deploy through N+1, so the refusal sees it, and drop it in N+2.
-   - Release N+1 removes the import, the mark and the `OAUTH_CONFIG` client path: IAM serves the registry only and
-     accepts registry writes whether or not an import ever ran, so an installation that skipped release N registers
-     its applications in the console.
+   - Release N+1 removes the import, the reads of the mark and the `OAUTH_CONFIG` client path: IAM serves the registry
+     only and accepts registry writes whether or not an import ever ran, so an installation that skipped release N
+     registers its applications in the console. The mark's table stays, unread, so a rollback to release N finds it.
 
 Per-application OAuth resources, tokens a deployed application accepts, are not part of this decision. Which
 endpoints admit them is the application's approved contract, not runtime data, so

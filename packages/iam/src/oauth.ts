@@ -84,13 +84,8 @@ export function storedResourceList(text: string): string[] | null {
  * Resolve a client and its redirect URI. Until this succeeds nothing may be redirected to
  * `redirect_uri`. An unregistered client id is refused before any metadata fetch.
  */
-export async function establishClient(
-	services: Services,
-	config: OAuthConfig,
-	clientId: string,
-	redirectUri: string,
-): Promise<ManagedClient | null> {
-	const registration = await registeredClient(services, config, clientId)
+export async function establishClient(services: Services, clientId: string, redirectUri: string): Promise<ManagedClient | null> {
+	const registration = await registeredClient(services, clientId)
 	if (registration === null || !registration.redirectUris.includes(redirectUri)) return null
 	const metadata = await clientMetadata(registration)
 	if (metadata === null || !metadata.redirect_uris.includes(redirectUri)) return null
@@ -395,7 +390,7 @@ async function grantCeiling(
 		return { kind: 'application', scope }
 	}
 	const cli = grant.client_id === OAUTH_CLI_CLIENT_ID
-	const client = cli ? null : await registeredClient(services, config, grant.client_id)
+	const client = cli ? null : await registeredClient(services, grant.client_id)
 	if (!cli && client === null) return null
 	const identity = client?.identity
 	if (identity !== undefined) {

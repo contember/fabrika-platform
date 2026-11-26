@@ -41,6 +41,7 @@ import { githubAppCredentialSecretLabel } from '../../../control/src/github/conn
 import { githubWorkspaceSource } from '../../../control/src/github/workspace'
 import { Vault } from '../../../control/src/vault'
 import { createHarness as createIamHarness, type Harness as IamHarness, seedInlineGrant, seedUser } from '../../../iam/src/__tests__/helpers/harness'
+import { register } from '../../../iam/src/__tests__/helpers/oauth'
 import { createIamApp } from '../../../iam/src/app'
 import type { Env as IamEnv } from '../../../iam/src/env'
 import { FakeGitHubRepository } from './github-repository'
@@ -233,6 +234,8 @@ export async function createMcpStack(): Promise<McpStack> {
 
 /** IAM as a stage installation: a durable signing key, password sign-in, and MCP OAuth for the console resource. */
 async function iamEnvironment(harness: IamHarness, clientId: string): Promise<IamEnv> {
+	// The MCP client is a row of IAM's registry, as the operator registers it (ADR-0089).
+	await register(harness.repositories, { provider: 'claude', clientId, redirectUris: [REDIRECT_URI], metadataUrl: clientId })
 	const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
 	const unusedDatabase = {
 		prepare(): never {
@@ -255,7 +258,6 @@ async function iamEnvironment(harness: IamHarness, clientId: string): Promise<Ia
 		OIDC_ENABLED: 'false',
 		PASSWORD_ENABLED: 'true',
 		OAUTH_CONFIG: JSON.stringify({
-			clients: [{ provider: 'claude', clientId, redirectUris: [REDIRECT_URI] }],
 			resources: [{
 				app: CONSOLE_APP_ID,
 				resource: RESOURCE,

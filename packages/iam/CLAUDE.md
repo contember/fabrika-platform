@@ -847,11 +847,11 @@ fails if that stops being true — it is the guard, not documentation of one.
   redirect. Refusing to boot beats booting misconfigured — so a local `wrangler dev` is password-only.
 - **IAM IS THE OAUTH 2.1 AUTHORIZATION SERVER FOR MCP CLIENTS, AND ONLY FOR REGISTERED ONES (ADR-0049).**
   `OAUTH_CONFIG` (on Bun the deploy var `FABRIKA_IAM_OAUTH_CONFIG`; on Cloudflare computed by `fabrika.config.ts` from
-  the console's origin and the identity-bound clients of `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`, checked with
-  `parseOAuthConfig` at deploy; unset = every OAuth path 404s, malformed
-  fails the boot) lists the resources with their scope ceilings, the installation's `hosts` (optional; both deploys write them), and the CIMD
-  client ids (kind `claude`, `chatgpt` or `external`, a label only) with their exact redirect URIs, which IAM serves only
-  until the registry's import, below. An unregistered client id is refused before any fetch, and a
+  the console's origin and hosts, checked with `parseOAuthConfig` at deploy; unset = every OAuth path 404s, malformed
+  fails the boot) lists the resources with their scope ceilings and the installation's `hosts` (optional; both deploys
+  write them). It lists no client: a `clients` key is an unknown key and fails the boot (ADR-0089). The clients, CIMD
+  client ids (kind `claude`, `chatgpt` or `external`, a label only) with their exact redirect URIs, are rows in the
+  registry, below. An unregistered client id is refused before any fetch, and a
   fetched metadata document can never add a redirect URI. A scope grant is a CEILING: the token's
   `perms` are the user's LIVE permissions at the resource's app narrowed by it (`narrowPermissions`),
   re-resolved at every code exchange and refresh together with the grant, its IAM session, and the
@@ -870,22 +870,21 @@ fails if that stops being true — it is the guard, not documentation of one.
   (`resolveOAuthScopeToken`, `@fabrika/iam-contract`): `deploy:alpha` with parameter `app` holds its actions at app
   `alpha` only, whatever wider grant the person holds. A parameterized scope is never a default scope.
 - **AN IDENTITY-ONLY CLIENT IS SERVED ITS OWN RESOURCE ALONE, AND ITS TOKEN CARRIES NO PERMISSION** (ADR-0084,
-  `OAuthManagedClient.identity`). An `external` client may be bound to `{ app, resource, roles? }`; `parseOAuthConfig`
+  `OAuthManagedClient.identity`). An `external` client may be bound to `{ app, resource, roles? }`; `externalApps.put`
   refuses a binding whose app is a platform audience or a registered resource's app, or whose resource is a registered
   one. `checkAuthorization` serves such a client that resource with the scope `identity` and nothing else, and
   `grantCeiling` mints its grant with `perms: []` and the person's `email`, and refuses any other grant it holds. With
   `roles`, `heldIdentityRoles` reads the person's GLOBAL grants of the declared role keys at the app (an internal
   principal only), the token names them in `roles` and ends with the earliest of their grants, and a person holding
   none is refused at the consent (`access_denied`), the exchange and every refresh. The roles are the app's vocabulary,
-  each granting no action: a registry client's are read from it (`origin = 'app'`), and an `OAUTH_CONFIG` client's are
-  the ones an earlier release's deploy reconciled, which the import adopts. No deploy reconciles them any more: both
-  clouds' deploys call `importOAuthClientsOnce` (`@fabrika/installation-init`) instead.
+  each granting no action, read from the registry (`origin = 'app'`); registering an id adopts the roles an earlier
+  release's deploy reconciled under it. No deploy reconciles them any more.
 - **EVERY OAUTH PATH READS ITS CLIENT THROUGH `registeredClient` (`src/oauth-clients.ts`), FROM ONE SOURCE** (ADR-0089):
   the authorization request, client authentication at the token and revocation endpoints, and every exchange and
-  refresh (`grantCeiling`). Until the deploy variable is imported (`oauth_registry` holds its one row) that is
-  `OAUTH_CONFIG.clients`; from then on only the registry (`oauth_clients`, `external_apps`, migration 0038), whose row is
-  parsed again with `parseManagedClientEntry` into the same `ManagedOAuthClient`, so the flow cannot tell them apart and
-  a row it refuses is no client. Never read `config.clients` anywhere else.
+  refresh (`grantCeiling`). The source is the registry alone (`oauth_clients`, `external_apps`, migration 0038), whose
+  row is parsed again with `parseManagedClientEntry` into a `ManagedOAuthClient`, so a row it refuses is no client.
+  `oauth_registry` holds the import mark releases v0.9.0-dev.46 and dev.47 wrote; nothing reads it now, and it stays so
+  a rollback to such a release finds its mark.
 - **AN EXTERNAL APPLICATION IS WRITTEN WHOLE, BY AN INSTALLATION ADMINISTRATOR; AN AUTHORING CLIENT ONLY BY THE
   PROVISIONING KEY** (`admin/external-apps.ts`, `repositories/oauth-registry.ts`). `externalApps.put` writes the
   record, the name (`app_presentation`), the roles through the schema reconcile's own statements
@@ -896,11 +895,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   a role granting an action, a return origin, …), and the deploy's `PUT /admin/apps/:app/schema` refuses an external
   application's id (409). The resource is no registered resource and on no host of `OAUTH_CONFIG.hosts`, the issuer or
   a registered resource; a concurrent put that took it is `ExternalAppResourceTaken`, the same 409.
-  `oauthClients.put | delete | importOnce` answer 403 to anyone but `provisioning-admin`, like `grantApproval.set`.
+  `oauthClients.put | delete` answer 403 to anyone but `provisioning-admin`, like `grantApproval.set`.
   Each writer refuses a client id the other owns (409), and a guard statement rolls a put back if one was written in
-  between. Before the import both `put`s are 409, so an administrator's edit cannot land before the import replaces
-  it; `importOnce` writes every entry, the adopted vocabularies and the mark in one batch, and answers
-  `already_imported`, writing nothing, ever after.
+  between. Both writers write whether or not an import ever ran.
 - **A RESOURCE IS SERVED TO ONE KIND OF CLIENT** (`servesClient`, `oauth.ts`). `client: 'cli'` serves it to `fabrika-cli`
   alone, through the device grant; without it only the managed clients get it, through an authorization code. Every
   lookup (the authorization request, the device start, its consent page and each mint) filters by it, so an MCP client

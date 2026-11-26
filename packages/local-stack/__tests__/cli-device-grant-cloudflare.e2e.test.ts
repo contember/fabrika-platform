@@ -35,7 +35,6 @@ import { createHarness as createIamHarness, seedInlineGrant, seedUser } from '..
 import { createIamApp } from '../../iam/src/app'
 import type { Env as IamEnv } from '../../iam/src/env'
 import { parseOAuthConfig } from '../../iam/src/oauth-config'
-import { DEFAULT_PLATFORM_AUDIENCES } from '../../iam/src/services'
 import { buildOperationsWorker } from '../../operations/fabrika.config'
 import { createCloudflareProxyHandler } from '../../provider-cloudflare/src/proxy-worker'
 
@@ -255,7 +254,7 @@ test('a Cloudflare IAM deploy serves the command-line client the very resources 
 		placement: { iam: { hosts: [IAM_HOST] }, control: { hosts: [CONSOLE_HOST] }, operations: { hosts: ['operations.example.test'] } },
 		mcp: false,
 		authorizationServer: ISSUER,
-	}, [])
+	})
 	const cloudflare = buildIamWorker({ env: 'prod', domain: IAM_HOST }, {
 		FABRIKA_IAM_OIDC_ENABLED: 'false',
 		FABRIKA_IAM_PASSWORD_ENABLED: 'true',
@@ -277,7 +276,7 @@ test('Operations accepts the very resource IAM serves and the console proxy regi
 		FABRIKA_EMAIL_PROVIDER: 'none',
 		FABRIKA_CONTROL_URL: CONSOLE,
 	})
-	const iamResources = parseOAuthConfig(stringVar(iam, 'OAUTH_CONFIG'), DEFAULT_PLATFORM_AUDIENCES)?.resources.map((resource) => resource.resource)
+	const iamResources = parseOAuthConfig(stringVar(iam, 'OAUTH_CONFIG'))?.resources.map((resource) => resource.resource)
 	const proxy = withEnvironment({ FABRIKA_IAM_ISSUER: ISSUER }, () => buildControlConfig.resources({ env: 'prod', domain: CONSOLE_HOST }))
 	const entry = parseProxyManifestJson(proxyManifestJson(proxy) ?? '')?.apps[0]
 	if (entry === undefined || !('installation' in entry)) throw new Error('expected the console installation entry')

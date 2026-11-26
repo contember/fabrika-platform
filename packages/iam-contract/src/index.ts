@@ -29,8 +29,6 @@ import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import type {
 	ExternalAppDto,
 	ExternalAppInput,
-	ImportOAuthClientsRequest,
-	ImportOAuthClientsResponse,
 	OAuthClientDto,
 	OAuthClientInput,
 	PutExternalAppRequest,
@@ -967,8 +965,6 @@ export interface IamAdminRpcContract {
 		list: RpcProcedure<void, ListResponse<OAuthClientDto>>
 		put: RpcProcedure<PutOAuthClientRequest, OAuthClientDto>
 		delete: RpcProcedure<OAuthClientInput, OkResponse>
-		/** The deploy's one import of its client list, with the provisioning key; every later call writes nothing. */
-		importOnce: RpcProcedure<ImportOAuthClientsRequest, ImportOAuthClientsResponse>
 	}
 	policies: {
 		list: RpcProcedure<AppInput, ListResponse<PolicyDto>>

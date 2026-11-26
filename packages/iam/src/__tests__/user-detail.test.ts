@@ -7,6 +7,7 @@ import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import { applied } from './helpers/grants'
 import { createHarness, makeServicesFor, TestSqlDatabase } from './helpers/harness'
 import { APP, membershipFixture, ONBOARDING_SCHEMA } from './helpers/membership'
+import { register } from './helpers/oauth'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
 const future = () => Math.floor(Date.now() / 1000) + 3600
@@ -208,12 +209,12 @@ function suite(label: string, backend: () => { repositories: IamRepositories; db
 			const session = await f.session()
 			const clientId = 'https://client.example.test/metadata'
 			const resource = 'https://notes.example.test/mcp'
+			await register(f.repositories, { provider: 'claude', clientId, metadataUrl: clientId, redirectUris: ['https://client.example.test/callback'] })
 			const context = {
 				...f.context,
 				services: makeServicesFor(f.repositories, {
 					authentication: { oidc: false, password: true },
 					oauth: {
-						clients: [{ provider: 'claude', clientId, metadataUrl: clientId, redirectUris: ['https://client.example.test/callback'] }],
 						resources: [{ app: APP, resource, defaultScopes: ['read'], scopeGrants: [{ scope: 'read', permissions: [{ action: 'notes.read' }] }] }],
 						hosts: [],
 					},

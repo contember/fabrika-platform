@@ -74,7 +74,6 @@ const IAM: Readonly<Record<string, Judged>> = {
 	'externalApps.delete': { exempt: NARROWS },
 	'oauthClients.put': { exempt: "the operator's MCP authoring client, the provisioning key only" },
 	'oauthClients.delete': { exempt: NARROWS },
-	'oauthClients.importOnce': { exempt: "the deploy's one import of its client list, the provisioning key only" },
 	// A person's own passkeys, in a signed-in session only: a key never reaches them, so nothing is left to wait.
 	'passkeys.registrationOptions': { exempt: `the caller's own passkey: ${ALWAYS_A_PERSON}` },
 	'passkeys.register': { exempt: `the caller's own passkey, after a step-up once one exists: ${ALWAYS_A_PERSON}` },

@@ -37,7 +37,6 @@ async function fixture() {
 		{ scope: 'create', permissions: [{ action: 'app.create' }] },
 	]
 	const config: OAuthConfig = {
-		clients: f.config.clients,
 		hosts: [],
 		resources: [
 			{

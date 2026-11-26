@@ -71,13 +71,12 @@ describe.skipIf(!hasPostgres)('OAuth on real Postgres', () => {
 
 describe.skipIf(!hasPostgres)('OAuth from the registry on real Postgres', () => {
 	test("an external application's client signs a role holder in and refreshes, served from the registry alone", async () => {
-		// Its own schema: the import mark makes the registry the only source for every client of the database.
+		// Its own schema, so its external application stays apart from the other tests'.
 		const registry = await createPostgres('iam_oauth_registry')
 		try {
 			const own = createPostgresIamRepositories(registry.db)
 			const identity = { app: 'ops-tool', resource: 'https://ops.example.test', roles: [{ key: 'viewer', name: 'Viewer' }] }
-			active = await oauthFixture(own, { provider: 'external', identity, registry: true })
-			expect(active.config.clients).toEqual([])
+			active = await oauthFixture(own, { provider: 'external', identity })
 			await own.grants.createGrant({ principalId: active.principal.id, app: identity.app, roleKey: 'viewer' })
 			const location = (await active.decide('approve', { resource: identity.resource, scope: 'identity' })).headers.get('location')
 			const code = location === null ? null : new URL(location).searchParams.get('code')

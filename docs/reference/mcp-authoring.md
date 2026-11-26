@@ -264,8 +264,7 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
      `source.workspace.read`, `source.workspace.write`, `source.pull-request.create`, `deploy.trigger` and
      `deploy.read`, beside the command-line client's resources.
 
-   Unset, this release still turns it on when `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` lists a client that is not
-   identity-only, as earlier releases did, and warns: the next release reads only the switch.
+   Unset, MCP authoring is off.
 
    Off, the console's table makes `/mcp` a session-only row that Control answers `404`, so no MCP client reaches it. An
    https deploy still writes `FABRIKA_IAM_OAUTH_CONFIG`, with only the command-line client's resources
@@ -286,9 +285,7 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
    ```yaml
    FABRIKA_PLATFORM_MCP_AUTHORING: ${{ vars.FABRIKA_PLATFORM_MCP_AUTHORING }}
    ```
-2. **Register the MCP clients** in IAM's registry ([below](#iams-client-registry)): [Claude and ChatGPT](#registering-claude-and-chatgpt), or [an external authoring client](#registering-an-external-client). An
-   installation whose `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` lists them when it first deploys this release gets them from
-   that deploy's import.
+2. **Register the MCP clients** in IAM's registry ([below](#iams-client-registry)): [Claude and ChatGPT](#registering-claude-and-chatgpt), or [an external authoring client](#registering-an-external-client).
 3. **Give the GitHub App write access.** It needs `contents: write` and `pull_requests: write` on
    the application's repository: a workspace is a branch Control commits to, and `open_pull_request`
    opens a pull request. An App created from the console asks for both. An App created before MCP
@@ -352,9 +349,10 @@ Namespaces without a dev environment need none of this: no Box host is created a
 
 ## Registering Claude and ChatGPT
 
-Each client names one client id and its exact redirect URIs; the JSON below is an entry of the client list the
-deploy imports, and the same fields are what `oauthClients.put` takes (with `label` for `provider`). IAM fetches the client's metadata document at
-the client id, and a document that names any other redirect URI is refused.
+Each client names one client id and its exact redirect URIs; the operator registers each with
+`fabrika control oauth-clients put --file=<client.json>` ([below](#registering-an-external-application)), and the JSON
+below is that file. IAM fetches the client's metadata document at the client id, and a document that names any other
+redirect URI is refused.
 
 | Client             | `clientId`                                            | `redirectUris`                                          |
 | ------------------ | ----------------------------------------------------- | ------------------------------------------------------- |
@@ -363,31 +361,32 @@ the client id, and a document that names any other redirect URI is refused.
 | ChatGPT (fallback) | `https://chatgpt.com/oauth/<callback id>/client.json` | `https://chatgpt.com/connector/oauth/<callback id>`     |
 
 ```json
-[
-	{
-		"provider": "claude",
-		"clientId": "https://claude.ai/oauth/mcp-oauth-client-metadata",
-		"redirectUris": ["https://claude.ai/api/mcp/auth_callback"]
-	},
-	{
-		"provider": "chatgpt",
-		"clientId": "https://chatgpt.com/oauth/client.json",
-		"redirectUris": ["https://chatgpt.com/connector_platform_oauth_redirect"]
-	}
-]
+{
+	"clientId": "https://claude.ai/oauth/mcp-oauth-client-metadata",
+	"label": "claude",
+	"redirectUris": ["https://claude.ai/api/mcp/auth_callback"]
+}
+```
+
+```json
+{
+	"clientId": "https://chatgpt.com/oauth/client.json",
+	"label": "chatgpt",
+	"redirectUris": ["https://chatgpt.com/connector_platform_oauth_redirect"]
+}
 ```
 
 - **ChatGPT uses the stable client id** because IAM supports RFC 9207: it advertises
   `authorization_response_iss_parameter_supported` and puts `iss` on every authorization response. Register the
   stable entry; no per-connector step is needed.
 - **The fallback client id** belongs to one connector. ChatGPT uses it only against an authorization server
-  without RFC 9207. The `<callback id>` appears in the connector's settings after it is created. Add one entry
-  per connector:
+  without RFC 9207. The `<callback id>` appears in the connector's settings after it is created. Register one
+  client per connector:
 
   ```json
   {
-  	"provider": "chatgpt",
   	"clientId": "https://chatgpt.com/oauth/<callback id>/client.json",
+  	"label": "chatgpt",
   	"redirectUris": ["https://chatgpt.com/connector/oauth/<callback id>"]
   }
   ```
@@ -412,28 +411,30 @@ known to declare `private_key_jwt`.
 
 ## Registering an external client
 
-An application other than Claude or ChatGPT registers with `"provider": "external"`. It is registered one of two ways.
-An installation administrator registers an identity-only application with its clients and roles at runtime
-(`externalApps.put`, [below](#iams-client-registry)); the JSON here is its entry in the client list an earlier release
-read, which the deploy imports once.
+An application other than Claude or ChatGPT is registered one of two ways. An installation administrator registers an
+identity-only application with its clients and roles at runtime (`externalApps.put`, [below](#iams-client-registry));
+the operator registers an authoring client with the label `external` (`oauthClients.put`).
 
 **Identity only** (an operations tool that signs people in through the installation's IAM, say;
-[ADR-0084](../decisions/0084-an-external-application-signs-people-in-through-iam.md)). The entry names the client's
-own resource, an app id for it and, optionally, the application's roles:
+[ADR-0084](../decisions/0084-an-external-application-signs-people-in-through-iam.md)). The record names an app id for
+the application, its name, its own resource, optionally its roles, and its clients:
 
 ```json
 {
-	"provider": "external",
-	"clientId": "https://<client host>/oauth/client.json",
-	"redirectUris": ["https://<client host>/oauth/callback"],
-	"identity": {
-		"app": "<app id>",
-		"resource": "https://<client host>",
-		"roles": [
-			{ "key": "admin", "name": "Administrator" },
-			{ "key": "viewer", "name": "Viewer" }
-		]
-	}
+	"app": "<app id>",
+	"name": "<what the console shows>",
+	"resource": "https://<client host>",
+	"roles": [
+		{ "key": "admin-ops", "name": "Administrator" },
+		{ "key": "viewer", "name": "Viewer" }
+	],
+	"clients": [
+		{
+			"clientId": "https://<client host>/oauth/client.json",
+			"redirectUris": ["https://<client host>/oauth/callback"],
+			"metadataUrl": null
+		}
+	]
 }
 ```
 
@@ -444,13 +445,12 @@ installation service and every application refuses it, because its audience is n
 against IAM's JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). A request for any other resource is
 `invalid_target`, any other scope `invalid_scope`, and a grant the client held before it was bound mints nothing after.
 
-- **`app`** is a lowercase id without `@`, at most 63 characters (`^[a-z0-9][a-z0-9-]{0,62}$`). The deploy and IAM
-  refuse a platform service's app id and a resource on one of the installation's hosts.
+- **`app`** is a lowercase id without `@`, at most 63 characters (`^[a-z0-9][a-z0-9-]{0,62}$`). IAM refuses a
+  platform service's app id and a resource on one of the installation's hosts.
 - **`roles`** (1 to 32): each `key` lowercase like `app` and not a built-in role key (`admin` is IAM's own, so name the
   application's administrator role otherwise, `admin-ops` say), each `name` what the console shows. IAM writes them as
   the application's vocabulary, each role granting no action, with the record; the application holds no IAM
-  credential. An application has one list of roles, so every client of one app in the client list names the same
-  resource and roles, or the deploy refuses the list. An
+  credential. An application has one list of roles for all its clients. An
   installation administrator, or a user administrator in its scope, grants a role in the console's user access form (Add access: app `<app id>`, the role, no scope),
   globally: a role granted in a scope value is not named.
 - **Changing `roles`.** An administrator saves the application with the new list: a removed role leaves IAM's
@@ -465,25 +465,21 @@ against IAM's JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). 
   names no role: it proves who the person is, not that they belong to the application, so the application decides whom
   it admits.
 
-An identity-only client never turns MCP authoring on: no `/mcp` row is published and no authoring resource is served
-for it. It needs `https`, like every client.
+An identity-only client is never served the authoring resource. It needs `https`, like every client.
 
-**On Cloudflare** the same variable in the installation's GitHub Environment holds identity-only clients. MCP
-authoring is not supported on Cloudflare yet, so the deploy refuses any other entry, and
-`FABRIKA_PLATFORM_MCP_AUTHORING=on`, as not supported yet, before it deploys anything. The scaffolded `platform.yml`
-passes both to the IAM stage, which writes the clients into IAM's `OAUTH_CONFIG` with the installation's hosts, and to
-the control-plane stage, which imports the list into IAM's registry after IAM's own vocabulary. Locally,
-`FABRIKA_LOCAL_OAUTH_CLIENTS_JSON` takes the same entries and `local:up` imports them.
+**On Cloudflare** external applications are registered the same way. MCP authoring is not supported on Cloudflare yet,
+so both deploy stages refuse `FABRIKA_PLATFORM_MCP_AUTHORING=on` before they deploy anything. Locally, register them
+against the local IAM ([below](#locally)).
 
-**Authoring.** Without `identity`, the kind is a label: IAM treats the client as any other, so it gets what they get.
+**Authoring.** An authoring client's `label` is a label only: IAM treats the client as any other, so it gets what they get.
 That is an access token for a registered resource, and the only one an installation serves managed clients is the
 console's `/mcp` with the `authoring` scope: within the consenting person's grants, the client can write workspaces
 and deploy to stage. Register only a client you would trust with that.
 
 ```json
 {
-	"provider": "external",
 	"clientId": "https://<client host>/oauth/client.json",
+	"label": "external",
 	"redirectUris": ["https://<client host>/oauth/callback"]
 }
 ```
@@ -494,13 +490,10 @@ to that URL, `redirect_uris` within the registered ones, `response_types` absent
 the authorization code flow, S256 PKCE and `resource` set to its resource. It gets no ID token, no implicit grant and no
 client secret.
 
-**Rollout.** The binding is new in `FABRIKA_IAM_OAUTH_CONFIG`; an IAM from before it refuses the key and stops at boot.
-Before rolling `iam` back, remove every `identity` entry from the client list and deploy. The same holds for `hosts`
-([below](#upgrading-to-the-client-registry)).
-
 ### IAM's client registry
 
-IAM also keeps its clients in its own database ([ADR-0089](../decisions/0089-oauth-clients-are-registered-in-iam-at-runtime.md)).
+IAM keeps its clients in its own database and serves them from there alone
+([ADR-0089](../decisions/0089-oauth-clients-are-registered-in-iam-at-runtime.md)); `OAUTH_CONFIG` names no client.
 An external application (its id, display name, resource, roles and clients) is a record an installation administrator
 writes whole with `externalApps.put` and removes with `externalApps.delete` (`/admin/rpc`, `iam.admin`); an authoring
 client is a row only the provisioning key writes (`oauthClients.put | delete`). Each writer refuses a client id the
@@ -509,43 +502,33 @@ too; the resource must also be on none of the installation's hosts, which both d
 `hosts`. An id under which IAM already holds roles that grant no action, as an earlier release's deploy reconciled them,
 is adopted with every grant of its roles; any other vocabulary refuses it.
 
-Until a deploy calls `oauthClients.importOnce`, IAM serves the clients of its `OAUTH_CONFIG`, as described above, and
-refuses both `put`s. Every deploy calls it with the provisioning key: on Zerops the installation deploy, after the
-console's registration; on Cloudflare the control-plane stage, after IAM's own vocabulary; locally `local:up`. It
-passes the entries of `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`, or none when the variable is unset. The first call writes
-every entry, the roles they declare and a mark in one transaction; from then on IAM serves the registry alone, and every
-later call answers `already_imported` and writes nothing, so a deploy never undoes an administrator's edit. A failed
-call fails the deploy. While the variable is set, every deploy warns that this release no longer reads it after the import, the importing
-deploy included.
-A client added to the variable after the import is never read: register it in the registry.
-
 ### Upgrading to the client registry
 
-The release that imports the client list is the last that reads `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`; the next one
-refuses a deploy that still sets it. A fresh installation of this release gets an empty import on its first deploy, so
-the variable is never read there: it registers its clients in the console, or with `fabrika control external-apps` and
-`fabrika control oauth-clients`, not through the variable. On each existing installation:
+Releases v0.9.0-dev.46 and v0.9.0-dev.47 were the last that read `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`: each of their
+deploys imported the list into IAM's registry once, and their IAM served the list's clients until then. On Cloudflare
+dev.46's import failed with nothing written, so a Cloudflare installation imports with dev.47. From the next release on IAM serves the
+registry alone, and a deploy that still sets the variable (on Zerops also `--mcp-clients`) is refused before it deploys
+anything, naming the ways out:
 
-1. Deploy this release. Before it deploys anything, the deploy checks the list against the rules IAM's import applies
-   (one resource and one list of roles per application, no resource under two applications) and refuses a list that
-   breaks them. Its first deploy imports the list; the deploy log says `IAM imported the OAuth client list`.
-2. Where MCP authoring is on, set `FABRIKA_PLATFORM_MCP_AUTHORING=on`. Until then this release infers it from the
-   list and warns; without the switch, the next release turns MCP authoring off.
-3. Once this release is accepted on the installation, delete `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` from the GitHub
-   Environment. Keep it until then: rolling back to the release before serves its clients only while it is set, and
-   that release's deploy reconciles the list's roles over whatever the registry holds. After a rollback and a roll
-   forward, an administrator saves each edited application again.
+- **Keep the clients:** upgrade through v0.9.0-dev.47 first. Its deploy imports the list; the deploy log says
+  `IAM imported the OAuth client list`, or that an earlier deploy did. Then delete the variable from the GitHub
+  Environment and upgrade further. Only an installation that passes through v0.9.0-dev.47 keeps its clients without
+  registering them again.
+- **Register them again:** delete the variable, deploy, and register the applications in the console or with
+  `fabrika control external-apps` and `fabrika control oauth-clients` ([below](#registering-an-external-application)).
+  Registering an id adopts the roles an earlier deploy reconciled under it, with every grant of them. Sign-ins through
+  an application fail until it is registered.
+- Where MCP authoring was on, set `FABRIKA_PLATFORM_MCP_AUTHORING=on`: unset is off, and nothing infers it from a list.
 
-On Cloudflare, `OAUTH_CONFIG` is a Worker variable of at most 5,120 bytes, and it now carries the installation's hosts
-beside the list, so a list that fitted before may not: the IAM stage refuses it before it deploys. Dropping a client
-from the variable to make it fit means that client is never imported; register it in the console instead.
+The generated workflows still pass the variable to the deploy, so the refusal sees it; a later release drops that line.
 
-`FABRIKA_IAM_OAUTH_CONFIG` (Cloudflare: IAM's `OAUTH_CONFIG`) now carries `hosts`, which an IAM before this release
-refuses at boot. Roll back by deploying the older release, which writes its own configuration, never by reactivating
-an older IAM version alone. On Zerops the deploy writes every service's variables before it deploys any service, so
-after an upgrade that failed during the deploy, an older IAM restarted against the new `FABRIKA_IAM_OAUTH_CONFIG`
-refuses to boot until the next deploy: re-run the deploy, or deploy the older release, rather than restart the
-service.
+`FABRIKA_IAM_OAUTH_CONFIG` (Cloudflare: IAM's `OAUTH_CONFIG`) carries `hosts` and no `clients`. An IAM of
+v0.9.0-dev.47 or earlier requires `clients`, and one from before the registry also refuses `hosts`, so an older IAM
+stops at boot on this release's value. Roll back by deploying the older release, which writes its own configuration, never by
+reactivating an older IAM version alone. On Zerops the deploy writes every service's variables before it deploys any
+service, so after an upgrade that failed during the deploy, an older IAM restarted against the new
+`FABRIKA_IAM_OAUTH_CONFIG` refuses to boot until the next deploy: re-run the deploy, or deploy the older release,
+rather than restart the service.
 
 #### Registering an external application
 
@@ -557,7 +540,7 @@ effect at the next authorization request, code exchange or refresh. Before savin
 removing a client or changing the resource revokes the sign-ins through it, removing a role takes it from everyone it
 is granted to, and adding roles to an application that had none refuses everyone until a role is granted in Users.
 Deleting the application revokes its clients' sign-ins and removes its roles. The page lists the authoring clients
-read-only. Until the import ran, IAM refuses the save and the form says so: deploy the platform first.
+read-only.
 
 **With the CLI** the operator does the same with the provisioning key, from a file and idempotently:
 
@@ -597,9 +580,10 @@ never prints the key. A user administrator grants an external application's role
 
 The local stack runs MCP off, and serves the command-line client's device grant always. Set
 `FABRIKA_LOCAL_MCP_AUTHORING=on` before `bun run local:up` to turn MCP on; the resource is then
-`http://control.fabrika.localhost:18080/mcp`. `FABRIKA_LOCAL_OAUTH_CLIENTS_JSON` (the client list's shape) is imported
-into IAM's registry by the first `up` after a reset, as a deploy imports it; unset, the switch falls back to an MCP
-client in that list, with a warning.
+`http://control.fabrika.localhost:18080/mcp`; unset, it is off. Register local clients with
+`fabrika control external-apps put` and `fabrika control oauth-clients put` against the local IAM
+(`FABRIKA_IAM_RPC_URL=http://iam.fabrika.localhost:18080`, and the provisioning key from
+`packages/local-stack/.state/iam.env`). `FABRIKA_LOCAL_OAUTH_CLIENTS_JSON` is refused.
 Every prepare rewrites `.state/control-table.env` with the matching table digest, so Control follows.
 IAM still fetches each client's CIMD document over HTTPS, and a hosted client cannot reach a
 `localhost` resource, so this checks configuration rather than a full client session.

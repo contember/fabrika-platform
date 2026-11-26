@@ -6,7 +6,6 @@ import { assertCheckerPublished, npmCheckerPublication, type RegistryFetch } fro
 import { deployPlatform, type PlatformDeployCollaborators } from '../deploy'
 import { runInstall } from '../install'
 import { recordingInitLog } from '../log'
-import { fakeIamAdmin } from './fake-iam-admin'
 import { fakePlatformSource, fakeSourceCollaborators } from './fake-platform-source'
 import { fakeZerops, platformServices, SUBDOMAINS } from './fake-zerops'
 
@@ -68,7 +67,6 @@ describe('a checkout whose checker npm does not have', () => {
 			checkerPublished: async () => false,
 			api: zerops.api,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log: recordingInitLog(),
 			signal,
