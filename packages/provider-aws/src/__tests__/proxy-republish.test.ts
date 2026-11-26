@@ -15,10 +15,11 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import type { Certificate } from '../aws/acm'
 import type { CodeBuildBuild } from '../aws/codebuild'
 import type { EcsService, EcsServiceDeploymentStatus } from '../aws/ecs'
+import type { ListenerRule } from '../aws/elb'
 import type { S3PartWriter } from '../aws/s3'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from '../codecs'
-import { awsNamespaceTargetEnvelope } from '../namespace'
+import { awsNamespaceStack, awsNamespaceTargetEnvelope } from '../namespace'
 import { awsProxyManifestFile, sha256Hex } from '../proxy-attempt'
 import { AWS_PROXY_PENDING, type AwsProxyRepublishContext, republishAwsProxy, withAwsProxyRepublish } from '../proxy-republish'
 import { AWS_PROXY_ROLLOUT_FAILED, followAwsProxyRollout } from '../proxy-service'
@@ -34,6 +35,9 @@ const TOKEN = '0f1e2d3c-4b5a-4968-8776-655443322110'
 const BUILD_ID = `fabrika_ns_shared_prod:${TOKEN}`
 const DIGEST = `sha256:${'b'.repeat(64)}`
 const STACK_ID = 'arn:aws:cloudformation:eu-central-1:123456789012:stack/fabrika-ns-6-shared-prod/0f1e2d3c'
+const HOSTS_STACK = 'fabrika-nh-6-shared-prod'
+const HOSTS_STACK_ID = 'arn:aws:cloudformation:eu-central-1:123456789012:stack/fabrika-nh-6-shared-prod/1f1e2d3c'
+const TARGET_GROUP = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/fabri-Proxy-1A2B3C4D/0123456789abcdef'
 const PINNED: AwsNamespaceTarget = {
 	accountId: '123456789012',
 	region: 'eu-central-1',
@@ -70,6 +74,14 @@ const service: EcsService = {
 	network: null,
 	events: [],
 }
+const NETWORK = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0'], publicIp: true }
+const LISTENER = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika/0123456789abcdef/fedcba9876543210'
+const BALANCER = {
+	securityGroupId: 'sg-0123456789abcdef1',
+	vpcCidr: '10.0.0.0/16',
+	listenerArn: LISTENER,
+	installationHosts: ['console.example.com'],
+}
 const DEPLOYMENT_ARN = 'arn:aws:ecs:eu-central-1:123456789012:service-deployment/fabrika-apps/ns_shared_prod_proxy/deployment1'
 const REVISION = 'arn:aws:ecs:eu-central-1:123456789012:service-revision/fabrika-apps/ns_shared_prod_proxy/revision1'
 const OLDER_REVISION = 'arn:aws:ecs:eu-central-1:123456789012:service-revision/fabrika-apps/ns_shared_prod_proxy/revision0'
@@ -88,10 +100,16 @@ class Fake {
 	/** ACM's certificates by ARN, and each request's host and token, apart from `calls`. */
 	readonly certificates = new Map<string, Certificate>()
 	readonly requests: { readonly host: string; readonly token: string }[] = []
+	/** The listener's rules, and the namespace stack's template as last sent. */
+	rules: readonly ListenerRule[] = []
+	template: string | null = null
+	/** CloudFormation refuses the hosts stack's create or update (a quota, a priority taken). */
+	hostsRefused = false
 	readonly context: AwsProxyRepublishContext = {
 		installation,
 		proxySource: PROXY_SOURCE,
-		network: { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0'], publicIp: true },
+		network: NETWORK,
+		balancer: BALANCER,
 		runtime: {
 			iam: { issuer: 'https://iam.example.com', key: 'proxy-iam-key' },
 			clients: {
@@ -106,6 +124,9 @@ class Fake {
 						return arn
 					},
 					describeCertificate: async (arn) => this.certificates.get(arn) ?? null,
+				},
+				elb: {
+					describeRules: async () => this.rules,
 				},
 				codeBuild: {
 					startBuild: async (start) => {
@@ -168,17 +189,38 @@ class Fake {
 					listNames: async () => this.parameters,
 				},
 				s3PartWriter: (): S3PartWriter => ({ partBytes: 8 * 1024 * 1024, writePart: async () => {}, complete: async () => {}, abort: async () => {} }),
+				// The namespace's stack serves the template it was last sent; before any, the one of no host rules.
+				// The namespace's stack serves; its hosts stack exists once created, and serves the template it was last sent.
 				cloudFormation: {
-					findStack: async () => ({ stackId: STACK_ID, status: 'CREATE_COMPLETE' }),
-					describeStack: async (stackId) => ({
-						stackId,
-						status: 'CREATE_COMPLETE',
-						outputs: {
+					findStack: async (name) =>
+						name === HOSTS_STACK
+							? this.template === null ? null : { stackId: HOSTS_STACK_ID, status: 'CREATE_COMPLETE' }
+							: { stackId: STACK_ID, status: 'CREATE_COMPLETE' },
+					getTemplate: async (name) =>
+						name === HOSTS_STACK
+							? this.template ?? ''
+							: JSON.stringify(awsNamespaceStack({ id: 'shared', env: 'prod' }, installation, NETWORK, BALANCER).template),
+					createStack: async ({ name, templateBody }) => {
+						if (name !== HOSTS_STACK) throw new Error('the namespace stack exists')
+						if (this.hostsRefused) throw new AwsError('CreateStack', 'ValidationError', 400, null, false)
+						this.calls.push(`createStack ${name}`)
+						this.template = templateBody
+						return HOSTS_STACK_ID
+					},
+					updateStack: async ({ name, templateBody }) => {
+						if (this.hostsRefused) throw new AwsError('UpdateStack', 'ValidationError', 400, null, false)
+						this.calls.push(`updateStack ${name}`)
+						if (name === HOSTS_STACK) this.template = templateBody
+						return name === HOSTS_STACK ? HOSTS_STACK_ID : STACK_ID
+					},
+					describeStack: async (stackId) => {
+						const outputs: Readonly<Record<string, string>> = stackId === HOSTS_STACK_ID ? {} : {
 							ProxySecurityGroupId: 'sg-0123456789abcdef7',
 							ServiceConnectNamespaceArn: 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-abcdefghij123456',
-							ProxyTargetGroupArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/fabri-Proxy-1A2B3C4D/0123456789abcdef',
-						},
-					}),
+							ProxyTargetGroupArn: TARGET_GROUP,
+						}
+						return { stackId, status: 'CREATE_COMPLETE', outputs }
+					},
 				},
 			},
 			credentials: () => ({ current: () => Promise.resolve({ accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'secret', sessionToken: 'session' }) }),
@@ -418,6 +460,144 @@ describe("the proxy service's rollout", () => {
 			.catch((error: unknown) => error)
 		expect(failure).toMatchObject({ retryable: false })
 		expect(follower.calls.some((call) => call.startsWith('deleteSecret'))).toBe(false)
+	})
+})
+
+describe("the hosts on the installation's listener", () => {
+	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST })
+	/** The hosts stack's rules as `<host>@<priority>`, from the template it was last sent. */
+	const served = (template: string | null): readonly string[] => {
+		const parsed: unknown = JSON.parse(template === null || template === '' ? '{}' : template)
+		const resources = typeof parsed === 'object' && parsed !== null && 'Resources' in parsed ? parsed.Resources : {}
+		return Object.values(typeof resources === 'object' && resources !== null ? resources : {}).flatMap((resource: unknown) => {
+			const text = JSON.stringify(resource)
+			if (!text.includes('AWS::ElasticLoadBalancingV2::ListenerRule')) return []
+			const host = /"Values":\["([^"]+)"\]/.exec(text)?.[1]
+			const priority = /"Priority":(\d+)/.exec(text)?.[1]
+			return [`${host}@${priority}`]
+		})
+	}
+	const run = (fake: Fake, namespace: ProviderDeploymentNamespace, members: readonly ProviderNamespaceMember[]) =>
+		republishAwsProxy(fake.context, { namespace, members, events: fake.events, signal: fake.signal, wait: 'started' })
+	const otherRule = (priority: number, host: string, targetGroups: readonly string[]): ListenerRule => ({
+		arn: `${LISTENER.replace(':listener/', ':listener-rule/')}/${String(priority).padStart(16, '0')}`,
+		priority,
+		hosts: [host],
+		targetGroups,
+	})
+	const THEIRS = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/fabri-Proxy-5E6F7A8B/fedcba9876543210'
+
+	test('an issued certificate puts its host on the listener through the hosts stack; the host leaving takes it off', async () => {
+		const fake = new Fake()
+		const pending = await run(fake, built, MEMBERS)
+		// Pending: nothing on the listener, and no hosts stack created for nothing.
+		expect(fake.calls.filter((call) => call.includes(HOSTS_STACK))).toEqual([])
+		const [certificate] = decoded(pending.namespace).proxyCertificates ?? []
+		const arn = certificate?.arn ?? ''
+		fake.certificates.set(arn, { arn, host: 'notes.example.com', status: 'ISSUED', validation: null, inUseBy: [] })
+
+		const issued = await run(fake, pending.namespace, MEMBERS)
+		const priority = decoded(issued.namespace).proxyCertificates?.[0]?.priority
+		expect(priority).toMatch(/^[1-9]\d{0,4}$/)
+		expect(fake.calls).toContain(`createStack ${HOSTS_STACK}`)
+		expect(served(fake.template)).toEqual([`notes.example.com@${priority}`])
+		expect(fake.template).toContain(TARGET_GROUP)
+		expect(decoded(issued.namespace).proxyHostsFailure).toBeUndefined()
+
+		// The host leaves: its rule and listener certificate leave the hosts stack, its entry is marked for the operator.
+		const leaving = await run(fake, issued.namespace, [])
+		expect(served(fake.template)).toEqual([])
+		expect(decoded(leaving.namespace).proxyCertificates?.map((entry) => [entry.host, entry.priority, entry.departed])).toEqual([
+			['notes.example.com', undefined, true],
+		])
+		// The operator deleted it: the next pass forgets it. Nothing here ever deletes one.
+		fake.certificates.delete(arn)
+		const gone = await republishAwsProxy(fake.context, {
+			namespace: leaving.namespace,
+			members: [],
+			events: fake.events,
+			signal: fake.signal,
+			wait: 'started',
+		})
+		expect(decoded(gone.namespace).proxyCertificates).toBeUndefined()
+	})
+
+	test("a host's recorded priority another rule took is chosen anew before the stack is rendered", async () => {
+		const fake = new Fake()
+		const arn = 'arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-000000000009'
+		fake.certificates.set(arn, { arn, host: 'notes.example.com', status: 'ISSUED', validation: null, inUseBy: [] })
+		const recorded = namespaceOf({
+			...PINNED,
+			proxyImageDigest: DIGEST,
+			proxyImageManifestSha256: MANIFEST,
+			proxyCertificates: [{ host: 'notes.example.com', arn, status: 'ISSUED', priority: '7' }],
+		})
+		fake.rules = [otherRule(7, 'other.example.com', [THEIRS])]
+		const moved = await run(fake, recorded, MEMBERS)
+		const priority = decoded(moved.namespace).proxyCertificates?.[0]?.priority
+		expect(priority).not.toBe('7')
+		expect(served(fake.template)).toEqual([`notes.example.com@${priority}`])
+	})
+
+	const issuedFor = (fake: Fake, host: string): ProviderDeploymentNamespace => {
+		const arn = 'arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-000000000009'
+		fake.certificates.set(arn, { arn, host, status: 'ISSUED', validation: null, inUseBy: [] })
+		return namespaceOf({
+			...PINNED,
+			proxyImageDigest: DIGEST,
+			proxyImageManifestSha256: MANIFEST,
+			proxyCertificates: [{ host, arn, status: 'ISSUED' }],
+		})
+	}
+
+	test('a host another namespace already routes is not taken over: it is marked a conflict, and the rest of the pass runs', async () => {
+		const fake = new Fake()
+		// Another namespace routed notes.example.com first, to its own target group.
+		fake.rules = [otherRule(3, 'notes.example.com', [THEIRS])]
+		const result = await run(fake, issuedFor(fake, 'notes.example.com'), MEMBERS)
+		expect(served(fake.template)).toEqual([])
+		expect(decoded(result.namespace).proxyCertificates?.[0]).toMatchObject({ host: 'notes.example.com', listenerConflict: true })
+		expect(decoded(result.namespace).proxyCertificates?.[0]?.priority).toBeUndefined()
+		// The proxy's service is still set: the conflict holds back the host alone.
+		expect(decoded(result.namespace).proxyServiceUpdated).toBe(true)
+		// Once the other rule is gone, the next pass serves it and clears the mark.
+		fake.rules = []
+		const freed = await run(fake, result.namespace, MEMBERS)
+		expect(decoded(freed.namespace).proxyCertificates?.[0]?.listenerConflict).toBeUndefined()
+		expect(served(fake.template)).toHaveLength(1)
+	})
+
+	test("a wildcard rule, or one of the installation's own hosts, is a conflict too", async () => {
+		const wildcard = new Fake()
+		wildcard.rules = [otherRule(4, '*.example.com', [THEIRS])]
+		const caught = await run(wildcard, issuedFor(wildcard, 'notes.example.com'), MEMBERS)
+		expect(decoded(caught.namespace).proxyCertificates?.[0]?.listenerConflict).toBe(true)
+		const reserved = new Fake()
+		const onConsoleHost: readonly ProviderNamespaceMember[] = MEMBERS.map((member) => ({ ...member, domain: 'console.example.com' }))
+		const held = await run(reserved, issuedFor(reserved, 'console.example.com'), onConsoleHost)
+		expect(decoded(held.namespace).proxyCertificates?.[0]?.listenerConflict).toBe(true)
+		expect(served(reserved.template)).toEqual([])
+	})
+
+	test('a hosts stack CloudFormation refuses is recorded and shown, never a failed pass; the next pass applies it', async () => {
+		const fake = new Fake()
+		fake.hostsRefused = true
+		const refused = await run(fake, issuedFor(fake, 'notes.example.com'), MEMBERS)
+		expect(decoded(refused.namespace).proxyHostsFailure).toBe('failed')
+		// The proxy's build and rollout went on as ever.
+		expect(decoded(refused.namespace).proxyServiceUpdated).toBe(true)
+		fake.hostsRefused = false
+		const applied = await run(fake, refused.namespace, MEMBERS)
+		expect(decoded(applied.namespace).proxyHostsFailure).toBeUndefined()
+		expect(served(fake.template)).toHaveLength(1)
+	})
+
+	test('a listener whose default action forwards to this namespace serves none of its hosts, and says so', async () => {
+		const fake = new Fake()
+		fake.rules = [{ arn: `${LISTENER.replace(':listener/', ':listener-rule/')}/default`, priority: 'default', hosts: [], targetGroups: [TARGET_GROUP] }]
+		const result = await run(fake, issuedFor(fake, 'notes.example.com'), MEMBERS)
+		expect(decoded(result.namespace).proxyHostsFailure).toBe('defaultForwards')
+		expect(served(fake.template)).toEqual([])
 	})
 })
 

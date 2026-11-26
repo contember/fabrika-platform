@@ -45,6 +45,7 @@ import { type CloudFormationClient, cloudFormationClient } from './aws/cloudform
 import { codeBuildClient } from './aws/codebuild'
 import { ecrClient } from './aws/ecr'
 import { ecsClient } from './aws/ecs'
+import { ELB, type ElbClient, elbClient } from './aws/elb'
 import { CODEBUILD, ECR, ECS, LOGS, SSM } from './aws/json'
 import { logsClient } from './aws/logs'
 import { CLOUDFORMATION } from './aws/query'
@@ -131,6 +132,8 @@ export type AwsControlClients = Omit<AwsDeployClients, 'credentials' | 'ssm'> & 
 	readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack' | 'getTemplate' | 'createStack' | 'updateStack'>
 	/** A namespace proxy's certificates (`proxy-certificates.ts`). */
 	readonly acm: Pick<AcmClient, 'requestCertificate' | 'describeCertificate'>
+	/** The installation listener's rules, which a namespace host's rule priority is chosen against (`host-rules.ts`). */
+	readonly elb: Pick<ElbClient, 'describeRules'>
 }
 
 export interface AwsControlProviderOptions {
@@ -335,6 +338,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			ssm: ssmClient(at(SSM)),
 			cloudFormation: cloudFormationClient(at(CLOUDFORMATION)),
 			acm: acmClient(at(ACM)),
+			elb: elbClient(at(ELB)),
 			s3PartWriter: (address) => s3PartWriter(clientOptions(s3BucketOrigin(target.sourcesBucket, target.region), target.region), address),
 		}
 	})
@@ -432,6 +436,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 				installation,
 				proxySource,
 				network,
+				balancer,
 				runtime: {
 					iam: proxyIam,
 					clients: clientsOf(installation),

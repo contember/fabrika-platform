@@ -33,16 +33,26 @@ import {
 	type ProviderNamespaceCapabilities,
 	ProviderNamespaceError,
 	type ProviderNamespaceFact,
+	type ProviderNamespaceMember,
 	type ProviderNamespaceMutationInput,
 	type ProviderNamespacePresentation,
 	type ProviderRegistration,
 } from '@fabrika/provider-contract'
+import { CERTIFICATE_HOST } from './aws/acm'
 import type { CloudFormationClient } from './aws/cloudformation'
 import { ecrLifecyclePolicy } from './aws/ecr'
 import { type EcsClient, SERVICE_CONNECT_ARN, TARGET_GROUP_ARN } from './aws/ecs'
+import { LISTENER_ARN } from './aws/elb'
 import type { SsmClient } from './aws/ssm'
 import { AwsError } from './aws/transport'
-import { AWS_MAX_PROXY_CERTIFICATES, AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
+import {
+	AWS_MAX_PROXY_CERTIFICATES,
+	AWS_PROVIDER,
+	type AwsAppTarget,
+	type AwsNamespaceTarget,
+	awsNamespaceTargetCodec,
+	type AwsProxyHostsFailure,
+} from './codecs'
 import { AWS_APPLICATION_PORT } from './ecs-task'
 import { allow, AWS_LOG_RETENTION_DAYS, awsAppsPermissionsBoundary, type AwsInstallationNetwork, policy, trust } from './environment-stack'
 import { AWS_PROXY_BUILD_IMAGE, AWS_PROXY_BUILDSPEC } from './proxy-build'
@@ -81,6 +91,12 @@ export const AWS_CHEAP_PRESET = 'cheap'
 export interface AwsNamespaceResources {
 	/** The stack, `fabrika-ns-<length of id>-<id>-<env>`: the length keeps a hyphen in the id apart from the joining one. */
 	readonly stackName: string
+	/**
+	 * The hosts stack, `fabrika-nh-<length of id>-<id>-<env>` (`proxy-hosts.ts`): the namespace's rules on the
+	 * installation's listener. A prefix of its own, so no namespace's stack name (an environment may end in `-hosts`) is
+	 * ever another namespace's hosts stack.
+	 */
+	readonly hostsStackName: string
 	/** The Service Connect (Cloud Map) namespace, named as the stack. */
 	readonly serviceConnectNamespace: string
 	/** The proxy's image repository, `fabrika/namespaces/<id>/<env>/proxy`. */
@@ -128,6 +144,8 @@ export function awsNamespaceResources(id: string, env: string): AwsNamespaceReso
 	}
 	return {
 		stackName,
+		// The same length as the namespace's stack name, so the bound above holds for both.
+		hostsStackName: `fabrika-nh-${id.length}-${id}-${env}`,
 		serviceConnectNamespace: stackName,
 		repository: `fabrika/namespaces/${id}/${env}/proxy`,
 		parameterPath: `/fabrika/namespaces/${id}/${env}`,
@@ -356,6 +374,13 @@ export function namespaceOutputsOf(name: string, outputs: Readonly<Record<string
 export interface AwsInstallationBalancer {
 	readonly securityGroupId: string
 	readonly vpcCidr: string
+	/** The balancer's HTTPS listener, which serves every namespace's hosts with their certificates (`host-rules.ts`). */
+	readonly listenerArn: string
+	/**
+	 * The installation's own hosts (IAM's, Control's, the console's, the platform proxy's): no namespace's host rule may
+	 * take one, whatever the listener's rules say. Lower-case.
+	 */
+	readonly installationHosts: readonly string[]
 }
 
 /** An IPv4 CIDR block of a VPC's size (a /16 to a /28). */
@@ -377,6 +402,11 @@ export function checkInstallationBalancer(balancer: AwsInstallationBalancer): Aw
 	if (!VPC_CIDR.test(balancer.vpcCidr) || !isNetworkAddress(balancer.vpcCidr)) {
 		throw new Error("aws: the installation's VPC range is not an IPv4 block of a VPC's size named by its network address")
 	}
+	if (!LISTENER_ARN.test(balancer.listenerArn)) throw new Error("aws: the installation's balancer names a listener of another form")
+	const hosts = balancer.installationHosts
+	if (hosts.length === 0 || !hosts.every((host) => CERTIFICATE_HOST.test(host)) || new Set(hosts).size !== hosts.length) {
+		throw new Error("aws: the installation's own hosts are none, one twice, or one that is not a lower-case host name")
+	}
 	return balancer
 }
 
@@ -394,6 +424,11 @@ export function awsProxyCertificatePresentation(target: AwsNamespaceTarget): {
 		if (certificate.departed === true) {
 			instructions.push(
 				`The host ${certificate.host} is no member's any more: delete its certificate ${certificate.arn} in Certificate Manager once it is off the listener, and its DNS record; the next reconcile forgets it.`,
+			)
+		} else if (certificate.listenerConflict === true) {
+			// First come keeps a host: a later claim never takes it over, and only the operator knows whose it is.
+			instructions.push(
+				`The host ${certificate.host} is not served by this namespace: another rule of the installation's listener already routes it (another namespace's, or the installation's own), or it is one of the installation's own hosts. Whoever routed it first keeps it. If it belongs here, remove the domain from the environment that holds it (or the listener's rule that names it), then reconcile this namespace; otherwise remove it from this namespace's member.`,
 			)
 		} else if (certificate.status === 'PENDING_VALIDATION') {
 			instructions.push(
@@ -422,6 +457,27 @@ export function awsProxyCertificatePresentation(target: AwsNamespaceTarget): {
 		]),
 		instructions,
 	}
+}
+
+/** What the presentation says of a hosts stack the last pass could not apply. */
+function hostsFailureInstruction(failure: AwsProxyHostsFailure, hostsStackName: string): string {
+	switch (failure) {
+		case 'pending':
+			return `The stack ${hostsStackName} (this namespace's rules on the installation's listener) was still being applied: reconcile the namespace to follow it.`
+		case 'failed':
+			return `The stack ${hostsStackName} (this namespace's rules on the installation's listener) could not be applied; its events in CloudFormation say why (a rule priority taken at the same moment, the listener's rule or certificate quota). Reconcile the namespace to try again. The rest of the namespace runs as ever.`
+		case 'defaultForwards':
+			return `The installation's listener forwards its default action to this namespace, so no host of it is served: the default action must be a fixed answer. Change it, then reconcile the namespace.`
+	}
+}
+
+/**
+ * The hosts the namespace's members are routed on: an approved member's domain. A member the manifest would refuse (no
+ * domain) has none here; the republish refuses it with the manifest.
+ */
+export function awsServedHosts(members: readonly ProviderNamespaceMember[]): readonly string[] {
+	const routable = members.filter((member) => member.access !== undefined && member.domain !== undefined && member.domain !== '')
+	return [...new Set(routable.flatMap((member) => awsNamespaceMemberHosts(member)))].sort()
 }
 
 /** The calls the namespace lifecycle makes. */
@@ -510,6 +566,7 @@ function targetOf(
 		...(stored?.proxyServiceUpdated === undefined ? {} : { proxyServiceUpdated: stored.proxyServiceUpdated }),
 		...(stored?.proxyServiceRolledOut === undefined ? {} : { proxyServiceRolledOut: stored.proxyServiceRolledOut }),
 		...(stored?.proxyCertificates === undefined ? {} : { proxyCertificates: stored.proxyCertificates }),
+		...(stored?.proxyHostsFailure === undefined ? {} : { proxyHostsFailure: stored.proxyHostsFailure }),
 	}
 	return awsNamespaceTargetEnvelope(target)
 }
@@ -546,6 +603,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 			facts: [
 				{ label: 'Region', value: installation.region },
 				{ label: 'Stack', value: resources.stackName, resource: true },
+				{ label: 'Hosts stack', value: resources.hostsStackName, resource: true },
 				{ label: 'Service Connect namespace', value: resources.serviceConnectNamespace, resource: true },
 				{ label: 'Proxy image repository', value: resources.repository, resource: true },
 				{ label: 'Proxy build project', value: resources.buildProject, resource: true },
@@ -555,12 +613,14 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				...certificates.facts,
 			],
 			instructions: [
-				"Control creates the stack and the proxy's service. Removing the namespace leaves both in place.",
-				// The service lives outside the stack and holds its security group, roles and log group: deleting the stack first
-				// removes the roles under a running service and then fails on the group its network interfaces hold.
-				`When no environment uses the namespace, delete in this order: the ECS service ${resources.service} in the cluster ${installation.cluster}; then the parameters under ${resources.parameterPath}/env and the task definition family ${resources.service}; then the stack ${resources.stackName}.`,
+				"Control creates the stacks and the proxy's service. Removing the namespace leaves them in place.",
+				// The hosts stack's rules forward to the namespace stack's target group, and the service lives outside the stack
+				// and holds its security group, roles and log group: deleting the stack first removes the roles under a running
+				// service and then fails on the group its network interfaces hold.
+				`When no environment uses the namespace, delete in this order: the stack ${resources.hostsStackName}; the ECS service ${resources.service} in the cluster ${installation.cluster}; then the parameters under ${resources.parameterPath}/env and the task definition family ${resources.service}; then the stack ${resources.stackName}.`,
 				"Deleting the stack deletes the proxy's images with their repository: they are rebuilt from the namespace's pinned source.",
 				...certificates.instructions,
+				...(target.proxyHostsFailure === undefined ? [] : [hostsFailureInstruction(target.proxyHostsFailure, resources.hostsStackName)]),
 			],
 		}
 	}
@@ -573,6 +633,8 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 			throw new ProviderNamespaceError(error instanceof Error ? error.message : 'aws: the namespace target is refused', 'awsTarget', false)
 		}
 		try {
+			// The namespace's own stack alone: its hosts' rules are a stack of their own (`proxy-hosts.ts`), which nothing
+			// here waits on.
 			await ensureStack({
 				cloudFormation: clients.cloudFormation,
 				stack: awsNamespaceStack(input.namespace, installation, network, balancer),
@@ -617,13 +679,16 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				|| submitted.proxyImageDigest !== undefined || submitted.proxyImageManifestSha256 !== undefined
 				|| submitted.proxyServiceTaskDefinitionArn !== undefined || submitted.proxyServiceFingerprint !== undefined
 				|| submitted.proxyServiceUpdated !== undefined || submitted.proxyServiceRolledOut !== undefined
-				|| submitted.proxyCertificates !== undefined
+				|| submitted.proxyCertificates !== undefined || submitted.proxyHostsFailure !== undefined
 			) {
 				throw new Error("aws: a namespace's proxy build, image and certificates are recorded by its provider, never submitted")
 			}
 			return { ...namespace, target: targetOf(namespace, installation, proxySource) }
 		},
-		namespaceResourceClaims: (namespace) => [`${STACK_CLAIM}${awsNamespaceResources(namespace.id, namespace.env).stackName}`],
+		namespaceResourceClaims: (namespace) => {
+			const resources = awsNamespaceResources(namespace.id, namespace.env)
+			return [`${STACK_CLAIM}${resources.stackName}`, `${STACK_CLAIM}${resources.hostsStackName}`]
+		},
 		// The hosts the proxy will route a member on, by its manifest's rule, so Control refuses two members on one host now.
 		memberHosts: awsNamespaceMemberHosts,
 		registrationResourceClaims: (registration: ProviderRegistration) => {

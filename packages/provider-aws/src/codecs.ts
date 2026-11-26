@@ -118,7 +118,16 @@ export interface AwsNamespaceTarget {
 	 * certificate is off the listener and deleted.
 	 */
 	readonly proxyCertificates?: readonly AwsProxyCertificate[]
+	/**
+	 * Why the last pass could not bring the namespace's hosts stack (its rules on the installation's listener) to its
+	 * template (`ensureAwsProxyHosts`): `pending` (still moving when the wait ended), `failed` (refused or rolled back),
+	 * `defaultForwards` (the listener's default action forwards to this namespace, so no host is served). Cleared once a
+	 * pass applies it. The rest of the namespace never waits on it.
+	 */
+	readonly proxyHostsFailure?: AwsProxyHostsFailure
 }
+
+export type AwsProxyHostsFailure = 'pending' | 'failed' | 'defaultForwards'
 
 /** One host's certificate as a namespace records it: what the operator is shown, never a secret. */
 export interface AwsProxyCertificate {
@@ -130,6 +139,13 @@ export interface AwsProxyCertificate {
 	readonly validationValue?: string
 	/** The host is no member's any more: its certificate is the operator's to delete, and the entry goes once it is gone. */
 	readonly departed?: true
+	/** The priority of the host's rule on the installation's listener (`host-rules.ts`), as digits; only while it is served. */
+	readonly priority?: string
+	/**
+	 * Another rule of the listener matches the host (another namespace's, the installation's, an operator's), or it is one
+	 * of the installation's own hosts: it is not served, and the operator is told who holds it.
+	 */
+	readonly listenerConflict?: true
 }
 
 /** The most hosts a namespace holds certificates for: a balancer's listener takes 25 besides its default one. */
@@ -190,6 +206,7 @@ const namespaceTargetSchema = z.object({
 	proxyServiceFingerprint: z.string().regex(SHA256_HEX).optional(),
 	proxyServiceUpdated: z.literal(true).optional(),
 	proxyServiceRolledOut: z.literal(true).optional(),
+	proxyHostsFailure: z.enum(['pending', 'failed', 'defaultForwards']).optional(),
 	proxyCertificates: z
 		.array(
 			z.object({
@@ -199,6 +216,8 @@ const namespaceTargetSchema = z.object({
 				validationName: z.string().regex(VALIDATION_RECORD).optional(),
 				validationValue: z.string().regex(VALIDATION_RECORD).optional(),
 				departed: z.literal(true).optional(),
+				priority: z.string().regex(/^[1-9]\d{0,4}$/).refine((priority) => Number(priority) <= 50_000).optional(),
+				listenerConflict: z.literal(true).optional(),
 			}).strict().refine((certificate) => (certificate.validationName === undefined) === (certificate.validationValue === undefined), {
 				message: "a certificate's validation record is recorded whole",
 				path: ['validationValue'],
@@ -208,6 +227,10 @@ const namespaceTargetSchema = z.object({
 		.refine((certificates) => new Set(certificates.map((certificate) => certificate.host)).size === certificates.length, {
 			message: 'one certificate per host',
 		})
+		.refine((certificates) => {
+			const priorities = certificates.flatMap((certificate) => (certificate.priority === undefined ? [] : [certificate.priority]))
+			return new Set(priorities).size === priorities.length
+		}, { message: 'one host per rule priority' })
 		.optional(),
 }).strict().refine((target) => target.proxyServiceRolledOut === undefined || target.proxyServiceUpdated === true, {
 	message: "the proxy service's rollout is recorded after its update",
