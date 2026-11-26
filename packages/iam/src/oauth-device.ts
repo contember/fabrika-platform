@@ -275,6 +275,7 @@ export async function redeemDeviceCode(
 		expires_at: attempt.grant_expires_at,
 		revoked_at: null,
 		agent_label: attempt.agent_label,
+		passkey_confirmed_at: attempt.passkey_confirmed_at,
 	}
 	// The grant's whole authority (session, principal, configuration) is checked before anything is written.
 	if (await grantAuthority(services, grant, now, input.resource) === null) return { ok: false, error: 'invalid_grant' }
@@ -287,7 +288,13 @@ export async function redeemDeviceCode(
 		action: 'iam.oauth.grant.create',
 		resourceType: 'oauth_grant',
 		resourceId: grant.id,
-		metadata: { ...grantRecord(grant), resources: request.resources, scopes: request.scopes, flow: 'device' },
+		metadata: {
+			...grantRecord(grant),
+			resources: request.resources,
+			scopes: request.scopes,
+			flow: 'device',
+			...(grant.passkey_confirmed_at === null ? {} : { passkeyConfirmedAt: grant.passkey_confirmed_at }),
+		},
 	}, now)
 	if (claimed === null) return { ok: false, error: 'invalid_grant' }
 	const access = await mintForGrant(services, env, grant, input.resource, now)

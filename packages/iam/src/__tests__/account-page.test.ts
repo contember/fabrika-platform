@@ -51,7 +51,7 @@ async function grant(
 	const now = unixNow()
 	const id = uuidv7()
 	await repositories.oauth.createGrant(
-		{ id, resources: null, created_at: now, expires_at: now + 3600, revoked_at: null, agent_label: null, ...values },
+		{ id, resources: null, created_at: now, expires_at: now + 3600, revoked_at: null, agent_label: null, passkey_confirmed_at: null, ...values },
 		{ token_hash: await hashToken(randomToken(32)), redirect_uri: 'urn:device', challenge: '', expires_at: now + 60 },
 	)
 	// A new grant is always live; a revoked one is revoked after it was written.

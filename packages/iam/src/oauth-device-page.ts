@@ -11,12 +11,19 @@ import {
 	type PermissionEntry,
 } from '@fabrika/auth-core'
 import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
-import { type AgentWriteGate, isOAuthDeviceGrantLifetime, OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS, type OAuthResourceDto } from '@fabrika/iam-contract'
-import { agentWriteGate, applicationResource, approvableAgentScopes, storedAgentScope } from './agent-resource'
+import {
+	type AgentWriteGate,
+	IAM_BINDING_PREFIX,
+	isOAuthDeviceGrantLifetime,
+	OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS,
+	type OAuthResourceDto,
+} from '@fabrika/iam-contract'
+import { agentModeTakesPasskey, agentWriteGate, applicationResource, approvableAgentScopes, storedAgentScope } from './agent-resource'
 import { parsePresentation } from './app-presentation'
 import { sessionEndsAt } from './auth'
 import { ACCOUNT_PATH } from './auth/account'
 import { readForm, redirectHeaders, sameOrigin } from './auth/http'
+import { ceremonyContext, ceremonyPage, credentialField } from './auth/passkey-pages'
 import { currentSession } from './auth/sessions'
 import { type PrincipalRow, principalStatus } from './db'
 import { escapeHtml } from './html'
@@ -24,11 +31,13 @@ import { installationBrand } from './installation-brand'
 import { scopeCeiling, servesClient } from './oauth'
 import type { OAuthConfig } from './oauth-config'
 import { attemptRequest, enterUserCode, formatUserCode, normalizeUserCode, OAUTH_DEVICE_PATH, userCodeHash } from './oauth-device'
+import { assertionSchema, issueAssertionChallenge, relyingParty, verifyPasskeyAssertion } from './passkeys'
 import { htmlPage } from './password-pages'
 import type { OAuthDeviceAuthorizationRow } from './repositories/oauth'
 import type { SignedInSessionRow } from './repositories/sessions'
 import { unixNow } from './repositories/sql'
 import { resolveAuthorityAt } from './resolve'
+import { hashToken } from './secret'
 import type { Services } from './services'
 import { parseStoredValueList } from './stored-permissions'
 
@@ -77,15 +86,35 @@ export async function handleDevicePage(request: Request, services: Services, con
 	const lifetime = Number(form?.get('lifetime'))
 	if (decision !== 'approve' || !isOAuthDeviceGrantLifetime(lifetime)) return page(services, 'Not allowed', '<p>The decision is missing.</p>', 400)
 	// An agent's grant is approved at the scope the page offered, never wider than the request (ADR-0090 §2).
-	const scopes = entry.attempt.client_id === AGENT_CLIENT_ID
-		? approvedAgentScopes(entry.attempt, form?.get('scope') ?? null, await agentWriteGate(services, entry.attempt.app))
-		: undefined
-	if (scopes === null) return page(services, 'Not allowed', '<p>That scope cannot be approved for this request.</p>', 400)
+	let scopes: string | undefined
+	let passkeyConfirmedAt: number | undefined
+	if (entry.attempt.client_id === AGENT_CLIENT_ID) {
+		const gate = await agentWriteGate(services, entry.attempt.app)
+		const chosen = approvedAgentScope(entry.attempt, form?.get('scope') ?? null, gate, await holdsPasskey(services, signedIn.principal.id))
+		if (chosen === null) return page(services, 'Not allowed', '<p>That scope cannot be approved for this request.</p>', 400)
+		scopes = JSON.stringify([agentScopeToken(chosen)])
+		if (agentModeTakesPasskey(chosen.mode, gate)) {
+			const confirmed = await confirmWithPasskey(services, signedIn.principal.id, form, {
+				userCodeHash: hash,
+				userCode: entry.userCode,
+				scope: chosen,
+				lifetime,
+			})
+			if (confirmed instanceof Response) return confirmed
+			passkeyConfirmedAt = confirmed
+		}
+	}
 	// The grant stays bound to this IAM session and ends with it, an OIDC login's cap included.
 	const grantExpiresAt = Math.min(now + lifetime, sessionEndsAt(signedIn.session, services.config))
 	const approved = await services.repositories.oauth.approveDeviceAuthorization(
 		hash,
-		{ principalId: signedIn.principal.id, sessionId: signedIn.session.id, grantExpiresAt, ...(scopes === undefined ? {} : { scopes }) },
+		{
+			principalId: signedIn.principal.id,
+			sessionId: signedIn.session.id,
+			grantExpiresAt,
+			...(scopes === undefined ? {} : { scopes }),
+			...(passkeyConfirmedAt === undefined ? {} : { passkeyConfirmedAt }),
+		},
 		now,
 	)
 	if (!approved) return page(services, 'Expired', '<p>This request was decided already, or it has expired.</p>', 409)
@@ -179,19 +208,87 @@ function decisionFields(): string {
 		<button name="decision" value="deny">Deny</button></div>`
 }
 
-/** The stored scope tokens an agent's approval writes, or null when `offered` is not a scope the request may be approved at. */
-function approvedAgentScopes(attempt: OAuthDeviceAuthorizationRow, offered: string | null, gate: AgentWriteGate): string | null {
+/** The scope an agent's approval writes, or null when `offered` is not a scope the request may be approved at. */
+function approvedAgentScope(
+	attempt: OAuthDeviceAuthorizationRow,
+	offered: string | null,
+	gate: AgentWriteGate,
+	holdsPasskey: boolean,
+): AgentScope | null {
 	const requested = storedAgentScope(attemptRequest(attempt)?.scopes ?? [])
 	const chosen = offered === null ? null : parseAgentScope(offered)
 	if (requested === null || chosen === null) return null
-	const approvable = approvableAgentScopes(requested, gate).some((scope) => agentScopeToken(scope) === agentScopeToken(chosen))
-	return approvable ? JSON.stringify([agentScopeToken(chosen)]) : null
+	const approvable = approvableAgentScopes(requested, gate, holdsPasskey).some((scope) => agentScopeToken(scope) === agentScopeToken(chosen))
+	return approvable ? chosen : null
 }
 
-/** Why the page offers `read` to an agent that asked to write, by the environment's `agent-write` gate. */
+async function holdsPasskey(services: Services, principalId: string): Promise<boolean> {
+	return (await services.repositories.passkeys.list(principalId)).length > 0
+}
+
+/**
+ * The binding of the passkey check that approving an agent's `write` grant takes: this attempt, the scope and the
+ * lifetime the person chose, so an answer approves exactly that and nothing else.
+ */
+async function devicePasskeyBinding(userCodeHash: string, scope: AgentScope, lifetime: number): Promise<string> {
+	return `${IAM_BINDING_PREFIX}device:${await hashToken(JSON.stringify([userCodeHash, agentScopeToken(scope), lifetime]))}`
+}
+
+/**
+ * The passkey check of an approval that takes one (ADR-0090 §5). Without an answer in the form, a page that asks the
+ * passkey and posts the same decision back with it; with one, the time the passkey answered, or a refusal page. The
+ * challenge is spent by its first answer, right or wrong.
+ */
+async function confirmWithPasskey(
+	services: Services,
+	principalId: string,
+	form: URLSearchParams | null,
+	decision: { userCodeHash: string; userCode: string; scope: AgentScope; lifetime: number },
+): Promise<number | Response> {
+	const rp = relyingParty(services.config)
+	const binding = await devicePasskeyBinding(decision.userCodeHash, decision.scope, decision.lifetime)
+	const challengeId = form?.get('challengeId') ?? null
+	if (challengeId === null) {
+		const issued = await issueAssertionChallenge(services, rp, principalId, binding)
+		if (issued === 'no_passkey') return page(services, 'No passkey', NO_PASSKEY_TEXT, 409)
+		if (issued === 'too_many') return page(services, 'Too many attempts', '<p>Too many open passkey checks. Wait a few minutes and try again.</p>', 429)
+		return ceremonyPage(ceremonyContext(services, DEFAULT_LOCALE), {
+			title: 'Confirm with a passkey',
+			text: 'Allowing an agent to change things in this environment takes a passkey. Confirm with one of yours to allow it.',
+			ceremony: 'get',
+			options: issued.options,
+			action: OAUTH_DEVICE_PATH,
+			fields: {
+				user_code: formatUserCode(decision.userCode),
+				decision: 'approve',
+				scope: agentScopeToken(decision.scope),
+				lifetime: String(decision.lifetime),
+				challengeId: issued.challengeId,
+			},
+			back: false,
+		})
+	}
+	const assertion = form === null ? null : assertionSchema.safeParse({ challengeId, credential: credentialField(form) })
+	const verified = assertion === null || !assertion.success ? null : await verifyPasskeyAssertion(services, rp, principalId, binding, assertion.data)
+	if (verified === null || !verified.ok) {
+		return page(
+			services,
+			'Not confirmed',
+			'<p>The passkey was not accepted, so the agent was not given access. Open the link from your terminal to try again.</p>',
+			403,
+		)
+	}
+	return verified.value.at
+}
+
+const NO_PASSKEY_TEXT =
+	`<p>This environment lets an agent change things only after a passkey confirmation, and you have no passkey. Add one on your <a href="${ACCOUNT_PATH}#passkeys">account page</a>, then start again from your terminal.</p>`
+
+/** Why the page offers `read` to an agent that asked to write, by the environment's `agent-write` gate, as HTML. */
 const DOWNGRADE_REASONS: Readonly<Record<AgentWriteGate, string>> = {
 	open: '',
-	passkey: 'This environment lets an agent write only after a passkey confirmation, which this page cannot ask yet.',
+	passkey:
+		`This environment lets an agent write only after a passkey confirmation, and you have no passkey. Add one on your <a href="${ACCOUNT_PATH}#passkeys">account page</a>, then start again from your terminal.`,
 	refuse: 'This environment does not let agents write.',
 }
 
@@ -216,7 +313,7 @@ async function agentConsentPage(
 	const resource = uri === undefined ? null : await applicationResource(services, uri)
 	const requested = storedAgentScope(request?.scopes ?? [])
 	const gate = await agentWriteGate(services, attempt.app)
-	const [offered] = requested === null ? [] : approvableAgentScopes(requested, gate)
+	const [offered] = requested === null ? [] : approvableAgentScopes(requested, gate, await holdsPasskey(services, principal.id))
 	if (resource === null || resource.app !== attempt.app || requested === null || offered === undefined) {
 		return page(services, 'Not available', '<p>This request asks for something the server no longer offers.</p>', 409)
 	}
@@ -231,6 +328,9 @@ async function agentConsentPage(
 	const downgrade = offered.mode === requested.mode
 		? ''
 		: `<p role="alert">The agent asked to <strong>write</strong>. ${DOWNGRADE_REASONS[gate]} You can allow it to read.</p>`
+	const passkeyNote = agentModeTakesPasskey(offered.mode, gate)
+		? '<p>This environment asks for a passkey before an agent may change things: Allow asks you to confirm with one of your passkeys.</p>'
+		: ''
 	return page(
 		services,
 		'Authorize agent',
@@ -245,6 +345,7 @@ async function agentConsentPage(
 		<p>Client: <code>${escapeHtml(attempt.client_id)}</code></p>
 		${downgrade}
 		<p>It ${AGENT_MODE_WORDS[offered.mode]}.</p>
+		${passkeyNote}
 		${await narrowingNotice(services, attempt.app, offered)}
 		<p>The actions it would get now, and only while you hold them yourself:</p>
 		${permissionList(permissions)}

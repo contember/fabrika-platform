@@ -27,6 +27,7 @@ import { unixNow } from '../repositories/sql'
 import { hashToken } from '../secret'
 import { adminTokenFor, createHarness, makeServicesFor, TEST_SIGNING_KEYS } from './helpers/harness'
 import { migrationFile, migrationsBefore } from './helpers/migrations'
+import { type Ceremony, ceremonyOf } from './helpers/passkey-pages'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 import { type CeremonyOverrides, TestAuthenticator } from './helpers/webauthn'
 
@@ -175,29 +176,6 @@ const isCreation = (value: unknown): value is PasskeyCreationOptions => typeof p
 const isRequest = (value: unknown): value is PasskeyRequestOptions => typeof prop(value, 'rpId') === 'string'
 
 const NOT_COMPLETED: [number, unknown] = [409, 'the passkey check was not completed, or it expired or was used already; confirm it again']
-
-function unescapeHtml(value: string): string {
-	return value.replaceAll('&quot;', '"').replaceAll('&#39;', "'").replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')
-}
-
-/** A ceremony page: which ceremony, its options and the hidden fields its form posts. */
-interface Ceremony {
-	readonly ceremony: string
-	readonly options: unknown
-	readonly fields: Record<string, string>
-}
-
-async function ceremonyOf(response: Response): Promise<Ceremony> {
-	const html = await response.text()
-	const form = /<form id="webauthn"[^>]*data-ceremony="(get|create)" data-options="([^"]*)"/.exec(html)
-	if (response.status !== 200 || form === null) throw new Error(`expected a ceremony page, got ${response.status} ${html.slice(0, 400)}`)
-	const fields = Object.fromEntries(
-		[...html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)">/g)].map((
-			match,
-		) => [unescapeHtml(match[1] ?? ''), unescapeHtml(match[2] ?? '')]),
-	)
-	return { ceremony: form[1] ?? '', options: JSON.parse(unescapeHtml(form[2] ?? '')), fields }
-}
 
 function creation(page: Ceremony): PasskeyCreationOptions {
 	expect(page.ceremony).toBe('create')

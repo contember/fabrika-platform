@@ -101,6 +101,7 @@ for (const engine of engines) {
 				expires_at: now + 3600,
 				revoked_at: null,
 				agent_label: null,
+				passkey_confirmed_at: null,
 			}
 			const audit = {
 				requestId: 'request-device',
