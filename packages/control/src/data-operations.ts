@@ -1418,6 +1418,7 @@ class OperationDriver {
 	/** The application migration files the operation's run bundles, from the snapshot read at its pinned commit. */
 	private async runMigrations(row: DataOperationRow): Promise<readonly string[]> {
 		const run = await this.migrationRun(row)
+		// A run stores its snapshot before its deploy starts, and this step follows a succeeded deploy.
 		if (run.snapshot_json === null) throw new Error("a migration's run holds no snapshot")
 		const snapshot = parseSnapshot(await this.deps.repositories.runs.document(run.snapshot_json))
 		this.lease.assertHeld()
@@ -1792,16 +1793,16 @@ function reopenedRestoreCode(backup: BackupRow, restore: RestoreRow): string {
  * applied, the clone applied too, under the same checksum. The clone holds the original's data as it was frozen, and
  * the original at an earlier time can only miss migrations, never hold another.
  */
-/** Whether the object's ledger holds each of the application migration files `names`. */
-function holdsEvery(ledger: readonly OpsMigration[], names: readonly string[]): boolean {
-	const applied = new Set(ledger.filter((row) => row.bundle === APPLICATION_BUNDLE).map((row) => row.name))
-	return names.every((name) => applied.has(name))
-}
-
 function ledgerWithin(original: readonly OpsMigration[], clone: readonly OpsMigration[]): boolean {
 	const key = (row: OpsMigration): string => JSON.stringify([row.bundle, row.name, row.checksum])
 	const applied = new Set(clone.map(key))
 	return original.every((row) => applied.has(key(row)))
+}
+
+/** Whether the object's ledger holds each of the application migration files `names`. */
+function holdsEvery(ledger: readonly OpsMigration[], names: readonly string[]): boolean {
+	const applied = new Set(ledger.filter((row) => row.bundle === APPLICATION_BUNDLE).map((row) => row.name))
+	return names.every((name) => applied.has(name))
 }
 
 /** The checkpoint that fails a backup still running with `code`; none once it ended. */
