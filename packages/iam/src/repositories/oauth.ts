@@ -123,6 +123,29 @@ export class OAuthRepository {
 		return results
 	}
 
+	/**
+	 * A principal's grants still in force at `now`, newest first: not revoked, not expired, and given under an IAM login
+	 * not revoked. A grant ends no later than its login (`grantExpiresAt`), so the login's own expiry needs no check.
+	 */
+	async listLiveForPrincipal(principalId: string, now: number, limit: number): Promise<OAuthGrantRow[]> {
+		const { results } = await this.db.prepare(`SELECT g.* FROM oauth_grants g JOIN sessions s ON s.id = g.session_id
+			WHERE g.principal_id = ? AND g.revoked_at IS NULL AND g.expires_at > ? AND s.revoked_at IS NULL
+			ORDER BY g.id DESC LIMIT ?`).bind(principalId, now, limit).all<OAuthGrantRow>()
+		return results
+	}
+
+	/**
+	 * Revoke a grant of `principalId` only; the person's own revocation names a grant id the browser sent. True when this
+	 * call revoked it, which is exactly when `audit` is written.
+	 */
+	async revokeOwnGrant(id: string, principalId: string, now: number, audit: AuditEventInput): Promise<boolean> {
+		const changed = await this.writer.run([{
+			sql: 'UPDATE oauth_grants SET revoked_at = ? WHERE id = ? AND principal_id = ? AND revoked_at IS NULL RETURNING id',
+			binds: [now, id, principalId],
+		}], audit)
+		return changed.length > 0
+	}
+
 	/** The revocation of every live grant of a principal, as a change an audited deprovisioning groups with others. */
 	revokeGrantsForPrincipalChange(principalId: string, now: number): SqlChange {
 		return { sql: 'UPDATE oauth_grants SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL RETURNING id', binds: [now, principalId] }
