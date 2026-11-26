@@ -43,7 +43,14 @@ it to fact without a probe.
   itself. Probed on local workerd, for an async and a `transactionSync` inner transaction. Lopata 0.30 and
   `bunSqliteStorage` nest the same way.
 - **A long transaction resets the object.** Probed live: a 10 s transaction commits; a 40 s one fails with
-  "blockConcurrencyWhile() waited for too long" and the object is reset.
+  "blockConcurrencyWhile() waited for too long" and the object is reset. Probed live (2026-11-26): a `transactionSync`
+  of 33 s and of 47 s inside `blockConcurrencyWhile` is not cut short. It commits, then the object resets ("Durable
+  Object storage operation exceeded timeout which caused object to be reset"), and the next instance reads the
+  committed rows. A 19 s one commits and answers.
+- **A migration's cost.** Probed live (2026-11-26) on 1,000,000 rows of about 70 bytes, each in one `transactionSync`:
+  adding a column and filling it takes about 1.2 s, an `UPDATE` of every row 1.0 s, a table rebuild 2.5 s; at 100,000
+  rows each takes under 0.25 s. The isolate's clock does not advance in synchronous code, so the times are the
+  client's, less the round trip.
 - **Throughput.** Probed live: 1,000 concurrent small transactions (a read, two writes, a read) finish in 945 ms on
   one object.
 - **Latency from a Worker to its object.** Probed live from a Worker in Vienna to an object in Frankfurt: 15 ms p50;
@@ -62,11 +69,28 @@ it to fact without a probe.
   provider's `new_sqlite_classes` step (tag `v0001`) to an application Worker deployed without a Durable Object leaves
   it with migration tag `v0001` and a SQLite-backed namespace. _Not verified live:_ a Worker whose own config already
   used that tag (backlog 216 item 3).
+- **A code update reaches an active object deferred.** Documented: the default `code_update_strategy` is `deferred`
+  with a `max_delay` of 300 s, and an active object keeps running and accepting requests on its old code until it
+  hibernates or the delay passes, then resets onto the new code
+  ([code updates](https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/)). An
+  event still running on a replaced instance gets an exception when it reads or writes storage, so two versions never
+  write one object ([known issues](https://developers.cloudflare.com/durable-objects/platform/known-issues/)). Probed
+  live (2026-11-26): an object asked about once a second answered from its old instance on the old code until 298 s
+  after the deploy finished, then from a new instance on the new code, with no failed request between; an object idle
+  for 40 s answered on the new code 30 s after the deploy; a request in flight for 200 s across the deploy finished on
+  the old code, and its write succeeded. Not probed: an event still running when its instance is replaced.
+- **Point-in-time recovery covers SQL and KV.** Documented: it restores both the SQLite data and the KV data of the
+  object, to any point in the last 30 days; `getCurrentBookmark()` names the current point. Probed live (2026-11-26): a
+  bookmark taken before `deleteAll()` restores the tables and the KV value it deleted.
 - **Point-in-time recovery rewinds an object and resets it.** Probed live (2026-11-20), through a side restore
   (ADR-0070 §9): `getBookmarkForTime` answers a bookmark for a time seven minutes back, `onNextSessionRestoreBookmark`
   then an abort restores the object at its next session, and a KV sentinel written after that time is gone. A bookmark
-  reads like `00000000-000000ca-00005129-<32 hex>`. Not probed: an abort before the undo bookmark persists, a lost undo
-  answer, a foreign bookmark, restore time at 10 MB and 1 GB (backlog 293).
+  reads like `00000000-000000ca-00005129-<32 hex>`. Probed live (2026-11-26), in place: an abort before `arm` answers
+  still restores, so only the object can tell; an object armed and not aborted keeps writing, and its next reset
+  restores and discards those writes; the undo bookmark restores the state the restore replaced; another object's
+  bookmark is refused ("Bookmark is not valid for this object."); an object of 1,000,000 rows (about 70 MB) answered
+  restored 1.2 s after the arm. Not probed: an abort before the undo bookmark persists, restore time at 1 GB (backlog
+  293).
 
 ## R2
 
