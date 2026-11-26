@@ -1,29 +1,26 @@
+import { Link } from '@buzola/router'
+import { appEnvironmentId } from '@fabrika/auth-core'
 import type { AppEnvDto } from '../../lib/api'
 import { AccessMapView } from '../AccessMap'
-import { Icon } from '../Icon'
-import { Chip } from '../Status'
 
-/** Each environment's published access read by role. Nothing until a run publishes, or from an older Control. */
-export function AccessMapSection({ envs }: { envs: readonly AppEnvDto[] }) {
-	const listed = envs.flatMap((env) => (env.accessMap !== undefined && env.accessMap.roles.length > 0 ? [{ env: env.env, map: env.accessMap }] : []))
-	if (listed.length === 0) return null
+/** One environment's published access read by role, and, when the caller administers its people, who holds each role. */
+export function AccessMapSection({ env, people }: { env: AppEnvDto; people: boolean }) {
+	const map = env.accessMap
+	// A Control released before the map sends none: nothing to say about roles then.
+	if (map === undefined) return null
 	return (
 		<section>
 			<div className="section-head">
-				<Icon name="shield" size={15} />
-				<h2>Access by role</h2>
+				<h2>Roles</h2>
+				<span className="spacer" />
+				{people && <Link to="people" params={{ app: appEnvironmentId(env.appId, env.env) }}>Who holds them</Link>}
 			</div>
-			<p className="hint">
-				What each role of the published contract may do: the actions it holds, the endpoints that require each one, and the tables and people they reach.
-			</p>
-			{listed.map(({ env, map }) => (
-				<div key={env}>
-					<h3>
-						<Chip>{env}</Chip>
-					</h3>
-					<AccessMapView map={map} />
-				</div>
-			))}
+			<p className="section-note">What each role may do on {env.env}: the actions it holds, and the endpoints and data each one reaches.</p>
+			{map.roles.length > 0
+				? <AccessMapView map={map} />
+				: env.publishedRunId === null
+				? <p className="muted">No roles are published on {env.env} yet.</p>
+				: <p className="muted">The release published on {env.env} declares no roles.</p>}
 		</section>
 	)
 }

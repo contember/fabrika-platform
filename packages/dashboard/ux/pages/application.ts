@@ -146,6 +146,26 @@ export const applicationSecrets: PageSpec = {
 	],
 }
 
+export const applicationAccess: PageSpec = {
+	id: 'application-access',
+	path: '/apps/notes/access/prod',
+	elements: [
+		...frame,
+		{
+			id: 'self-admin',
+			label: 'Your admin access',
+			kind: 'section',
+			usedBy: ['t08-grant-self'],
+			consequence: 2,
+			audience: 'role',
+			placement: 'secondary',
+		},
+		{ id: 'endpoints', label: 'Endpoints', kind: 'section', usedBy: ['t07-reach'], consequence: 2, audience: 'all', placement: 'primary' },
+		{ id: 'roles', label: 'Roles', kind: 'section', usedBy: ['t07-reach'], consequence: 1, audience: 'all', placement: 'secondary' },
+		{ id: 'off-road', label: 'Off the paved road', kind: 'section', usedBy: [], consequence: 1, audience: 'all', placement: 'secondary' },
+	],
+}
+
 export const applicationSettings: PageSpec = {
 	id: 'application-settings',
 	path: '/apps/notes/settings',

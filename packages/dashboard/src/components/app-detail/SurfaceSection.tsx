@@ -1,7 +1,6 @@
 import { Link } from '@buzola/router'
 import { SURFACE_REACHES, type SurfaceReach } from '@fabrika/control-contract'
 import type { AppEnvDto, SurfaceEndpointDto } from '../../lib/api'
-import { Icon } from '../Icon'
 import { Chip } from '../Status'
 import { Table } from '../Table'
 import { Words } from '../Words'
@@ -14,21 +13,19 @@ const REACH_LABELS: Record<SurfaceReach, string> = {
 	human: 'signed-in people',
 }
 
-/** What each environment's published access serves to the outside, most exposed first. Nothing until a run publishes. */
-export function SurfaceSection({ envs }: { envs: readonly AppEnvDto[] }) {
-	const listed = envs.filter((env) => env.surface.length > 0)
-	if (listed.length === 0) return null
+/** What one environment's published access serves to the outside, most exposed first. */
+export function SurfaceSection({ env }: { env: AppEnvDto }) {
 	return (
 		<section>
 			<div className="section-head">
-				<Icon name="globe" size={15} />
-				<h2>Surface</h2>
+				<h2>Endpoints</h2>
 			</div>
-			<p className="hint">
-				Every endpoint each environment's published access serves, listed under the most exposed caller that reaches it. The proxy refuses every other
-				path. A deploy that opens a new one waits for approval on a protected environment.
-			</p>
-			{listed.map((env) => <EnvironmentSurface key={env.env} env={env} />)}
+			<p className="section-note">What {env.env} serves, by the most exposed caller that reaches each endpoint. The proxy refuses every other path.</p>
+			{env.surface.length > 0
+				? <EnvironmentSurface env={env} />
+				: env.publishedRunId === null
+				? <p className="muted">Nothing is published on {env.env} yet.</p>
+				: <p className="muted">The release published on {env.env} declares no endpoints the console can list.</p>}
 		</section>
 	)
 }
@@ -42,11 +39,15 @@ export function surfaceSummary(surface: readonly SurfaceEndpointDto[]): string {
 		.join(' · ')
 }
 
+/** The reaches open to the public; their endpoints stay in view, the rest fold under a count. */
+const PUBLIC_REACHES: readonly SurfaceReach[] = ['anyone', 'link']
+
 function EnvironmentSurface({ env }: { env: AppEnvDto }) {
+	const open = env.surface.filter((endpoint) => PUBLIC_REACHES.includes(endpoint.reach))
+	const rest = env.surface.filter((endpoint) => !PUBLIC_REACHES.includes(endpoint.reach))
 	return (
-		<details className="surface">
-			<summary>
-				<Chip>{env.env}</Chip>
+		<>
+			<p className="surface-summary">
 				{env.domain !== null && <code>{env.domain}</code>}
 				<span>
 					{surfaceSummary(env.surface)}
@@ -59,21 +60,41 @@ function EnvironmentSurface({ env }: { env: AppEnvDto }) {
 						</>
 					)}
 				</span>
-			</summary>
-			<Table
-				colSpan={4}
-				head={
-					<tr>
-						<th>Reached by</th>
-						<th>Endpoint</th>
-						<th>Requires</th>
-						<th className="grow">Opens it further</th>
-					</tr>
-				}
-			>
-				{env.surface.map((endpoint) => <SurfaceRow key={endpoint.id} endpoint={endpoint} />)}
-			</Table>
-		</details>
+			</p>
+			{open.length > 0 && <SurfaceTable endpoints={open} />}
+			{rest.length > 0 && (
+				<details className="surface">
+					<summary>
+						{open.length === 0 ? 'Show' : 'Show the other'} {rest.length === 1 ? '1 endpoint' : `${rest.length} endpoints`}, for{' '}
+						{inWords(SURFACE_REACHES.filter((reach) => rest.some((endpoint) => endpoint.reach === reach)).map((reach) => REACH_LABELS[reach]))}
+					</summary>
+					<SurfaceTable endpoints={rest} />
+				</details>
+			)}
+		</>
+	)
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function inWords(items: readonly string[]): string {
+	return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
+}
+
+function SurfaceTable({ endpoints }: { endpoints: readonly SurfaceEndpointDto[] }) {
+	return (
+		<Table
+			colSpan={4}
+			head={
+				<tr>
+					<th>Reached by</th>
+					<th>Endpoint</th>
+					<th>Requires</th>
+					<th className="grow">Opens it further</th>
+				</tr>
+			}
+		>
+			{endpoints.map((endpoint) => <SurfaceRow key={endpoint.id} endpoint={endpoint} />)}
+		</Table>
 	)
 }
 

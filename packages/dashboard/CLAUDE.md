@@ -83,7 +83,8 @@ brief): its personas and tasks are approved by a person, and a screen is judged 
   (`app.manage` at the app, so `workspaceGate` opens `/apps/:id/*` to a manager of that one application), and each
   environment's state on its own after the page (`lib/environment-state.ts`): a lamp never blocks a row. The Data tab is
   `/apps/:id/data/:env`; a data reader without `app.manage` gets it without the frame, and the old
-  `/apps/:id/environments/:env/data` redirects to it.
+  `/apps/:id/environments/:env/data` redirects to it. The Access tab is `/apps/:id/access/:env`, and `/apps/:id/access`
+  opens prod, else the first environment.
 - **An application's page offers an IAM administrator "Grant me Admin" per environment** (`lib/self-admin.ts`,
   `components/app-detail/AdminAccessSection.tsx`): an ordinary `grants.create` of the built-in `admin` to the caller,
   no expiry by default (8 hours or 7 days selectable). It is offered where IAM knows the environment, it is not an

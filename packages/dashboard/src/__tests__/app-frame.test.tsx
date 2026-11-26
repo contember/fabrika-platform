@@ -4,11 +4,12 @@ import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/r
 import { BuzolaProvider } from '@buzola/router/react'
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AppFrame } from '../components/app/AppFrame'
+import { accessTabEnvironment, AppFrame } from '../components/app/AppFrame'
 import type { AppDto, AppEnvDto, ConsoleAccessDto } from '../lib/api'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import type { EnvironmentState } from '../lib/environment-state'
 import accessPage from '../routes/apps/access'
+import accessDefaultPage from '../routes/apps/access-default'
 import approvalsPage from '../routes/apps/approvals'
 import dataPage from '../routes/apps/data'
 import deploysPage from '../routes/apps/deploys'
@@ -24,6 +25,7 @@ const pageRegistry = {
 	'apps/data': dataPage.route,
 	'apps/secrets': secretsPage.route,
 	'apps/access': accessPage.route,
+	'apps/access-default': accessDefaultPage.route,
 	'apps/approvals': approvalsPage.route,
 	'apps/settings': settingsPage.route,
 }
@@ -121,5 +123,12 @@ describe("the application page's tabs", () => {
 		expect(nav).toContain('href="/apps/notes/data/test"')
 		expect(nav).toContain('needs attention')
 		expect(frame(null)).toContain('href="/apps/notes/data/prod"')
+	})
+
+	test('the Access tab opens on prod wherever it is listed, else on the first environment', () => {
+		expect(frame(null)).toContain('href="/apps/notes/access/prod"')
+		expect(accessTabEnvironment([{ env: 'test' }, { env: 'prod' }])).toBe('prod')
+		expect(accessTabEnvironment([{ env: 'dev' }, { env: 'stage' }])).toBe('dev')
+		expect(accessTabEnvironment([])).toBeNull()
 	})
 })

@@ -84,10 +84,10 @@ export async function iamAdministration(fetcher: RpcFetch = fetch): Promise<IamA
 	}
 }
 
-/** Whether IAM lists an application whose own people the caller administers; null when IAM does not answer. */
-export async function administersPeople(fetcher: RpcFetch = fetch): Promise<boolean | null> {
+/** The applications (`<app>@<env>`) whose own people the caller administers; null when IAM does not answer. */
+export async function administeredPeopleApps(fetcher: RpcFetch = fetch): Promise<string[] | null> {
 	try {
-		return (await quietIamClient(fetcher).appPeople.apps()).items.length > 0
+		return (await quietIamClient(fetcher).appPeople.apps()).items.map((app) => app.app)
 	} catch {
 		return null
 	}

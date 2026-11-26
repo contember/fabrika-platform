@@ -1,3 +1,5 @@
+import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
+import { BuzolaProvider } from '@buzola/router/react'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -72,7 +74,15 @@ const environment = (env: string, accessMap: AccessMapDto | undefined): AppEnvDt
 	createdAt: 0,
 })
 
-const section = (envs: readonly AppEnvDto[]): string => renderToStaticMarkup(createElement(AccessMapSection, { envs }))
+// The real route of the people page, so the link to who holds the roles resolves to the path the console serves.
+const section = (env: AppEnvDto, people = false): string =>
+	renderToStaticMarkup(createElement(BuzolaProvider, {
+		router: new Router({
+			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+			adapter: createMemoryNavigationAdapter(),
+			pageRegistry: { people: '/people' },
+		}),
+	}, createElement(AccessMapSection, { env, people })))
 
 describe('the access map in the console', () => {
 	test('a role says where it is granted, who assigns it and how many actions it holds', () => {
@@ -81,8 +91,8 @@ describe('the access map in the console', () => {
 	})
 
 	test('each action of a role lists its endpoints, the tables it reaches and the links it issues', () => {
-		const html = section([environment('prod', MAP)])
-		expect(html).toContain('Access by role')
+		const html = section(environment('prod', MAP))
+		expect(html).toContain('<h2>Roles</h2>')
 		expect(html).toContain('<code>notes.read</code>')
 		expect(html).toContain('Read notes')
 		expect(html).toContain('<code>POST /api/get0</code>')
@@ -97,19 +107,27 @@ describe('the access map in the console', () => {
 	})
 
 	test('an action with more than eight endpoints folds the rest under a count', () => {
-		const html = section([environment('prod', MAP)])
+		const html = section(environment('prod', MAP))
 		expect(html).toContain('2 more</summary>')
 		expect(html.indexOf('/api/get7')).toBeLessThan(html.indexOf('2 more'))
 		expect(html.indexOf('/api/get8')).toBeGreaterThan(html.indexOf('2 more'))
 	})
 
 	test('the endpoints any member reaches are listed once, beside the roles', () => {
-		const html = section([environment('prod', MAP)])
+		const html = section(environment('prod', MAP))
 		expect(html).toContain('every member')
 		expect(html).toContain('<code>POST /api/me</code>')
 	})
 
-	test('nothing shows before a publication, or from a Control that does not send the map', () => {
-		expect(section([environment('prod', { roles: [], actions: [], memberEndpoints: [] }), environment('dev', undefined)])).toBe('')
+	test('before a publication the environment has no roles yet; a published release without roles says so; an older Control shows nothing', () => {
+		const empty = { roles: [], actions: [], memberEndpoints: [] }
+		expect(section(environment('prod', empty))).toContain('No roles are published on prod yet.')
+		expect(section({ ...environment('prod', empty), publishedRunId: 'run-1' })).toContain('The release published on prod declares no roles.')
+		expect(section(environment('dev', undefined))).toBe('')
+	})
+
+	test('who holds the roles links to the people of that environment, for a caller who administers people', () => {
+		expect(section(environment('prod', MAP), true)).toContain('<a href="/people?app=notes%40prod">Who holds them</a>')
+		expect(section(environment('prod', MAP), false)).not.toContain('Who holds them')
 	})
 })
