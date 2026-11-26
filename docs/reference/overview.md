@@ -318,8 +318,8 @@ add the other permission categories (a role gains an action, a new role) or cons
 writes its IAM schema from it once the run succeeds, never from the artifact. A commit without `fabrika.contract.ts` fails its run before the
 provider is called: Fabrika deploys an application only with a contract. Approving needs `access.approve` (authorization) from a human user principal on a
 console request from Control's own origin (admission).
-The same person turns an environment's approvals off or on in the console, under "Access approvals" on the
-application's page (`apps.environments.protect`; no CLI verb). A team whose merges to the trigger branch are
+The same person turns an environment's approvals off or on in the console, under "What lets a change through" on the
+application's Approvals tab (`apps.environments.protect`; no CLI verb). A team whose merges to the trigger branch are
 already reviewed on GitHub may turn them off. Turning them off approves no parked run. The same section lists each
 protected environment's categories. With `grants` chosen, IAM holds a console grant, grant edit or revocation at that
 application environment as a grant request, which grants nothing until another IAM administrator of the application

@@ -248,9 +248,10 @@ than executed with the requester's authority (§3).
 
 ### 5. The console
 
-The application's "Access approvals" section shows each protected environment's mode per category and its settings,
-the defaults marked, with the strict and permissive presets and one save for a holder of `access.approve`. Loosening a
-category asks for a confirmation, as turning approvals off does. Everyone else reads them. The Approvals page lists the
+The application's Approvals tab, under "What lets a change through", reads each protected environment as its nearest
+preset and the rules and settings that differ from it, every rule one disclosure away. A holder of `access.approve` edits
+an environment's rules on their own page, a matrix of modes per category that starts from the strict or permissive preset,
+with one save. Loosening a category asks for a confirmation, as turning approvals off does. Everyone else reads them. The Approvals page lists the
 parked deploys, the open requests and the open grant requests the viewer may decide, and every item opens on its own
 link, mobile-first: who asked (the person and the client), exactly what, against what it replaces, with text the agent
 wrote escaped and marked as the agent's. The link is a read-only GET; only the page's POST decides. A grant form that

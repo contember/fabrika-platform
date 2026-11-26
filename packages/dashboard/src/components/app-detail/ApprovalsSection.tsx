@@ -1,18 +1,17 @@
 import { Link } from '@buzola/router'
 import {
+	APPROVAL_MODES,
+	type ApprovalMode,
 	type ApprovalPolicy,
 	approvalPolicySchema,
 	type ApprovalSettings,
-	type ApproverCount,
 	CONTROL_ACTIONS,
 	isApproverCategory,
 	isStepUpCategory,
 	modesOf,
-	POLICY_CATEGORIES,
 	type PolicyCategory,
 	REQUEST_TTL_HOURS,
 	type StepUpMode,
-	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { api, type AppEnvDto, type ApprovalDto } from '../../lib/api'
@@ -22,53 +21,55 @@ import type { DecisionFailure, PasskeyCheck, StartedDecision } from '../../lib/d
 import {
 	APPROVAL_CATEGORY_GROUPS,
 	categoryLabel,
-	isDefaultMode,
+	type CategoryOption,
+	decidingText,
 	loosened,
 	loosenedSettings,
 	modeLabel,
+	nearestPreset,
 	parkedRunsAt,
 	policyChange,
-	presetOf,
+	type PolicyChoice,
+	policyDifferences,
+	type PresetName,
 	PRESETS,
 	protectionChangeFailure,
 	protectionStepUp,
 	protectionToggle,
 	requestTtl,
-	sameSettings,
 	setEnvironmentProtection,
-	settingsSummary,
-	stepUpVerb,
-	waitingSummary,
 } from '../../lib/environment-protection'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { DecisionFailureText } from '../DecisionFailureNotice'
 import { Icon } from '../Icon'
 import { PasskeyCheckPrompt } from '../PasskeyCheckPrompt'
-import { Chip } from '../Status'
+import { Chip, Status } from '../Status'
 import { Table } from '../Table'
 
-/** Whether a deploy whose change needs closer review waits for a person with `access.approve` (ADR-0050 §4). */
+/**
+ * Whether a change waits for a person on each environment (ADR-0050 §4, ADR-0083): its preset and only the rules that
+ * differ from it, each with what the preset says. The full list is one disclosure; editing is its own page.
+ */
 export function ApprovalsSection({ appId, envs, onDone }: { appId: string; envs: readonly AppEnvDto[]; onDone: () => void }) {
 	if (envs.length === 0) return null
 	return (
 		<section>
 			<div className="section-head">
-				<Icon name="shield" size={15} />
-				<h2>Access approvals</h2>
+				<h2>What lets a change through</h2>
 			</div>
-			<p className="hint">
-				On an environment that requires approval, each kind of change has a mode: it goes through with no approval, waits for a plan or a person, waits
-				for a person with{' '}
-				<code>access.approve</code>, or, for what an agent or a key does, is refused. By default every change that needs closer review waits (raw SQL, a
-				table read across scopes, a public endpoint, people becoming visible, a migration that may change stored data), and what an agent does waits for a
-				person. The permissive preset lets everything through and keeps recording it. Only a person signed in to the console changes this, and the audit
-				log records each change.
+			<p className="section-note">
+				On an environment with approval on, a change that needs closer review, a new permission or what an agent or a key does waits for a person with
+				{' '}
+				<code>access.approve</code>, as its rules say. The audit log records each change of these rules.
 			</p>
 			<Table
+				colSpan={4}
 				head={
 					<tr>
-						<th>Env</th>
-						<th className="grow">Access changes</th>
+						<th>Environment</th>
+						<th>Approval</th>
+						<th className="grow">Rules</th>
+						<th />
 					</tr>
 				}
 			>
@@ -78,7 +79,7 @@ export function ApprovalsSection({ appId, envs, onDone }: { appId: string; envs:
 	)
 }
 
-/** Holders of `access.approve` at the environment get the switch; everyone else reads the setting. */
+/** Holders of `access.approve` at the environment turn approval on or off and open the editor; everyone else reads it. */
 export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
 	const access = useConsoleAccess()
 	const approver = mayDo(access, CONTROL_ACTIONS.ACCESS_APPROVE, { app: appId, env: env.env })
@@ -127,46 +128,27 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 
 	return (
 		<tr>
+			<th scope="row">{env.env}</th>
 			<td>
-				<Chip>{env.env}</Chip>
+				<Status lamp={env.protected ? 'ok' : 'idle'}>{env.protected ? 'On' : 'Off'}</Status>
 			</td>
 			<td>
-				<div className="cell-stack">
-					{approver
-						? (
-							<label className="checkbox">
-								<input
-									type="checkbox"
-									checked={env.protected}
-									disabled={busy || check !== null}
-									onChange={(event) => toggle(event.target.checked)}
-								/>
-								Require approval for access changes
-							</label>
-						)
-						: <span>{env.protected ? 'Approval required' : 'No approval required'}</span>}
-					<span className="muted small">
-						{env.protected
-							? 'A deploy that widens access waits for a person with access.approve.'
-							: 'A deploy that widens access publishes at once.'}
-					</span>
-					{error !== null && (
-						<div className="error-text small" role="alert">
-							<DecisionFailureText failure={error} />
-						</div>
-					)}
-					{check !== null && (
-						<PasskeyCheckPrompt
-							check={check}
-							onDone={onDone}
-							onCancel={() => setCheck(null)}
-							describeFailure={(cause) => protectionChangeFailure(cause, env.env, 'webauthn')}
-						/>
-					)}
-					{env.protected && (approver
-						? <PolicyEditor appId={appId} env={env} onDone={onDone} />
-						: <span className="muted small">{waitingSummary(env.approvalPolicy)} {settingsSummary(env.approvalSettings, env.approvalPolicy)}</span>)}
-				</div>
+				{env.protected
+					? <PolicySummary env={env} />
+					: <span className="muted">A deploy that widens access publishes at once.</span>}
+				{error !== null && (
+					<div className="error-text small" role="alert">
+						<DecisionFailureText failure={error} />
+					</div>
+				)}
+				{check !== null && (
+					<PasskeyCheckPrompt
+						check={check}
+						onDone={onDone}
+						onCancel={() => setCheck(null)}
+						describeFailure={(cause) => protectionChangeFailure(cause, env.env, 'webauthn')}
+					/>
+				)}
 				{confirming && (
 					<ConfirmDialog
 						title="Turn off approvals"
@@ -178,20 +160,106 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 					/>
 				)}
 			</td>
+			<td>
+				{approver && (
+					<div className="row-actions">
+						{env.protected && (
+							<Link to="apps/approvals-edit" params={{ id: appId, env: env.env }} className="btn small">
+								Edit<span className="sr-only">{` the rules of ${env.env}`}</span>
+							</Link>
+						)}
+						<button type="button" className="small" disabled={busy || check !== null} onClick={() => toggle(!env.protected)}>
+							{env.protected ? 'Turn off' : 'Turn on'}
+							<span className="sr-only">{` approval on ${env.env}`}</span>
+						</button>
+					</div>
+				)}
+			</td>
 		</tr>
+	)
+}
+
+/** An environment's rules as its nearest preset and what differs from it; every rule behind one disclosure. */
+export function PolicySummary({ env }: { env: Pick<AppEnvDto, 'env' | 'approvalPolicy' | 'approvalSettings'> }) {
+	const choice = { policy: env.approvalPolicy, settings: env.approvalSettings }
+	const { preset, differences } = nearestPreset(choice)
+	return (
+		<div className="policy-summary">
+			<div>
+				<strong>{preset.label}</strong>
+				<span className="muted">
+					{differences.length === 0 ? ', as the preset says' : `, ${differences.length} ${differences.length === 1 ? 'change' : 'changes'}`}
+				</span>
+			</div>
+			{differences.length > 0 && (
+				<dl className="policy-differences">
+					{differences.map((difference) => (
+						<div key={difference.key}>
+							<dt>{difference.label}</dt>
+							<dd>
+								{difference.value} <span className="muted">({preset.label}: {difference.other})</span>
+							</dd>
+						</div>
+					))}
+				</dl>
+			)}
+			<details className="disclosure">
+				<summary>
+					<span className="disclosure-title">Every rule on {env.env}</span>
+				</summary>
+				<AllRules choice={choice} />
+			</details>
+		</div>
+	)
+}
+
+/** Every category's mode and deciding, then the request settings, read only. */
+function AllRules({ choice }: { choice: PolicyChoice }) {
+	return (
+		<dl className="policy-differences">
+			{APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options).map((option) => {
+				const deciding = decidingText(option.category, choice.settings)
+				const mode = choice.policy[option.category]
+				return (
+					<div key={option.category}>
+						<dt>{option.label}</dt>
+						<dd>
+							{modeLabel(mode)}
+							{deciding !== null && mode !== 'off' && mode !== 'refuse' && <span className="muted">{` · ${deciding}`}</span>}
+						</dd>
+					</div>
+				)
+			})}
+			<div>
+				<dt>Commits an agent may ask to deploy</dt>
+				<dd>{choice.settings.deployRequestCommits === 'merged' ? 'Merged commits' : 'Any commit'}</dd>
+			</div>
+			<div>
+				<dt>Actions a key an agent asks for may hold</dt>
+				<dd>{choice.settings.credentialCeiling === 'requester' ? "The agent's own" : "The approver's"}</dd>
+			</div>
+			<div>
+				<dt>Hours a request waits for a decision</dt>
+				<dd>{choice.settings.requestTtlHours} h</dd>
+			</div>
+		</dl>
 	)
 }
 
 /**
  * What lets a change of each category through on a protected environment (ADR-0083), for a holder of `access.approve`:
- * a mode and a number of approvers per category, the settings beside them, the strict and permissive presets, one save,
- * and a confirmation first when it loosens any. A save that weakens a passkey on deciding waits for its check on IAM's
- * page, and the choice stays fixed until it is sent or cancelled.
+ * one row per category and one radio column per mode, the preset's choice marked, how many people decide folded into
+ * one cell, the request settings, and one save that names its changes and confirms first when it loosens any. A save
+ * that weakens a passkey on deciding waits for its check on IAM's page, and the choice stays fixed until it is sent or
+ * cancelled.
  */
-export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
+export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; env: AppEnvDto; onDone: () => void; onCancel: () => void }) {
+	const saved: PolicyChoice = { policy: env.approvalPolicy, settings: env.approvalSettings }
 	const [chosen, setChosen] = useState<ApprovalPolicy>(env.approvalPolicy)
 	const [settings, setSettings] = useState<ApprovalSettings>(env.approvalSettings)
 	const [ttlText, setTtlText] = useState(String(env.approvalSettings.requestTtlHours))
+	const [base, setBase] = useState<PresetName>(() => nearestPreset(saved).preset.name)
+	const [deciding, setDeciding] = useState<PolicyCategory | null>(null)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<DecisionFailure | null>(null)
 	const [confirming, setConfirming] = useState(false)
@@ -199,28 +267,20 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 	// The check is bound to the choice it was issued for, so the choice stays fixed while it waits.
 	const locked = busy || check !== null
 	const ttl = requestTtl(ttlText)
-	const changed = POLICY_CATEGORIES.some((category) => chosen[category] !== env.approvalPolicy[category])
-		|| !sameSettings(settings, env.approvalSettings)
-	const preset = presetOf(chosen, settings)
-	const before = { policy: env.approvalPolicy, settings: env.approvalSettings }
-	const after = { policy: chosen, settings }
+	const after: PolicyChoice = { policy: chosen, settings }
+	const changes = policyDifferences(after, saved).length
+	const preset = PRESETS.find((option) => option.name === base) ?? PRESETS[0]
+	const fromPreset = policyDifferences(after, preset)
 	const stepUp = protectionStepUp(env, true, after)
 
-	function choose(category: PolicyCategory, mode: string) {
+	function choose(category: PolicyCategory, mode: ApprovalMode) {
 		const parsed = approvalPolicySchema.safeParse({ ...chosen, [category]: mode })
 		if (parsed.success) setChosen(parsed.data)
 	}
 
-	function chooseApprovers(category: PolicyCategory, count: ApproverCount) {
-		if (isApproverCategory(category)) setSettings({ ...settings, approvers: { ...settings.approvers, [category]: count } })
-	}
-
-	function chooseRequesterMayApprove(category: PolicyCategory, may: boolean) {
-		if (isApproverCategory(category)) setSettings({ ...settings, requesterMayApprove: { ...settings.requesterMayApprove, [category]: may } })
-	}
-
-	function chooseStepUp(category: PolicyCategory, mode: StepUpMode) {
-		if (isStepUpCategory(category)) setSettings({ ...settings, stepUp: { ...settings.stepUp, [category]: mode } })
+	function resetRule(category: PolicyCategory) {
+		choose(category, preset.policy[category])
+		setSettings(withDecidingOf(settings, preset.settings, category))
 	}
 
 	function chooseTtl(text: string) {
@@ -229,10 +289,18 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 		if (hours !== null) setSettings({ ...settings, requestTtlHours: hours })
 	}
 
-	function choosePreset(option: (typeof PRESETS)[number]) {
+	function startFrom(option: (typeof PRESETS)[number]) {
+		setBase(option.name)
 		setChosen(option.policy)
 		setSettings(option.settings)
 		setTtlText(String(option.settings.requestTtlHours))
+	}
+
+	function discard() {
+		setChosen(saved.policy)
+		setSettings(saved.settings)
+		setTtlText(String(saved.settings.requestTtlHours))
+		setError(null)
 	}
 
 	async function save() {
@@ -243,7 +311,7 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 
 	async function apply() {
 		setError(null)
-		if (policyChange(before, after) === 'confirm') {
+		if (policyChange(saved, after) === 'confirm') {
 			setConfirming(true)
 			return
 		}
@@ -262,157 +330,65 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 		...loosenedSettings(env.approvalSettings, settings),
 	]
 	return (
-		<fieldset className="approval-categories">
-			<legend className="small">What lets a change through on {env.env}</legend>
-			<div className="approval-presets">
-				{PRESETS.map((option) => (
-					<button
-						key={option.name}
-						type="button"
-						className={preset === option.name ? 'btn small primary' : 'btn small'}
-						aria-pressed={preset === option.name}
-						title={option.hint}
-						disabled={locked}
-						onClick={() => choosePreset(option)}
-					>
-						{option.label}
-					</button>
-				))}
-				<span className="muted small">{preset === null ? 'Custom' : PRESETS.find((option) => option.name === preset)?.hint}</span>
-			</div>
-			{APPROVAL_CATEGORY_GROUPS.map((group) => (
-				<div key={group.title} className="approval-category-group">
-					<div className="muted small">{group.title}</div>
-					{group.options.map((option) => (
-						<label key={option.category} className="approval-mode" title={option.hint}>
-							<span>
-								{option.label}
-								<span id={`approval-${env.env}-${option.category}`} className="muted small">
-									{` · ${option.hint}.${option.pending === undefined ? '' : ` Not enforced yet. ${option.pending}`}`}
-								</span>
-							</span>
-							<span className="approval-mode-controls">
-								<select
-									value={chosen[option.category]}
-									disabled={locked}
-									aria-label={option.label}
-									aria-describedby={`approval-${env.env}-${option.category}`}
-									onChange={(event) => choose(option.category, event.target.value)}
-								>
-									{modesOf(option.category).map((mode) => (
-										<option key={mode} value={mode}>
-											{modeLabel(mode)}
-											{isDefaultMode(option.category, mode) ? ' (default)' : ''}
-										</option>
-									))}
-								</select>
-								{isApproverCategory(option.category) && (
-									<select
-										value={settings.approvers[option.category]}
-										disabled={locked}
-										aria-label={`${option.label}: approvers`}
-										onChange={(event) => chooseApprovers(option.category, event.target.value === '2' ? 2 : 1)}
-									>
-										<option value="1">One person decides (default)</option>
-										<option value="2">Two people decide</option>
-									</select>
-								)}
-								{isApproverCategory(option.category) && (
-									<select
-										value={settings.requesterMayApprove[option.category] ? 'yes' : 'no'}
-										disabled={locked}
-										aria-label={`${option.label}: who decides an agent's request`}
-										onChange={(event) => chooseRequesterMayApprove(option.category, event.target.value === 'yes')}
-									>
-										<option value="yes">Requester may decide (default)</option>
-										<option value="no">Someone else decides</option>
-									</select>
-								)}
-								{isStepUpCategory(option.category) && (
-									<select
-										value={settings.stepUp[option.category]}
-										disabled={locked}
-										aria-label={`${option.label}: confirming with a passkey`}
-										onChange={(event) => chooseStepUp(option.category, event.target.value === 'webauthn' ? 'webauthn' : 'none')}
-									>
-										<option value="none">
-											{`No passkey ${stepUpVerb(option.category)}${STRICT_SETTINGS.stepUp[option.category] === 'none' ? ' (default)' : ''}`}
-										</option>
-										<option value="webauthn">
-											{`Passkey ${stepUpVerb(option.category)}${STRICT_SETTINGS.stepUp[option.category] === 'webauthn' ? ' (default)' : ''}`}
-										</option>
-									</select>
-								)}
-							</span>
-						</label>
+		<div className="policy-editor">
+			<div className="toolbar">
+				<span className="muted">Start from</span>
+				<div className="filter-group" role="group" aria-label="Start from a preset">
+					{PRESETS.map((option) => (
+						<button
+							key={option.name}
+							type="button"
+							className="filter-option"
+							aria-pressed={base === option.name}
+							title={option.hint}
+							disabled={locked}
+							onClick={() => startFrom(option)}
+						>
+							{option.label}
+						</button>
 					))}
 				</div>
-			))}
-			<div className="approval-category-group">
-				<div className="muted small">Requests</div>
-				<label className="approval-mode">
-					<span>
-						Commits an agent may ask to deploy
-						<span className="muted small">
-							{' · '}merged means reachable from the trigger branch, or the default branch when it is a pattern; never a workspace branch, whichever is
-							chosen.
-						</span>
-					</span>
-					<span className="approval-mode-controls">
-						<select
-							value={settings.deployRequestCommits}
-							disabled={locked}
-							aria-label="Commits an agent may ask to deploy"
-							onChange={(event) => setSettings({ ...settings, deployRequestCommits: event.target.value === 'any' ? 'any' : 'merged' })}
-						>
-							<option value="merged">Merged commits (default)</option>
-							<option value="any">Any commit</option>
-						</select>
-					</span>
-				</label>
-				<label className="approval-mode">
-					<span>
-						Actions a key an agent asks for may hold
-						<span className="muted small">
-							{' · '}the agent's own means only actions the agent holds at the application when it asks; the approver's means any action the approver holds,
-							and the request page marks those the agent lacks.
-						</span>
-					</span>
-					<span className="approval-mode-controls">
-						<select
-							value={settings.credentialCeiling}
-							disabled={locked}
-							aria-label="Actions a key an agent asks for may hold"
-							onChange={(event) => setSettings({ ...settings, credentialCeiling: event.target.value === 'approver' ? 'approver' : 'requester' })}
-						>
-							<option value="requester">The agent's own (default)</option>
-							<option value="approver">The approver's</option>
-						</select>
-					</span>
-				</label>
-				<label className="approval-mode">
-					<span>
-						Hours a request waits for a decision
-						<span className="muted small">
-							{` · ${REQUEST_TTL_HOURS.min}–${REQUEST_TTL_HOURS.max}, ${REQUEST_TTL_HOURS.default} by default; past it, the request expires.`}
-						</span>
-					</span>
-					<span className="approval-mode-controls">
-						<input
-							type="number"
-							min={REQUEST_TTL_HOURS.min}
-							max={REQUEST_TTL_HOURS.max}
-							value={ttlText}
-							disabled={locked}
-							aria-label="Hours a request waits for a decision"
-							aria-invalid={ttl === null}
-							onChange={(event) => chooseTtl(event.target.value)}
-						/>
-					</span>
-				</label>
+				<span className="muted">
+					{fromPreset.length === 0
+						? `As ${preset.label} says: ${preset.hint}.`
+						: `${fromPreset.length} ${fromPreset.length === 1 ? 'change' : 'changes'} from ${preset.label}`}
+				</span>
 			</div>
-			<div>
-				<button type="button" className="btn small" disabled={!changed || ttl === null || locked} onClick={() => void apply()}>
+			{APPROVAL_CATEGORY_GROUPS.map((group) => (
+				<RuleGroup
+					key={group.title}
+					env={env.env}
+					title={group.title}
+					options={group.options}
+					policy={chosen}
+					settings={settings}
+					preset={preset}
+					locked={locked}
+					deciding={deciding}
+					onChoose={choose}
+					onReset={resetRule}
+					onDeciding={(category) => setDeciding(deciding === category ? null : category)}
+					onSettings={setSettings}
+				/>
+			))}
+			<RequestSettings
+				settings={settings}
+				ttlText={ttlText}
+				ttlValid={ttl !== null}
+				preset={preset}
+				locked={locked}
+				onSettings={setSettings}
+				onTtl={chooseTtl}
+			/>
+			<div className="save-bar">
+				<span className="muted">
+					{changes === 0 ? 'No changes' : `${changes} ${changes === 1 ? 'change' : 'changes'} to save`}
+				</span>
+				<span className="spacer" />
+				<button type="button" onClick={changes === 0 ? onCancel : discard} disabled={locked}>
+					{changes === 0 ? 'Back' : 'Discard'}
+				</button>
+				<button type="button" className="primary" disabled={changes === 0 || ttl === null || locked} onClick={() => void apply()}>
 					Save approvals
 				</button>
 			</div>
@@ -436,7 +412,7 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 					body={
 						<>
 							<p>
-								On <strong>{env.env}</strong>, these will need less to go through: {looser.join(', ')}.
+								On <strong>{env.env}</strong> of <strong>{appId}</strong>, these will need less to go through: {looser.join(', ')}.
 							</p>
 							<p>The audit log records this change. A deploy or grant that already waits keeps waiting until a person decides it.</p>
 							<StepUpNote stepUp={stepUp} />
@@ -447,7 +423,271 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 					describeError={(cause) => <DecisionFailureText failure={protectionChangeFailure(cause, env.env, stepUp)} />}
 				/>
 			)}
+		</div>
+	)
+}
+
+/** `settings` with one category's approvers, requester rule and passkey taken from `from`. */
+function withDecidingOf(settings: ApprovalSettings, from: ApprovalSettings, category: PolicyCategory): ApprovalSettings {
+	return {
+		...settings,
+		approvers: isApproverCategory(category) ? { ...settings.approvers, [category]: from.approvers[category] } : settings.approvers,
+		requesterMayApprove: isApproverCategory(category)
+			? { ...settings.requesterMayApprove, [category]: from.requesterMayApprove[category] }
+			: settings.requesterMayApprove,
+		stepUp: isStepUpCategory(category) ? { ...settings.stepUp, [category]: from.stepUp[category] } : settings.stepUp,
+	}
+}
+
+/** One group of categories as a matrix: folded when every rule follows the preset, open when one differs. */
+function RuleGroup(
+	{ env, title, options, policy, settings, preset, locked, deciding, onChoose, onReset, onDeciding, onSettings }: {
+		env: string
+		title: string
+		options: readonly CategoryOption[]
+		policy: ApprovalPolicy
+		settings: ApprovalSettings
+		preset: (typeof PRESETS)[number]
+		locked: boolean
+		deciding: PolicyCategory | null
+		onChoose: (category: PolicyCategory, mode: ApprovalMode) => void
+		onReset: (category: PolicyCategory) => void
+		onDeciding: (category: PolicyCategory) => void
+		onSettings: (settings: ApprovalSettings) => void
+	},
+) {
+	const differs = (category: PolicyCategory) =>
+		policy[category] !== preset.policy[category] || decidingText(category, settings) !== decidingText(category, preset.settings)
+	const changed = options.filter((option) => differs(option.category)).length
+	// Open as the page opens when a rule differs; afterwards the person folds and unfolds it.
+	const [open] = useState(changed > 0)
+	return (
+		<details className="rule-group" open={open}>
+			<summary>
+				<span className="disclosure-title">{title}</span>
+				<span className="muted">
+					{options.length} rules, {changed === 0 ? `all as ${preset.label}` : `${changed} changed from ${preset.label}`}
+				</span>
+			</summary>
+			<div className="table-wrap">
+				<table className="rule-matrix">
+					<thead>
+						<tr>
+							<th className="grow">Rule</th>
+							{APPROVAL_MODES.map((mode) => <th key={mode}>{modeLabel(mode)}</th>)}
+							<th>Deciding</th>
+						</tr>
+					</thead>
+					<tbody>
+						{options.flatMap((option) => {
+							const category = option.category
+							const modes = modesOf(category)
+							const text = decidingText(category, settings)
+							const row = (
+								<tr key={category} className={differs(category) ? 'changed' : undefined}>
+									<th scope="row">
+										{option.label}
+										<div className="muted small">{option.hint}</div>
+										{option.pending !== undefined && (
+											<div className="small">
+												<Chip>not enforced yet</Chip> <span className="muted">{option.pending}</span>
+											</div>
+										)}
+										{differs(category) && (
+											<button type="button" className="ghost small" disabled={locked} onClick={() => onReset(category)}>
+												Reset to {preset.label}
+												<span className="sr-only">{`: ${option.label}`}</span>
+											</button>
+										)}
+									</th>
+									{APPROVAL_MODES.map((mode) => (
+										<td key={mode} className="matrix-cell">
+											{modes.includes(mode) && (
+												<label>
+													<input
+														type="radio"
+														name={`${env}-${category}`}
+														checked={policy[category] === mode}
+														disabled={locked}
+														onChange={() => onChoose(category, mode)}
+														aria-label={`${option.label}: ${modeLabel(mode)}`}
+													/>
+													{preset.policy[category] === mode && (
+														<span className="preset-mark" title={`${preset.label}'s choice`}>
+															<span aria-hidden="true">•</span>
+															<span className="sr-only">{` (${preset.label})`}</span>
+														</span>
+													)}
+												</label>
+											)}
+										</td>
+									))}
+									<td>
+										{text === null
+											? <span className="muted small">IAM's own rule</span>
+											: (
+												<button
+													type="button"
+													className="ghost small deciding-toggle"
+													aria-expanded={deciding === category}
+													disabled={locked}
+													onClick={() => onDeciding(category)}
+												>
+													{text}
+													<Icon name="chevron-down" size={13} />
+													<span className="sr-only">{`: who decides ${option.label}`}</span>
+												</button>
+											)}
+									</td>
+								</tr>
+							)
+							if (deciding !== category || text === null) return [row]
+							return [
+								row,
+								<tr key={`${category}-deciding`} className="deciding-row">
+									<td colSpan={APPROVAL_MODES.length + 2}>
+										<DecidingControls env={env} category={category} label={option.label} settings={settings} locked={locked} onSettings={onSettings} />
+									</td>
+								</tr>,
+							]
+						})}
+					</tbody>
+				</table>
+			</div>
+		</details>
+	)
+}
+
+/** The second level: how many people decide, whether the requester's person may, and whether a passkey confirms. */
+function DecidingControls(
+	{ env, category, label, settings, locked, onSettings }: {
+		env: string
+		category: PolicyCategory
+		label: string
+		settings: ApprovalSettings
+		locked: boolean
+		onSettings: (settings: ApprovalSettings) => void
+	},
+) {
+	return (
+		<fieldset className="deciding-controls" disabled={locked}>
+			<legend className="sr-only">Who decides {label}</legend>
+			{isApproverCategory(category) && (
+				<>
+					<label className="radio">
+						<input
+							type="radio"
+							name={`${env}-${category}-approvers`}
+							checked={settings.approvers[category] === 1}
+							onChange={() => onSettings({ ...settings, approvers: { ...settings.approvers, [category]: 1 } })}
+						/>
+						One person decides
+					</label>
+					<label className="radio">
+						<input
+							type="radio"
+							name={`${env}-${category}-approvers`}
+							checked={settings.approvers[category] === 2}
+							onChange={() => onSettings({ ...settings, approvers: { ...settings.approvers, [category]: 2 } })}
+						/>
+						Two people decide
+					</label>
+					<label className="checkbox">
+						<input
+							type="checkbox"
+							checked={settings.requesterMayApprove[category]}
+							onChange={(event) => onSettings({ ...settings, requesterMayApprove: { ...settings.requesterMayApprove, [category]: event.target.checked } })}
+						/>
+						The requester's own person may decide an agent's request
+					</label>
+				</>
+			)}
+			{isStepUpCategory(category) && (
+				<label className="checkbox">
+					<input
+						type="checkbox"
+						checked={settings.stepUp[category] === 'webauthn'}
+						onChange={(event) => onSettings({ ...settings, stepUp: { ...settings.stepUp, [category]: event.target.checked ? 'webauthn' : 'none' } })}
+					/>
+					{category === 'agent-write' ? 'A passkey confirms allowing an agent to write' : 'A passkey confirms deciding'}
+				</label>
+			)}
 		</fieldset>
+	)
+}
+
+/** The three request settings, as their own group. */
+function RequestSettings(
+	{ settings, ttlText, ttlValid, preset, locked, onSettings, onTtl }: {
+		settings: ApprovalSettings
+		ttlText: string
+		ttlValid: boolean
+		preset: (typeof PRESETS)[number]
+		locked: boolean
+		onSettings: (settings: ApprovalSettings) => void
+		onTtl: (text: string) => void
+	},
+) {
+	const changed = [
+		settings.deployRequestCommits !== preset.settings.deployRequestCommits,
+		settings.credentialCeiling !== preset.settings.credentialCeiling,
+		settings.requestTtlHours !== preset.settings.requestTtlHours,
+	].filter(Boolean).length
+	const [open] = useState(changed > 0)
+	return (
+		<details className="rule-group" open={open}>
+			<summary>
+				<span className="disclosure-title">Agent requests</span>
+				<span className="muted">3 settings, {changed === 0 ? `all as ${preset.label}` : `${changed} changed from ${preset.label}`}</span>
+			</summary>
+			<div className="form">
+				<label>
+					Commits an agent may ask to deploy
+					<select
+						value={settings.deployRequestCommits}
+						disabled={locked}
+						onChange={(event) => onSettings({ ...settings, deployRequestCommits: event.target.value === 'any' ? 'any' : 'merged' })}
+					>
+						<option value="merged">Merged commits</option>
+						<option value="any">Any commit</option>
+					</select>
+					<span className="hint">
+						Merged means reachable from the trigger branch, or the default branch when it is a pattern; never a workspace branch, whichever is chosen.
+					</span>
+				</label>
+				<label>
+					Actions a key an agent asks for may hold
+					<select
+						value={settings.credentialCeiling}
+						disabled={locked}
+						onChange={(event) => onSettings({ ...settings, credentialCeiling: event.target.value === 'approver' ? 'approver' : 'requester' })}
+					>
+						<option value="requester">The agent's own</option>
+						<option value="approver">The approver's</option>
+					</select>
+					<span className="hint">
+						The agent's own: only actions the agent holds at the application when it asks. The approver's: any action the approver holds; the request page
+						marks those the agent lacks.
+					</span>
+				</label>
+				<label>
+					Hours a request waits for a decision
+					<input
+						type="number"
+						min={REQUEST_TTL_HOURS.min}
+						max={REQUEST_TTL_HOURS.max}
+						value={ttlText}
+						disabled={locked}
+						aria-invalid={!ttlValid}
+						onChange={(event) => onTtl(event.target.value)}
+					/>
+					<span className="hint">
+						{`${REQUEST_TTL_HOURS.min}–${REQUEST_TTL_HOURS.max}, ${REQUEST_TTL_HOURS.default} by default; past it, the request expires.`}
+					</span>
+					{!ttlValid && <span className="error-text small">A whole number of hours from {REQUEST_TTL_HOURS.min} to {REQUEST_TTL_HOURS.max}.</span>}
+				</label>
+			</div>
+		</details>
 	)
 }
 

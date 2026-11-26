@@ -482,7 +482,7 @@ principal, the same rule as approving (section 5), and a passkey when the change
 Control's audit log records every change.
 
 The flag changes through `apps.environments.protect`, and its only caller is the console: the application's
-page lists each environment under "Access approvals", with the switch for a caller holding `access.approve`
+Approvals tab lists each environment under "What lets a change through", with Turn on and Turn off for a caller holding `access.approve`
 there. No CLI verb or MCP tool changes it, because a key or an agent must not unprotect an environment. Turning
 approvals off asks for a confirmation first. A typical case for it: a team whose every merge to the trigger
 branch is already reviewed on GitHub. The change waits while a run of the environment is `running` (409) and

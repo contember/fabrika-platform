@@ -8,6 +8,8 @@ import {
 	type ApprovalSettings,
 	APPROVER_CATEGORIES,
 	gate,
+	isApproverCategory,
+	isStepUpCategory,
 	PERMISSIVE_POLICY,
 	PERMISSIVE_SETTINGS,
 	POLICY_CATEGORIES,
@@ -255,6 +257,97 @@ export function presetOf(policy: ApprovalPolicy, settings: ApprovalSettings): (t
 	return PRESETS.find((preset) =>
 		POLICY_CATEGORIES.every((category) => preset.policy[category] === policy[category]) && sameSettings(preset.settings, settings)
 	)?.name ?? null
+}
+
+export type PresetName = (typeof PRESETS)[number]['name']
+
+/** An environment's modes and settings together: what a preset, a saved policy or an edit holds. */
+export interface PolicyChoice {
+	readonly policy: ApprovalPolicy
+	readonly settings: ApprovalSettings
+}
+
+/** Every category in the console's order. */
+export const ORDERED_CATEGORIES: readonly PolicyCategory[] = APPROVAL_CATEGORY_GROUPS.flatMap((group) =>
+	group.options.map((option) => option.category)
+)
+
+/**
+ * Who decides a category's pending item and what confirms it, in a few words: "1 person" by default, then only what
+ * differs. `grants` waits in IAM under IAM's own rule, so it has none.
+ */
+export function decidingText(category: PolicyCategory, settings: ApprovalSettings): string | null {
+	if (!isStepUpCategory(category)) return null
+	const parts: string[] = []
+	if (isApproverCategory(category)) {
+		parts.push(settings.approvers[category] === 2 ? '2 people' : '1 person')
+		if (!settings.requesterMayApprove[category]) parts.push('not the requester')
+	}
+	if (settings.stepUp[category] === 'webauthn') parts.push('passkey')
+	return parts.length === 0 ? 'no passkey' : parts.join(' · ')
+}
+
+/** One rule or setting that differs between two choices, in the console's words. */
+export interface PolicyDifference {
+	readonly key: string
+	readonly label: string
+	readonly value: string
+	readonly other: string
+}
+
+/** What `choice` says differently from `base`: each category whose mode or deciding differs, then each request setting. */
+export function policyDifferences(choice: PolicyChoice, base: PolicyChoice): PolicyDifference[] {
+	const rules = ORDERED_CATEGORIES.flatMap((category): PolicyDifference[] => {
+		const mode = choice.policy[category]
+		const baseMode = base.policy[category]
+		const deciding = decidingText(category, choice.settings)
+		const baseDeciding = decidingText(category, base.settings)
+		if (mode === baseMode && deciding === baseDeciding) return []
+		const decidingDiffers = deciding !== baseDeciding
+		return [{
+			key: category,
+			label: categoryLabel(category),
+			value: decidingDiffers && deciding !== null ? `${modeLabel(mode)} · ${deciding}` : modeLabel(mode),
+			other: decidingDiffers && baseDeciding !== null ? `${modeLabel(baseMode)} · ${baseDeciding}` : modeLabel(baseMode),
+		}]
+	})
+	const settings: PolicyDifference[] = [
+		...(choice.settings.deployRequestCommits === base.settings.deployRequestCommits ? [] : [{
+			key: 'deployRequestCommits',
+			label: 'Commits an agent may ask to deploy',
+			value: commitsLabel(choice.settings),
+			other: commitsLabel(base.settings),
+		}]),
+		...(choice.settings.credentialCeiling === base.settings.credentialCeiling ? [] : [{
+			key: 'credentialCeiling',
+			label: 'Actions a key an agent asks for may hold',
+			value: ceilingLabel(choice.settings),
+			other: ceilingLabel(base.settings),
+		}]),
+		...(choice.settings.requestTtlHours === base.settings.requestTtlHours ? [] : [{
+			key: 'requestTtlHours',
+			label: 'Hours a request waits for a decision',
+			value: `${choice.settings.requestTtlHours} h`,
+			other: `${base.settings.requestTtlHours} h`,
+		}]),
+	]
+	return [...rules, ...settings]
+}
+
+function commitsLabel(settings: ApprovalSettings): string {
+	return settings.deployRequestCommits === 'merged' ? 'Merged commits' : 'Any commit'
+}
+
+function ceilingLabel(settings: ApprovalSettings): string {
+	return settings.credentialCeiling === 'requester' ? "The agent's own" : "The approver's"
+}
+
+/** The preset a choice is closest to, counted in differing rules and settings; Strict on a tie. */
+export function nearestPreset(choice: PolicyChoice): { readonly preset: (typeof PRESETS)[number]; readonly differences: PolicyDifference[] } {
+	const [strict, permissive] = PRESETS
+	const fromStrict = { preset: strict, differences: policyDifferences(choice, strict) }
+	const fromPermissive = { preset: permissive, differences: policyDifferences(choice, permissive) }
+	return fromPermissive.differences.length < fromStrict.differences.length ? fromPermissive : fromStrict
 }
 
 /** A number of hours a request waits, or null for one outside `requestTtlHours`'s bounds. */
