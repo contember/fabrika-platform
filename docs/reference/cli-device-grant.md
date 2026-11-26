@@ -161,7 +161,8 @@ sees the person (`ctx.principal`) and the agent (`ctx.agent`). At each exchange 
 and narrows them to the grant's value: a global grant becomes the same action at the value, a grant at the value stays,
 and everything else is dropped, a grant at a container of the value included. So a grant narrowed to project A reaches
 what the person's grants at A reach and nothing at project B, apart from what the application itself declares to cross
-values (a member reveal, a `readThrough` or `writeThrough` path, a member-bound access view, `unscoped` or `sql`).
+values (a member reveal, a `readThrough` or `writeThrough` path, a member-bound access view, `unscoped` or `sql`, a job
+the request kicks, which runs with its own workload authority, and a `connect` import).
 
 ## Ending a grant
 
