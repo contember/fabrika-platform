@@ -46,6 +46,8 @@ const REFUSED: Readonly<Record<string, string>> = {
 	'iam.brand.clear': INSTALLATION,
 	'iam.passwordPolicy.set': INSTALLATION,
 	'iam.secondFactor.reset': INSTALLATION,
+	'iam.scim.rotateToken': INSTALLATION,
+	'iam.scim.revokeToken': INSTALLATION,
 	'namespaces.remove': FREES_RESOURCES,
 	'namespaces.releaseClaims': FREES_RESOURCES,
 	'data.content': CONTENT,

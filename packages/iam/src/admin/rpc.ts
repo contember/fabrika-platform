@@ -376,6 +376,12 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.setPasswordPolicy(context(ctx), input)),
 	}),
+	// The installation's SCIM token: `iam.admin` in a signed-in session only, also to read it (ADR-0091).
+	scim: t.router({
+		get: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.getScimSettings(context(ctx))),
+		rotateToken: t.procedure.require(ADMIN_ACTION).mutation(({ ctx }) => adminUseCases.rotateScimToken(context(ctx))),
+		revokeToken: t.procedure.require(ADMIN_ACTION).mutation(({ ctx }) => adminUseCases.revokeScimToken(context(ctx))),
+	}),
 	// A person's authenticator: `iam.admin` only, to read and to reset. The reset is the operator's path for a lost phone.
 	secondFactor: t.router({
 		get: t.procedure.input(principalIdInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getSecondFactor(context(ctx), input)),

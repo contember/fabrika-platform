@@ -311,10 +311,57 @@ export class PrincipalRepository {
 
 	/** Enable a principal. Returns whether this call enabled it; `audit` is written only then. */
 	enablePrincipal(id: string, audit?: AuditEventInput): Promise<boolean> {
-		return this.guardedUpdate(
-			{ sql: 'UPDATE principals SET disabled_at = NULL WHERE id = ? AND disabled_at IS NOT NULL RETURNING id', binds: [id] },
-			audit,
-		)
+		return this.guardedUpdate(this.enablePrincipalChange(id), audit)
+	}
+
+	/** The enabling of a principal, as a change an audited group composes. */
+	enablePrincipalChange(id: string): SqlChange {
+		return { sql: 'UPDATE principals SET disabled_at = NULL WHERE id = ? AND disabled_at IS NOT NULL RETURNING id', binds: [id] }
+	}
+
+	/** Spend every pending password action of a principal: a deprovisioned person completes no reset or enrollment. */
+	consumePasswordActionsChange(id: string): SqlChange {
+		return {
+			sql: 'UPDATE password_action_tokens SET consumed_at = ? WHERE principal_id = ? AND consumed_at IS NULL RETURNING id',
+			binds: [unixNow(), id],
+		}
+	}
+
+	/** The first statements of a transaction that writes several of a principal's rows (`principalLockStatements`). */
+	lockStatements(id: string): SqlStatement[] {
+		return principalLockStatements(this.db, this.writer.dialect, { sql: '?', binds: [id] })
+	}
+
+	/**
+	 * The INSERT of a user the organization's identity provider provisions (ADR-0091), internal and not yet activated,
+	 * with its mailbox reservation: its first OIDC login claims it as it claims an invited one. `disabled` provisions it
+	 * inactive.
+	 */
+	provisionUserStatements(id: string, email: string, disabled: boolean): SqlStatement[] {
+		const mailbox = normalizeEmailIdentity(email)
+		const now = unixNow()
+		return [
+			this.db
+				.prepare(`INSERT INTO principals (id, type, external_id, email, label, disabled_at, created_at, affiliation)
+					VALUES (?, 'user', NULL, ?, ?, ?, ?, 'internal') RETURNING *`)
+				.bind(id, mailbox, email, disabled ? now : null, now),
+			this.claimMailboxStatement(mailbox, id),
+		]
+	}
+
+	/**
+	 * Move a user to another mailbox (`email` in any spelling), as a change, and its reservation: the statement after the
+	 * change, so the reservation moves only with a mailbox the unique index admitted.
+	 */
+	changeMailbox(id: string, email: string): { change: SqlChange; claim: SqlStatement } {
+		const mailbox = normalizeEmailIdentity(email)
+		return {
+			change: {
+				sql: 'UPDATE principals SET email = ?, label = ? WHERE id = ? AND (email IS DISTINCT FROM ? OR label IS DISTINCT FROM ?) RETURNING id',
+				binds: [mailbox, email, id, mailbox, email],
+			},
+			claim: this.claimMailboxStatement(mailbox, id),
+		}
 	}
 
 	/**

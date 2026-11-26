@@ -70,6 +70,9 @@ const IAM: Readonly<Record<string, Judged>> = {
 	'brand.clear': { exempt: INSTALLATION },
 	'passwordPolicy.set': { exempt: INSTALLATION },
 	'secondFactor.reset': { exempt: INSTALLATION },
+	// The identity provider's provisioning token, by a person in a signed-in session only (ADR-0091).
+	'scim.rotateToken': { exempt: `the installation's SCIM token: ${ALWAYS_A_PERSON}` },
+	'scim.revokeToken': { exempt: NARROWS },
 	'externalApps.put': { exempt: `where IAM sends people's identity: ${INSTALLATION}` },
 	'externalApps.delete': { exempt: NARROWS },
 	'oauthClients.put': { exempt: "the operator's MCP authoring client, the provisioning key only" },
