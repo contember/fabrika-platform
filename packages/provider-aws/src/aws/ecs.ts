@@ -216,8 +216,8 @@ export interface EcsServiceConnect {
 export interface EcsServiceConnectClient {
 	readonly namespaceArn: string
 	/**
-	 * The balancer's target group its tasks register in, by their address, at `port` of `container`; sent on create and
-	 * on every update, so a service converges on its namespace's current group. ECS's service-linked role registers them.
+	 * The balancer's target group its tasks register in, by their address, at `port` of `container`; sent with every
+	 * `createService` and `updateService` this client makes. ECS's service-linked role registers them.
 	 */
 	readonly balancer?: EcsBalancerTarget
 }
@@ -682,7 +682,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if (!TASK_DEFINITION_ARN.test(taskDefinitionArn)) refuse('the task definition')
 			const networkConfiguration = awsvpcOf(network)
 			const serviceConnectConfiguration = serviceConnectOf(serviceConnect)
-			// Sent on every update of a service with a balancer target, so one moved to a new target group follows it.
+			// Sent with every update of a service with a balancer target, so an update to another target group moves it there.
 			const balancer = balancerOf(serviceConnect)
 			const updated = await json.call(
 				'UpdateService',

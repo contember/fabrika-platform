@@ -469,11 +469,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     outside the stack and holds its group, roles and log group, so removing a namespace deletes the service first,
     then its `env/` parameters and task definition family, then the stack; the namespace's instructions say so.
     **Behind the balancer** (built): the namespace stack holds the proxy's target group (by IP, HTTP on :8080, healthy
-    when :8081 answers `/healthz`, 30 s to drain), named by CloudFormation, as an output; the service registers its
-    tasks there on every create and update. The proxy's group admits only the installation balancer's group, on :8080 and
-    :8081, and its egress is TCP 443 anywhere (IAM, ECR, logs) and the applications' port in the VPC's range. Control
-    reads the balancer's group and the range from `FABRIKA_AWS_BALANCER_SECURITY_GROUP` and `FABRIKA_AWS_VPC_CIDR`,
-    which the installation's stack will give. Not yet: the listener's host rules and the certificates.
+    when :8081 answers `/healthz`, 30 s to drain), named by CloudFormation, as an output; the service is sent it with
+    its create and every update to a new revision (a service already updated to its fingerprint gets no call, so a
+    replaced group, which only a changed VPC causes, reaches it with the next revision). The proxy's group admits only
+    the installation balancer's group, on :8080 and :8081, and its egress is TCP 443 anywhere (IAM, ECR, logs) and the
+    applications' port in the VPC's range. Control reads the balancer's group and the range from
+    `FABRIKA_AWS_BALANCER_SECURITY_GROUP` and `FABRIKA_AWS_VPC_CIDR` (the VPC's primary block, its network address; a
+    secondary block is not covered), which the installation's stack will give. Not yet: the listener's host rules and
+    the certificates, and Caddy's `trusted_proxies` set to the VPC's range, so a request's client address is the
+    caller's, not the balancer's.
     **Republish** (built, `src/proxy-republish.ts`): the namespace capability's `republish` drives the proxy to the
     members, one resumable step per pass from what the target records: an image of the current manifest sets the
     service (settled); a build of it in flight is followed; otherwise a build of it starts, replacing an older
@@ -538,10 +542,13 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         Following the rollout adds `ecs:DescribeServiceDeployments` and `ecs:DescribeServiceRevisions`, which the
         application runs already need. The proxy's service adds `iam:PassRole` on
         `role/fabrika/namespaces/*` with `iam:PassedToService = ecs-tasks.amazonaws.com` (its task definition names its two
-        roles); its ECS calls are on `service/<cluster>/*` already. Its target group adds, for CloudFormation,
-        `elasticloadbalancing:CreateTargetGroup`, `ModifyTargetGroup`, `ModifyTargetGroupAttributes`, `DeleteTargetGroup`
-        and `AddTags` on `targetgroup/*` with the request tag `fabrika:namespace` (CloudFormation names the group, so no
-        prefix scopes it), and the `Describe*` reads, which take no resource;
+        roles); its ECS calls are on `service/<cluster>/*` already. Its target group adds, for CloudFormation, on
+        `targetgroup/*` (CloudFormation names the group, so no prefix scopes it): `elasticloadbalancing:CreateTargetGroup`
+        only with the request tag `fabrika:namespace`; `AddTags` only with `elasticloadbalancing:CreateAction =
+        CreateTargetGroup`, so a tag is written only with a group Control creates and Control can never tag another group
+        (one the installation's stack holds) into its reach; `ModifyTargetGroup`, `ModifyTargetGroupAttributes` and
+        `DeleteTargetGroup` only with the resource tag `fabrika:namespace`, as these calls carry no request tags; no
+        `RemoveTags`, since a namespace's tags never change; and the `Describe*` reads, which take no resource;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;

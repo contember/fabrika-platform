@@ -360,10 +360,22 @@ export interface AwsInstallationBalancer {
 /** An IPv4 CIDR block of a VPC's size (a /16 to a /28). */
 const VPC_CIDR = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:1[6-9]|2[0-8])$/
 
-/** `balancer` as given, or an error naming the field of another form (never a value). */
+/** Whether `cidr` (of the `VPC_CIDR` form) names its network address: no bit is set past its prefix, as a VPC's block. */
+function isNetworkAddress(cidr: string): boolean {
+	const [address = '', prefix = ''] = cidr.split('/')
+	const value = address.split('.').reduce((sum, octet) => sum * 256 + Number(octet), 0)
+	return value % 2 ** (32 - Number(prefix)) === 0
+}
+
+/**
+ * `balancer` as given, or an error naming the field of another form (never a value). The range is the VPC's primary
+ * block as AWS names it; an application in a subnet of a secondary block is not covered by the proxy's egress.
+ */
 export function checkInstallationBalancer(balancer: AwsInstallationBalancer): AwsInstallationBalancer {
 	if (!SECURITY_GROUP_ID.test(balancer.securityGroupId)) throw new Error("aws: the installation's balancer names a security group id of another form")
-	if (!VPC_CIDR.test(balancer.vpcCidr)) throw new Error("aws: the installation's VPC range is not an IPv4 block of a VPC's size")
+	if (!VPC_CIDR.test(balancer.vpcCidr) || !isNetworkAddress(balancer.vpcCidr)) {
+		throw new Error("aws: the installation's VPC range is not an IPv4 block of a VPC's size named by its network address")
+	}
 	return balancer
 }
 

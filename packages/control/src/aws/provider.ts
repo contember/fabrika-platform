@@ -15,7 +15,8 @@
 //   no NAT gateway); there is no default, because a wrong one leaves the tasks without a way out.
 // - `FABRIKA_AWS_BALANCER_SECURITY_GROUP` (a security group id) and `FABRIKA_AWS_VPC_CIDR` (the VPC's IPv4 block): the
 //   installation balancer's group, which each namespace proxy's group admits on its public and health ports, and the
-//   range a proxy's egress to its applications is scoped to.
+//   range a proxy's egress to its applications is scoped to: the VPC's primary block, by its network address. An
+//   application in a subnet of a secondary block is not reachable from its proxy.
 // - `FABRIKA_AWS_PROXY_REPOSITORY` (an HTTPS GitHub URL) and `FABRIKA_AWS_PROXY_COMMIT_SHA` (a full commit): the
 //   installation's release of the public platform repository. A namespace being planned is pinned to it, and keeps
 //   its pin through an upgrade; no namespace may be pinned to another repository (ADR-0045).

@@ -203,6 +203,11 @@ describe('awsNamespaceStack', () => {
 		expect(() => checkInstallationBalancer({ ...balancer, securityGroupId: 'sg-X' })).toThrow('security group')
 		expect(() => checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.0.0/8' })).toThrow('VPC range')
 		expect(() => checkInstallationBalancer({ ...balancer, vpcCidr: '0.0.0.0/0' })).toThrow('VPC range')
+		// A block with host bits is not how AWS names a VPC's.
+		expect(() => checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.5.7/16' })).toThrow('network address')
+		expect(() => checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.0.16/27' })).toThrow('network address')
+		expect(checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.0.32/27' })).toEqual({ ...balancer, vpcCidr: '10.0.0.32/27' })
+		expect(checkInstallationBalancer({ ...balancer, vpcCidr: '172.31.0.0/16' }).vpcCidr).toBe('172.31.0.0/16')
 	})
 
 	test("holds the proxy's build: its repository, log group, a role under the boundary reaching only its own, and an x86 project", () => {

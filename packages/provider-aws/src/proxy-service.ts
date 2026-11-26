@@ -223,7 +223,9 @@ async function ensure(input: AwsProxyServiceInput): Promise<ProviderDeploymentNa
 	const address = { cluster: installation.cluster, service: resources.service }
 	const network = { subnets: input.network.subnets, securityGroups: [input.outputs.proxySecurityGroupId], publicIp: input.network.publicIp }
 	// The balancer's target group is the namespace stack's own, which keeps it for the stack's life (only a changed VPC
-	// replaces it), so it is not in the fingerprint: it is sent on every create and update.
+	// replaces it). It is sent with the create and with every update to a new revision, but it is not in the fingerprint,
+	// as the proxy's group and the Service Connect namespace are not: a service already updated to this fingerprint is
+	// answered with no call, so a replaced group (or target group) reaches it only with the next new revision.
 	const serviceConnect = {
 		namespaceArn: input.outputs.serviceConnectNamespaceArn,
 		balancer: { targetGroupArn: input.outputs.proxyTargetGroupArn, container: AWS_PROXY_CONTAINER, port: AWS_PROXY_PORT },
