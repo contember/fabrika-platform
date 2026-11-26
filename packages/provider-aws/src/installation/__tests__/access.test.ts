@@ -22,19 +22,30 @@ import {
 } from '../access'
 
 const LISTENER = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210'
-const input: AwsAccessInput = { accountId: '123456789012', region: 'eu-central-1', appsListenerArn: LISTENER, vpcId: 'vpc-0123456789abcdef0' }
+const BROKER = 'arn:aws:lambda:eu-central-1:123456789012:function:fabrika-certificate-broker'
+const HOSTS = ['iam.example.com', 'control.example.com', 'operations.example.com', 'apps.example.com']
+const input: AwsAccessInput = {
+	accountId: '123456789012',
+	region: 'eu-central-1',
+	appsListenerArn: LISTENER,
+	vpcId: 'vpc-0123456789abcdef0',
+	installationHosts: HOSTS,
+}
 const installation = { accountId: '123456789012', region: 'eu-central-1', cluster: AWS_APPS_CLUSTER, sourcesBucket: awsSourcesBucket('123456789012') }
 
 interface Statement {
 	readonly Effect: string
+	/** Empty for a statement of `NotAction`. */
 	readonly Action: readonly string[]
+	readonly NotAction?: readonly string[]
 	readonly Resource: readonly string[]
 	readonly Condition?: Readonly<Record<string, Readonly<Record<string, string | readonly string[]>>>>
 }
 
 /** The statements as IAM reads them: one action and one resource list each. */
 function statementsOf(statements: readonly JsonValue[]): readonly Statement[] {
-	return JSON.parse(JSON.stringify(statements))
+	const parsed: readonly (Omit<Statement, 'Action'> & { readonly Action?: readonly string[] })[] = JSON.parse(JSON.stringify(statements))
+	return parsed.map((statement) => ({ ...statement, Action: statement.Action ?? [] }))
 }
 
 /** Whether IAM's pattern `pattern` (`*` any run, `?` one character) matches `value`. */
@@ -112,6 +123,40 @@ describe("the installation's access", () => {
 				}
 			}
 		}
+	})
+
+	test('Control attaches no certificate to a listener: only the broker does, which Control may invoke and nothing more', () => {
+		for (const action of ['elasticloadbalancing:AddListenerCertificates', 'elasticloadbalancing:RemoveListenerCertificates']) {
+			expect(allows.some((statement) => statement.Action.includes(action))).toBe(false)
+			expect(control.find((statement) => statement.Effect === 'Deny' && statement.Action.includes(action))?.Resource).toEqual(['*'])
+		}
+		const invoke = allows.filter((statement) => statement.Action.some((action) => action.startsWith('lambda:')))
+		expect(invoke.map((statement) => [statement.Action, statement.Resource])).toEqual([[['lambda:InvokeFunction'], [BROKER]]])
+		expect(control.find((statement) => statement.NotAction !== undefined)).toEqual({
+			Effect: 'Deny',
+			Action: [],
+			NotAction: ['lambda:InvokeFunction'],
+			Resource: [BROKER],
+		})
+	})
+
+	test("the broker: the applications' listener's certificates and the certificates' names alone, configured with the installation's hosts", () => {
+		const resources = JSON.parse(JSON.stringify(awsAccessStack(input).template)).Resources
+		expect(resources.CertificateBroker.Properties).toMatchObject({
+			FunctionName: 'fabrika-certificate-broker',
+			Handler: 'index.handler',
+			Environment: { Variables: { LISTENER_ARN: LISTENER, RESERVED_HOSTS: HOSTS.join(',') } },
+		})
+		expect(resources.CertificateBroker.Properties.Code.ZipFile.length).toBeLessThanOrEqual(4096)
+		expect(resources.CertificateBrokerRole.Properties.Path).toBe('/fabrika/platform/')
+		const grants = statementsOf(resources.CertificateBrokerRole.Properties.Policies[0].PolicyDocument.Statement)
+		expect(grants.map((statement) => [statement.Action, statement.Resource])).toEqual([
+			[['elasticloadbalancing:AddListenerCertificates', 'elasticloadbalancing:RemoveListenerCertificates'], [LISTENER]],
+			[['acm:DescribeCertificate'], ['arn:aws:acm:eu-central-1:123456789012:certificate/*']],
+			[['logs:CreateLogStream', 'logs:PutLogEvents'], ['arn:aws:logs:eu-central-1:123456789012:log-group:/aws/lambda/fabrika-certificate-broker:*']],
+		])
+		expect(() => checkAwsAccessInput({ ...input, installationHosts: [] })).toThrow("installation's own hosts")
+		expect(() => checkAwsAccessInput({ ...input, installationHosts: ['IAM.example.com'] })).toThrow("installation's own hosts")
 	})
 
 	test('a tag is written only in the call that creates its resource, and never by ACM or Cloud Map', () => {

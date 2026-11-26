@@ -21,13 +21,14 @@
 //   rule (`SetRulePriorities`), never a replacement that would take the certificate off the listener.
 //
 // UNVERIFIED: the resources' properties, that a rule's priority is unique per listener and at most 50,000, that a
-// host-header value's wildcards are `*` and `?` and match case-insensitively, and that removing a `ListenerCertificate`
-// takes the certificate off the listener follow the CloudFormation and Elastic Load Balancing references; none was
+// host-header value's wildcards are `*` and `?` and match case-insensitively, and that removing a certificate's custom
+// resource has the broker take the certificate off the listener follow the CloudFormation and Elastic Load Balancing references; none was
 // checked against an account.
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { type ListenerRule, MAX_RULE_PRIORITY } from './aws/elb'
 import type { AwsProxyCertificate } from './codecs'
+import { awsCertificateBrokerArn } from './installation/certificate-broker'
 import type { AwsStack } from './stack'
 
 /** One host the listener serves for the namespace: its certificate and its rule's priority. */
@@ -162,9 +163,11 @@ export function awsHostsStack(
 		const hostRule = `HostRule${nameOf(rule.host)}`
 		// Two hosts, or two certificates, of one name would be one resource: refused rather than one host lost.
 		if (certificate in resources || hostRule in resources) throw new Error(`aws: two hosts of the stack ${stackName} share a resource name`)
+		// Through the certificate broker, which Control's role may only invoke and which refuses a certificate naming an
+		// installation host (`installation/certificate-broker.ts`): Control's role holds no listener certificate action.
 		resources[certificate] = {
-			Type: 'AWS::ElasticLoadBalancingV2::ListenerCertificate',
-			Properties: { ListenerArn: listenerArn, Certificates: [{ CertificateArn: rule.certificateArn }] },
+			Type: 'Custom::FabrikaListenerCertificate',
+			Properties: { ServiceToken: awsCertificateBrokerArn(listenerArn), ListenerArn: listenerArn, CertificateArn: rule.certificateArn },
 		}
 		resources[hostRule] = {
 			Type: 'AWS::ElasticLoadBalancingV2::ListenerRule',

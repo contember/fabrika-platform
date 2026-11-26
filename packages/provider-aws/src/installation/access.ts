@@ -20,10 +20,11 @@
 //   `ecs:RegisterTaskDefinition`, `cloudformation:ListStacks`, ACM's request) are granted on `*`; a task definition
 //   Control registers can still only pass the applications' and namespaces' roles (`iam:PassRole`).
 //
-// OPEN, the plan's decision on the platform's certificates: Elastic Load Balancing scopes `AddListenerCertificates` by
-// the listener alone, so this role can attach any certificate of the account, a platform host's among them, to the
-// applications' listener. The plan weighs accepting it against a certificate broker (recommended), TLS outside ACM for
-// the platform, and an account of its own.
+// - **No certificate on a listener.** Elastic Load Balancing scopes `AddListenerCertificates` by the listener alone, so a
+//   role holding it could attach any certificate of the account, a platform host's among them, to the applications'
+//   listener. Control's role holds neither listener certificate action: a namespace's certificates go on through the
+//   certificate broker (`certificate-broker.ts`, decided 2026-11-26), which it may only invoke, and which refuses any
+//   certificate naming an installation host. Every other Lambda action on the broker is denied.
 //
 // The grants follow the plan's step 11, narrowed to what the code calls: Control deletes no stack and reads no stack
 // event, so neither is granted.
@@ -34,9 +35,17 @@
 // them before an installation relies on the policy.
 
 import type { JsonValue } from '@fabrika/provider-contract'
+import { CERTIFICATE_HOST } from '../aws/acm'
 import { LISTENER_ARN } from '../aws/elb'
 import { allow, awsAppsPermissionsBoundary } from '../environment-stack'
 import type { AwsStack } from '../stack'
+import {
+	AWS_CERTIFICATE_BROKER,
+	AWS_CERTIFICATE_BROKER_RUNTIME,
+	AWS_CERTIFICATE_BROKER_SOURCE,
+	AWS_MAX_INLINE_SOURCE,
+	awsCertificateBrokerArn,
+} from './certificate-broker'
 
 /** The access stack's name: under `fabrika-platform-`, which no grant of Control's role names. */
 export const AWS_ACCESS_STACK = 'fabrika-platform-access'
@@ -65,6 +74,11 @@ export interface AwsAccessInput {
 	readonly appsListenerArn: string
 	/** The installation's VPC (`network.ts`), the only one Control creates a security group in. */
 	readonly vpcId: string
+	/**
+	 * The installation's own hosts (`awsBalancersEnvironment`'s `FABRIKA_AWS_INSTALLATION_HOSTS`): the certificate broker
+	 * attaches no certificate naming one. Lower-case.
+	 */
+	readonly installationHosts: readonly string[]
 }
 
 const ACCOUNT_ID = /^\d{12}$/
@@ -78,6 +92,10 @@ export function checkAwsAccessInput(input: AwsAccessInput): AwsAccessInput {
 		throw new Error("aws: the applications' listener is not a listener of this account and region")
 	}
 	if (!/^vpc-[0-9a-f]{8,17}$/.test(input.vpcId)) throw new Error("aws: the installation's VPC id is of another form")
+	const hosts = input.installationHosts
+	if (hosts.length === 0 || !hosts.every((host) => CERTIFICATE_HOST.test(host)) || new Set(hosts).size !== hosts.length) {
+		throw new Error("aws: the installation's own hosts are none, one twice, or one that is not a lower-case host name")
+	}
 	return input
 }
 
@@ -256,11 +274,9 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 					[targetGroups],
 					tagged('aws:ResourceTag/fabrika:namespace'),
 				),
-				// The applications' listener alone: a namespace's hosts, their rules and certificates.
-				allow(
-					['elasticloadbalancing:CreateRule', 'elasticloadbalancing:AddListenerCertificates', 'elasticloadbalancing:RemoveListenerCertificates'],
-					[appsListenerArn],
-				),
+				// The applications' listener alone: a namespace's host rules. Its certificates go on through the broker.
+				allow(['elasticloadbalancing:CreateRule'], [appsListenerArn]),
+				allow(['lambda:InvokeFunction'], [awsCertificateBrokerArn(appsListenerArn)]),
 				allow(['elasticloadbalancing:ModifyRule', 'elasticloadbalancing:DeleteRule', 'elasticloadbalancing:SetRulePriorities'], [listenerRules]),
 				allow(
 					[
@@ -286,6 +302,10 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 				// The platform's own roles, Control's among them, whatever else is granted.
 				deny(['iam:*'], [`arn:aws:iam::${a}:role${AWS_PLATFORM_PATH}*`]),
 				deny(['iam:PassRole'], [`arn:aws:iam::${a}:role${AWS_PLATFORM_PATH}*`]),
+				// The broker: invoked, nothing else (its code, its configuration, its permissions stay the operator's).
+				{ Effect: 'Deny', NotAction: ['lambda:InvokeFunction'], Resource: [awsCertificateBrokerArn(appsListenerArn)] },
+				// No listener certificate, whatever else is granted: only the broker attaches one.
+				deny(['elasticloadbalancing:AddListenerCertificates', 'elasticloadbalancing:RemoveListenerCertificates'], ['*']),
 			],
 		},
 	]
@@ -371,6 +391,53 @@ export function awsAccessStack(input: AwsAccessInput): AwsStack {
 					}],
 				},
 			},
+		},
+	}
+	// The certificate broker: its role reaches the applications' listener's certificates and the certificates' names,
+	// nothing else; its configuration is the listener and the installation's hosts, never a request's.
+	if (AWS_CERTIFICATE_BROKER_SOURCE.length > AWS_MAX_INLINE_SOURCE) {
+		throw new Error("aws: the certificate broker's source is past CloudFormation's inline bound")
+	}
+	resources['CertificateBrokerLogGroup'] = {
+		Type: 'AWS::Logs::LogGroup',
+		Properties: { LogGroupName: `/aws/lambda/${AWS_CERTIFICATE_BROKER}`, RetentionInDays: 30 },
+	}
+	resources['CertificateBrokerRole'] = {
+		Type: 'AWS::IAM::Role',
+		Properties: {
+			RoleName: AWS_CERTIFICATE_BROKER,
+			Path: AWS_PLATFORM_PATH,
+			// Lambda takes an execution role without the confused-deputy keys; only a principal that may pass this role (the
+			// operator's stack, never Control, which is denied `iam:PassRole` on the platform's roles) can give it a function.
+			AssumeRolePolicyDocument: {
+				Version: '2012-10-17',
+				Statement: [{ Effect: 'Allow', Principal: { Service: 'lambda.amazonaws.com' }, Action: 'sts:AssumeRole' }],
+			},
+			Policies: [{
+				PolicyName: 'broker',
+				PolicyDocument: {
+					Version: '2012-10-17',
+					Statement: [
+						allow(['elasticloadbalancing:AddListenerCertificates', 'elasticloadbalancing:RemoveListenerCertificates'], [input.appsListenerArn]),
+						allow(['acm:DescribeCertificate'], [`arn:aws:acm:${region}:${accountId}:certificate/*`]),
+						allow(['logs:CreateLogStream', 'logs:PutLogEvents'], [`arn:aws:logs:${region}:${accountId}:log-group:/aws/lambda/${AWS_CERTIFICATE_BROKER}:*`]),
+					],
+				},
+			}],
+		},
+	}
+	resources['CertificateBroker'] = {
+		Type: 'AWS::Lambda::Function',
+		DependsOn: ['CertificateBrokerLogGroup'],
+		Properties: {
+			FunctionName: AWS_CERTIFICATE_BROKER,
+			Runtime: AWS_CERTIFICATE_BROKER_RUNTIME,
+			Handler: 'index.handler',
+			Role: { 'Fn::GetAtt': ['CertificateBrokerRole', 'Arn'] },
+			Timeout: 30,
+			MemorySize: 128,
+			Code: { ZipFile: AWS_CERTIFICATE_BROKER_SOURCE },
+			Environment: { Variables: { LISTENER_ARN: input.appsListenerArn, RESERVED_HOSTS: input.installationHosts.join(',') } },
 		},
 	}
 	for (const [index, managed] of awsControlPolicies(input).entries()) {

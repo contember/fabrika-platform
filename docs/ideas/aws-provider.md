@@ -666,7 +666,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         hosts stack's, and the conflict check keeps one namespace off another's host while Control is sound).
         CloudFormation also needs `stack/fabrika-nh-*` beside `stack/fabrika-ns-*` for the hosts stacks.
 
-        **The platform's certificates and `AddListenerCertificates`: OPEN, a decision for step 11.** Elastic Load
+        **The platform's certificates and `AddListenerCertificates`: decided 2026-11-26, (b) the broker** (built,
+        `installation/certificate-broker.ts`, its function and role in the access stack). Elastic Load
         Balancing scopes `AddListenerCertificates` by the listener alone: its condition keys are the resource tags,
         none names the certificate, and attaching one needs no ACM permission on it (the Service Authorization
         Reference for Elastic Load Balancing V2 and the `AddListenerCertificates` API reference, read 2026-11-26). So a
@@ -677,7 +678,7 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         alternatives:
         - **(a) Accept it and record it.** No cost. A compromised Control plus a DNS change or an on-path position
           serves a platform host with a valid certificate.
-        - **(b) A certificate broker (recommended).** Control's role loses `AddListenerCertificates` and
+        - **(b) A certificate broker (chosen).** Control's role loses `AddListenerCertificates` and
           `RemoveListenerCertificates`. A namespace's hosts stack attaches its certificates through a CloudFormation
           custom resource backed by one small Lambda function in the access stack, whose role alone holds those two
           actions on the applications' listener and `acm:DescribeCertificate`. It refuses any certificate whose
@@ -691,8 +692,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
           state, the client address needs the proxy protocol, a larger change of the proxy.
         - **(d) The platform's balancer and certificates in an account of their own.** The strongest separation, and
           the heaviest: a second account per installation, cross-account networking.
-          Until it is decided, the grants keep `AddListenerCertificates` and `RemoveListenerCertificates` on the
-          applications' listener alone, and the residual above stands;
+          As built: Control's role is denied both listener certificate actions on `*`, may invoke the broker and nothing
+          more of it (a deny of every other action on its ARN), and a hosts stack names each certificate as a
+          `Custom::FabrikaListenerCertificate` of the broker. The broker's configuration (the applications' listener, the
+          installation's hosts) is its environment, written by the access stack; it attaches to that listener alone, and
+          refuses a certificate one of whose names, exactly or by a wildcard, is an installation host;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
