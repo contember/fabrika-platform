@@ -109,6 +109,7 @@ async function stack(labels: boolean, options: { readonly membership?: boolean }
 		issuer: ORIGIN,
 		delegations: iam,
 		cache: new MemoryTokenCache(),
+		revocations: iam,
 	})
 	const app: ContractApp = boot(served, {
 		environment: {

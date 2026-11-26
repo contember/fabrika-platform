@@ -141,7 +141,7 @@ function service(options: FakeIamOptions, crossOrigins: [string, ...string[]] | 
 	const app = contractAppWith(TABLE, RESERVED, crossOrigins === null ? {} : { crossOrigins })
 	const manifest = parseProxyManifest({ apps: [app] })
 	if (manifest === null) throw new Error('the cross-origin manifest does not parse')
-	return { iam, verify: createVerifyService({ manifest, iam, issuer: ISSUER, cache: new MemoryTokenCache() }) }
+	return { iam, verify: createVerifyService({ manifest, iam, revocations: iam, issuer: ISSUER, cache: new MemoryTokenCache() }) }
 }
 
 /** What a browser sends before a cross-origin `fetch` with `Authorization` or a JSON body. */

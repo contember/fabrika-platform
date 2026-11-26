@@ -42,10 +42,11 @@ flowchart LR
   Caddy route matchers ([ADR-0022 rule 2](../decisions/0022-the-proxy-is-the-only-enforcement-point.md#2-caddy-owns-http-correctness-and-gets-no-vote-on-authorization)).
 - **The proxy holds no durable state.** Its token cache is in memory, per process
   ([ADR-0022 rule 1](../decisions/0022-the-proxy-is-the-only-enforcement-point.md#1-only-the-proxy-is-publicly-routed)).
-  The cache does decide: a process that holds a token minted from a session or a key reuses it until 30 s before it
-  expires, so after a revocation a warm process may still admit that caller for up to the token's 300 s lifetime while
-  a cold one already refuses ([`authorize.ts`](../../packages/proxy-core/src/authorize.ts),
-  `TOKEN_REFRESH_SKEW_SECONDS` in [`token.ts`](../../packages/auth-core/src/token.ts)).
+  A process that holds a token minted from a session or a key reuses it until 30 s before it expires, but only while
+  its last read of IAM's revocation feed is under 5 s old and lists no revocation of the token's subject that could postdate
+  its minting; otherwise it mints again. So after a revocation a warm process may still admit that caller for up
+  to 5 s, and a proxy whose feed read fails admits nothing from its cache
+  ([`revocations.ts`](../../packages/proxy-core/src/revocations.ts), [`authorize.ts`](../../packages/proxy-core/src/authorize.ts)).
 - **Exposure is refused at each deploy and watched between deploys.** `verify-exposure` refuses a deploy
   ([`plan.ts`](../../packages/provider-zerops/src/plan.ts)); Control's maintenance pass (every five minutes on Zerops)
   runs the same read-back through the provider's `exposure.check` and raises one `FabrikaExposureDetected` error event

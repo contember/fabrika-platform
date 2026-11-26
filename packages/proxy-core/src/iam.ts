@@ -15,6 +15,7 @@ import type {
 	ExchangeAuthCodeInput,
 	ExchangeAuthCodeResult,
 	IamGrantRpc,
+	IamRevocationRpc,
 	Jwks,
 	MintFromGrantInput,
 	MintFromGrantResult,
@@ -22,10 +23,13 @@ import type {
 	MintFromKeyResult,
 	MintTokenInput,
 	MintTokenResult,
+	RevocationsInput,
+	RevocationsResult,
 } from '@fabrika/auth-core'
 import { parseJwks } from '@fabrika/jwks'
 import { z } from 'zod'
 import { DEFAULT_IAM_TIMEOUT_MS } from './constants'
+import { revocationsResultSchema } from './revocations'
 
 const denialSchema = z.object({ ok: z.literal(false), reason: z.string() })
 const mintResultSchema = z.discriminatedUnion('ok', [
@@ -114,9 +118,10 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
  *   POST {origin}/auth/mint/grant     {app, resource, token, requestId} -> MintFromGrantResult   (ADR-0090)
  *   POST {origin}/auth/mint/exchange  {app, code, requestId}    -> ExchangeAuthCodeResult   (ADR-0022)
  *   POST {origin}/auth/mint/delegation {app, credential, requestId, endpoint} -> a grant or a denial (rule 6)
+ *   POST {origin}/auth/mint/revocations {since}                 -> RevocationsResult        (the revocation feed)
  *   GET  {origin}/.well-known/jwks.json                         -> Jwks                     (public)
  *
- * The five POST endpoints are the `/auth/mint/*` PROXY surface, authenticated by IAM's `proxyKey` — the
+ * The six POST endpoints are the `/auth/mint/*` PROXY surface, authenticated by IAM's `proxyKey` — the
  * least-privilege split ADR-0022 requires, kept apart from the management `/rpc/*` surface. They
  * answer **200 on any decided outcome, including a denial**: `{ ok: false, reason }` is "IAM answered:
  * no", a non-200 is "IAM could not be consulted". Both deny; only the second is an incident.
@@ -124,7 +129,7 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
  * Credentials always ride in the POST body, never in a URL — a URL ends up in access logs and error
  * strings; a body does not.
  */
-export class HttpIamGateway implements IamGateway, DelegationIssuer, IamGrantRpc {
+export class HttpIamGateway implements IamGateway, DelegationIssuer, IamGrantRpc, IamRevocationRpc {
 	private readonly origin: string
 	private readonly timeoutMs: number
 	private readonly key: string | undefined
@@ -198,6 +203,15 @@ export class HttpIamGateway implements IamGateway, DelegationIssuer, IamGrantRpc
 			throw new IamUnavailableError('requestDelegation')
 		}
 		return result.data.ok ? result.data : { ok: false, reason: result.data.reason }
+	}
+
+	/** An IAM without the feed answers 404, which is `IamUnavailableError` like any other non-200: the cache stays off. */
+	async revocations(input: RevocationsInput): Promise<RevocationsResult> {
+		const result = revocationsResultSchema.safeParse(await this.post('/auth/mint/revocations', input, 'revocations'))
+		if (!result.success) {
+			throw new IamUnavailableError('revocations')
+		}
+		return result.data
 	}
 
 	async getJwks(): Promise<Jwks> {

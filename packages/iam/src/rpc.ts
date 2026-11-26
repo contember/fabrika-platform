@@ -25,6 +25,7 @@ import type {
 	IamGrantRpc,
 	IamHandoffRpc,
 	IamMembershipRpc,
+	IamRevocationRpc,
 	IamRpc,
 	IamSignInSignalsRpc,
 	IamTerminalRpc,
@@ -40,6 +41,8 @@ import type {
 	MintTokenInput,
 	MintTokenResult,
 	PrincipalListItem,
+	RevocationsInput,
+	RevocationsResult,
 	RevokeKeyInput,
 	RevokeKeyResult,
 	SignInSignalsInput,
@@ -67,6 +70,7 @@ import {
 	revokeMember,
 } from './membership'
 import { acceptRequestId } from './request-id'
+import { revocations } from './revocation-feed'
 import { buildServices, type Services } from './services'
 import { signInSignals } from './sign-in-signals'
 import { getSigner } from './signing'
@@ -76,7 +80,7 @@ import { mintFromKey, mintToken } from './tokens'
 export function createIamRpc(
 	env: Env,
 	ctx: RequestContext,
-): IamRpc & IamHandoffRpc & IamGrantRpc & IamMembershipRpc & IamTerminalRpc & IamSignInSignalsRpc {
+): IamRpc & IamHandoffRpc & IamGrantRpc & IamRevocationRpc & IamMembershipRpc & IamTerminalRpc & IamSignInSignalsRpc {
 	// Built ONCE per RPC surface, not once per call (ARCH-1). It was constructed inside every method
 	// and, in `audit`, OUTSIDE the fail-closed try — so a configuration error there threw to the
 	// caller instead of failing closed. It also allocated an `OidcClient` and an email sender on the
@@ -314,6 +318,19 @@ export function createIamRpc(
 			} catch (err) {
 				logError('signInSignals failed', err)
 				throw new Error('sign-in signals could not be read')
+			}
+		},
+
+		/**
+		 * The proxy's revocation feed (`revocation-feed.ts`), reached only over the proxy's own surface. A failed read throws:
+		 * the proxy then holds its cache unusable and mints every request (fail closed).
+		 */
+		async revocations(input: RevocationsInput): Promise<RevocationsResult> {
+			try {
+				return await revocations(services, input)
+			} catch (err) {
+				logError('revocations failed', err)
+				throw new Error('revocations could not be read')
 			}
 		},
 

@@ -18,7 +18,7 @@ const MACHINE = [serviceRow('/*', ['machine'])]
 
 function run(endpoints: InstallationProxyEndpointRow[], options: FakeIamOptions, cache: MemoryTokenCache | null) {
 	const iam = new FakeIam(options)
-	return { iam, verify: createVerifyService({ manifest: manifestWith(endpoints), iam, issuer: ISSUER, cache }) }
+	return { iam, verify: createVerifyService({ manifest: manifestWith(endpoints), iam, revocations: iam, issuer: ISSUER, cache }) }
 }
 
 function stableLocation(raw: string | null): string | null {
@@ -91,7 +91,7 @@ describe('cache correctness', () => {
 	test('a cached entry inside the refresh skew is not reused', async () => {
 		const nearlyExpired = await signToken({ type: 'service' })
 		const iam = new FakeIam({ mintFromKey: { ok: true, token: nearlyExpired, expiresAt: future(5) } })
-		const verify = createVerifyService({ manifest: manifestWith(MACHINE), iam, issuer: ISSUER, cache: new MemoryTokenCache() })
+		const verify = createVerifyService({ manifest: manifestWith(MACHINE), iam, revocations: iam, issuer: ISSUER, cache: new MemoryTokenCache() })
 		await verify(verifyRequest({ bearer: 'px_ci' }))
 		await verify(verifyRequest({ bearer: 'px_ci' }))
 		// expiresAt is inside TOKEN_REFRESH_SKEW_SECONDS, so the entry is re-minted rather than ridden.
@@ -101,7 +101,7 @@ describe('cache correctness', () => {
 	test('two different credentials never share an entry', async () => {
 		const token = await signToken({ type: 'service' })
 		const iam = new FakeIam({ mintFromKey: { ok: true, token, expiresAt: future() } })
-		const verify = createVerifyService({ manifest: manifestWith(MACHINE), iam, issuer: ISSUER, cache: new MemoryTokenCache() })
+		const verify = createVerifyService({ manifest: manifestWith(MACHINE), iam, revocations: iam, issuer: ISSUER, cache: new MemoryTokenCache() })
 		await verify(verifyRequest({ bearer: 'px_a' }))
 		await verify(verifyRequest({ bearer: 'px_b' }))
 		expect(iam.seenKeys).toEqual(['px_a', 'px_b'])

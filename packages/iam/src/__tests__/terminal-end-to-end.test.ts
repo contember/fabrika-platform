@@ -321,6 +321,7 @@ async function world(): Promise<World> {
 	const proxy: VerifyService = createVerifyService({
 		manifest: { apps: [proxied] },
 		iam: rpc,
+		revocations: rpc,
 		issuer: ISSUER,
 		cache: new MemoryTokenCache(),
 		now: () => state.clock,

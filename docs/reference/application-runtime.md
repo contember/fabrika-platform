@@ -1059,7 +1059,7 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   that declares `issues: '<mount>'` and whose `Ref` carries the mount's `issuedBy` for its
   dimension. IAM binds the key to the object's whole chain; the answer is
   `{ id, url: '<prefix>/#<key>', expiresAt }`. The issuer, or a holder of `members.manage`
-  on the chain, revokes it; a token minted from it still works until it expires (300 s).
+  on the chain, revokes it; the proxy stops serving a token minted from it within 5 s (ADR-0022).
 - A cron job that declares `issues: '<mount>'`, with the mount's `issuedBy` and every grant
   among its actions, gets the same `ctx.links`. It issues for
   `await ctx.ref('<issuedBy>', '<dimension>', id)` and asks IAM with its own token; IAM
@@ -1150,8 +1150,8 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   to anyone: the row is the anonymous kind `public-spa`, so the proxy reads no credential,
   forwards no token and never bounces to login. The page reaches only the anonymous endpoints
   (a public procedure); every other call still needs a session. `{ public: true }` takes no other key.
-- Revocation takes effect within the token lifetime: a removed member or revoked link
-  keeps access until its cached token expires, at most 300 s (ADR-0022 rule 6).
+- A revoked link, session or key stops working within 5 s, when the proxy next reads IAM's revocation
+  feed. A removed member keeps access until its cached token expires, at most 300 s (ADR-0022 rule 6).
 
 ## Public procedures
 

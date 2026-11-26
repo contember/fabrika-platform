@@ -114,7 +114,7 @@ async function minted(
 
 function service(options: FakeIamOptions): { iam: FakeIam; verify: VerifyService } {
 	const iam = new FakeIam(options)
-	const verify = createVerifyService({ manifest: { apps: [ENTRY] }, iam, issuer: ISSUER, cache: new MemoryTokenCache() })
+	const verify = createVerifyService({ manifest: { apps: [ENTRY] }, iam, revocations: iam, issuer: ISSUER, cache: new MemoryTokenCache() })
 	return { iam, verify }
 }
 
@@ -342,7 +342,7 @@ const OPERATIONS = entryOf(serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth:
 async function decide(entry: ProxyApp, options: FakeIamOptions, request: VerifyRequestOptions) {
 	const iam = new FakeIam(options)
 	const logger = new CapturingLogger()
-	const verify = createVerifyService({ manifest: { apps: [entry] }, iam, issuer: ISSUER, cache: new MemoryTokenCache(), logger })
+	const verify = createVerifyService({ manifest: { apps: [entry] }, iam, revocations: iam, issuer: ISSUER, cache: new MemoryTokenCache(), logger })
 	const response = await verify(verifyRequest(request))
 	return { iam, response, reason: logger.lines.at(-1)?.fields['reason'] }
 }

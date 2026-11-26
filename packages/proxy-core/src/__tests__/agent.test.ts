@@ -119,9 +119,11 @@ function agentToken(options: ResourceSignOptions = {}): Promise<string> {
 }
 
 function service(grants: FakeGrants, options: { rows?: ProxyEndpointRow[]; iam?: FakeIam; cache?: MemoryTokenCache } = {}) {
+	const iam = options.iam ?? new FakeIam()
 	return createVerifyService({
 		manifest: { apps: [contractAppWith(options.rows ?? ROWS)] },
-		iam: options.iam ?? new FakeIam(),
+		iam,
+		revocations: iam,
 		issuer: ISSUER,
 		cache: options.cache ?? new MemoryTokenCache(),
 		grants,
@@ -173,6 +175,19 @@ describe('the exchange on a row that lists agent', () => {
 			expect((await again(verifyRequest(JSON_POST('/api/notes.list', token)))).status).toBe(204)
 		}
 		expect(short.seen).toHaveLength(2)
+	})
+
+	test('a cached exchange is not served once the revocation feed lists the person: the next request exchanges again', async () => {
+		const grants = new FakeGrants(await exchanged())
+		const now = Math.floor(Date.now() / 1000)
+		const iam = new FakeIam({ revocations: { ok: true, now, complete: true, subjects: [{ subject: 'user-1', at: now }] } })
+		const verify = service(grants, { iam })
+		const token = await agentToken()
+		for (let i = 0; i < 2; i++) {
+			expect((await verify(verifyRequest(JSON_POST('/api/notes.list', token)))).status).toBe(204)
+		}
+		expect(grants.seen).toHaveLength(2)
+		expect(iam.revocationsCalls).toBe(1)
 	})
 
 	test('a refused exchange is a 401 with the challenge, never a session fallback', async () => {
@@ -347,6 +362,7 @@ describe('the caller and the scope (ADR-0022 rule 3, step 5)', () => {
 		const verify = createVerifyService({
 			manifest: { apps: [contractAppWith(ROWS, [], { scheme: 'http' })] },
 			iam,
+			revocations: iam,
 			issuer: ISSUER,
 			cache: new MemoryTokenCache(),
 			grants,

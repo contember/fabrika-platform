@@ -43,9 +43,8 @@ export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = D
 			services.repositories.handoff.pruneCodes(nowSeconds),
 			// Delegation grants live two minutes and are single-use; invitations go a week after they expire.
 			services.repositories.membership.prune(nowSeconds, nowSeconds - INVITATION_RETENTION_SECONDS),
-			// Sessions, at expiry — no grace period, because an expired or revoked session is already
-			// refused at use and the row exists only to be deleted. `pruneSessions` was written, tested
-			// and then never called, so `sessions` grew for the life of every installation (SEC-13).
+			// Sessions at expiry, and a revoked one a token lifetime after its revocation, which the proxy's revocation
+			// feed reads until then. `pruneSessions` was once never called, so `sessions` grew for good (SEC-13).
 			services.repositories.sessions.pruneSessions(nowSeconds),
 			// Identifications live two minutes and are single-use, like handoff codes.
 			services.repositories.terminals.pruneIdentifications(nowSeconds),

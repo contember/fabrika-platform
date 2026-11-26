@@ -60,7 +60,7 @@
 // Each key is independent, and each unset key 404s only its own surface: a deployment with a proxy
 // and no control plane sets `proxyKey` alone, and vice versa.
 
-import type { IamGrantRpc, IamHandoffRpc, IamMembershipRpc, IamRpc, IamSignInSignalsRpc } from '@fabrika/auth-core'
+import type { IamGrantRpc, IamHandoffRpc, IamMembershipRpc, IamRevocationRpc, IamRpc, IamSignInSignalsRpc } from '@fabrika/auth-core'
 import { parseApproveDeviceAuthorizationInput, parseInspectDeviceAuthorizationInput, parseListOwnDeviceAuthorizationsInput } from '@fabrika/auth-core'
 import {
 	assignMemberSchema,
@@ -77,6 +77,7 @@ import {
 	mintFromKeySchema,
 	mintTokenSchema,
 	requestDelegationSchema,
+	revocationsSchema,
 	revokeKeySchema,
 	revokeLinkSchema,
 	revokeMemberSchema,
@@ -186,8 +187,8 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc & IamMembershi
 
 // ── The proxy surface: `/auth/mint/*` ─────────────────────────────────────────
 //
-// Five endpoints, fixed by `packages/proxy-core/src/iam.ts`: `mintToken`, `mintFromKey`,
-// `exchangeAuthCode`, `requestDelegation` and `mintFromGrant`. They are the COLD PATH of every request the proxy handles — the first exchange
+// Six endpoints, fixed by `packages/proxy-core/src/iam.ts`: `mintToken`, `mintFromKey`,
+// `exchangeAuthCode`, `requestDelegation`, `mintFromGrant` and the revocation feed `revocations`. They are the COLD PATH of every request the proxy handles — the first exchange
 // of a browser session, a `px_` key, or an ADR-0022 handoff code for a short-lived signed token — and
 // everything after that is a local JWKS verification inside the project. Do not change a
 // path or a body shape here without changing `HttpIamGateway` in the same commit: a mismatch fails
@@ -214,10 +215,13 @@ export const MINT_DELEGATION_PATH = `${MINT_PREFIX}delegation`
 /** Exchange an agent's device grant for the approving person's application token (ADR-0090). Body: `MintFromGrantInput`. */
 export const MINT_GRANT_PATH = `${MINT_PREFIX}grant`
 
+/** Which subjects lost something since the proxy's last read (ADR-0022). Body: `RevocationsInput`. */
+export const MINT_REVOCATIONS_PATH = `${MINT_PREFIX}revocations`
+
 /** True when `pathname` addresses the proxy mint surface. Checked BEFORE the public `/auth/*` routes. */
 export function isMintPath(pathname: string): boolean {
 	return pathname === MINT_SESSION_PATH || pathname === MINT_KEY_PATH || pathname === MINT_EXCHANGE_PATH || pathname === MINT_DELEGATION_PATH
-		|| pathname === MINT_GRANT_PATH
+		|| pathname === MINT_GRANT_PATH || pathname === MINT_REVOCATIONS_PATH
 }
 
 /**
@@ -245,7 +249,7 @@ export function isMintPath(pathname: string): boolean {
  */
 export async function handleMintHttp(
 	request: Request,
-	rpc: IamRpc & IamHandoffRpc & IamGrantRpc & Pick<IamMembershipRpc, 'requestDelegation'>,
+	rpc: IamRpc & IamHandoffRpc & IamGrantRpc & IamRevocationRpc & Pick<IamMembershipRpc, 'requestDelegation'>,
 	proxyKey: string,
 ): Promise<Response> {
 	if (proxyKey.trim() === '') {
@@ -282,6 +286,9 @@ export async function handleMintHttp(
 		}
 		if (path === MINT_GRANT_PATH) {
 			return json(await rpc.mintFromGrant(mintFromGrantSchema.parse(body)))
+		}
+		if (path === MINT_REVOCATIONS_PATH) {
+			return json(await rpc.revocations(revocationsSchema.parse(body)))
 		}
 		return problem(404, 'not found')
 	} catch (err) {

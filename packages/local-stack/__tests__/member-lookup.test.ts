@@ -108,6 +108,7 @@ async function start(): Promise<Stack> {
 		issuer: ORIGIN,
 		delegations: iam,
 		cache: new MemoryTokenCache(),
+		revocations: iam,
 	})
 	const app: ContractApp = boot(served, {
 		environment: {

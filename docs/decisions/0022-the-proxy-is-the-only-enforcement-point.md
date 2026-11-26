@@ -117,9 +117,10 @@ refuses a host whose API answers a request without the key with anything but 401
 sandbox still enters only through the namespace proxy, which reaches the Box router on `zbox:8081`; a sandbox's
 application port has `PROJECT` access, which the router serves only to a request from inside the project.
 
-**Invariant: the proxy holds no state that a decision depends on.** Its token cache is best-effort,
-in memory and per process. Without it IAM is called more often; no decision changes. Never make it
-shared or persistent.
+**Invariant: the proxy holds no state that a decision depends on to allow.** Its token cache and the
+revocation feed that gates it are best-effort, in memory and per process. Without them IAM is called more
+often; no decision changes. The feed only ever withholds a cached token, so the request mints and IAM
+decides. Never make either shared or persistent.
 
 ### 2. Caddy owns HTTP correctness and gets no vote on authorization
 
@@ -801,9 +802,34 @@ still refuses any `Authorization` header, as authorization.
   across an upgrade are ordinary entries tokens, which every release reads, and they expire within
   `DEFAULT_TOKEN_TTL_SECONDS` (300 s). An action a job declares stays in an administrator's token: it is an ordinary
   catalog action, which a procedure's requirement, a table policy or `can()` may read, and IAM sees none of them.
-- **Revocation takes effect within the token lifetime of 300 s.** This holds for sessions and for keys,
-  share links included. Membership operations are checked live at IAM. An expiring grant is a hard deadline: a token
-  expires no later than the earliest time at which an entry it carries loses its last supporting grant.
+- **Revocation reaches a cached token within `REVOCATION_FEED_INTERVAL_SECONDS` (5 s).** IAM's mint refuses a
+  revoked session or key at once; the proxy's token cache would still serve the token it minted earlier for up to
+  `DEFAULT_TOKEN_TTL_SECONDS` (300 s). So the proxy reads IAM's revocation feed (`IamRevocationRpc.revocations`, on
+  Cloudflare the `IAM` binding, on Zerops `POST /auth/mint/revocations` with the proxy key) at most once an interval,
+  and serves a cached token only while its last good read is younger than the interval and the token's subject has no
+  revocation that could postdate the token's `iat`. A revocation is stamped before it commits and a mint stamps `iat`
+  after its checks, so a token issued up to 10 s after a revocation of its subject counts as revoked; the same slack
+  covers clock skew between IAM instances. Otherwise it mints, and IAM decides. The feed lists every subject that,
+  in the last token lifetime, had its principal disabled, a session revoked, a key revoked (an anonymous key, share
+  links included, is its own subject) or an OAuth grant revoked. IAM reads it from the timestamps those writes
+  already set, so no writer has to remember the feed. SCIM deprovisioning, a console disable and a sign-out all reach
+  it the same way.
+  - **Fail closed.** No feed, a failed or refused read, a stale read and an answer that lists more than
+    `REVOCATION_FEED_MAX_SUBJECTS` (5 000) subjects each turn the cache off: every request mints until a read
+    succeeds. The last one also refuses every cached token issued up to that answer. A failed read is retried an
+    interval later, not per request. Each request waits for a read at most an interval, and a read that has not settled
+    by then is left behind, so a runtime that never settles one cannot hang the cache.
+  - **IAM keeps what the feed reads for a token lifetime.** The cron keeps a revoked session row, and with it its OAuth
+    grants, for `REVOCATION_FEED_WINDOW_SECONDS` after its revocation.
+  - The feed lists principal ids. Only the proxy reads it: IAM refuses it over a binding marked
+    `props.worker: 'application'`, so an application Worker deployed before that mark can read it until its next deploy,
+    as with `requestDelegation`.
+  - **What stays at the token lifetime of 300 s:** a narrowed grant or permission, a share link whose issuer is
+    disabled (the link's token names the link, not its issuer), and an OAuth resource token a client presents to an
+    `oauth` row, which the proxy verifies locally and never mints. The feed does not list the first two, and the third
+    never enters the cache; each token expires on its own.
+  - Membership operations are checked live at IAM. An expiring grant is a hard deadline: a token expires no later than
+    the earliest time at which an entry it carries loses its last supporting grant.
 
 Work units B5 and A12 built rule 6 at IAM, and B2 built the proxy side of delegation grants: a row
 marked `members` or `creates` gets a fresh grant from IAM's `requestDelegation` for every request,
@@ -879,6 +905,14 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   namespace declares `admission.origins` or its environment lists an origin, the operator re-pins that namespace
   (`namespaces update --proxy-source=current`). Control cannot refuse this deploy: it does not record the pin's
   release, and the 0.5 proxy of the window reads the field.
+- **The revocation feed is additive across version skew.** A proxy newer than its IAM gets a 404 on
+  `/auth/mint/revocations`, or a binding that rejects the method, and serves no cached token: every request mints, as
+  with the cache off, and every decision stays the same. A proxy older than its IAM never reads the feed and caches as
+  before, up to 300 s; IAM's new `mint-revocations` row is a `protocol` row of the form every proxy in the window
+  parses. **Rollout:** a fresh install and `fabrika platform upgrade` publish the row in the generated Zerops platform
+  manifest; IAM's migration `0045_revocation_feed` adds only partial indexes; no environment variable changes. A
+  namespace proxy reads the feed from the release its source pin names, and on Cloudflare from the next deploy of an
+  application environment.
 - **A new row form needs a proxy that reads it.** A `public` row, a `capabilities` requirement, an `anyOf`
   requirement, a file-response profile, a `cache` field and a webhook's `authorization: 'forward'` are each refused by an older proxy's strict parser, so a manifest that holds one never
   reaches a proxy that would serve it without its rule. **Rollout:** a contract without them keeps every digest byte

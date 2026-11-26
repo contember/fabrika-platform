@@ -7,7 +7,7 @@ import type {
 	ListOwnDeviceAuthorizationsInput,
 	ListOwnDeviceAuthorizationsResult,
 } from './device'
-import type { Jwks } from './token'
+import { DEFAULT_TOKEN_TTL_SECONDS, type Jwks } from './token'
 import type { PermissionEntry, PrincipalType, Scope } from './types'
 
 // ── IAM-native session auth (mint a per-app permission token from an SSO session) ──
@@ -126,6 +126,41 @@ export type MintFromGrantResult =
 /** The exchange of an agent's grant, as a contract of its own: only the proxy calls it. */
 export interface IamGrantRpc {
 	mintFromGrant(input: MintFromGrantInput): Promise<MintFromGrantResult>
+}
+
+// ── The revocation feed (ADR-0022, "Revocation reaches a cached token") ─────────
+//
+// The proxy verifies a cached token locally until it expires. To end it sooner, it asks IAM which subjects lost
+// something since its last read: a principal disabled, a session, key or OAuth grant revoked. A cached token of such a
+// subject minted no later than the revocation is dropped and minted again, and IAM decides. Like the mint operations it
+// is the proxy's alone, never a member of `IamRpc`.
+
+/** How far back the feed reaches: no token outlives `DEFAULT_TOKEN_TTL_SECONDS`, so an older revocation ends nothing. */
+export const REVOCATION_FEED_WINDOW_SECONDS = DEFAULT_TOKEN_TTL_SECONDS
+
+/** The most subjects one answer lists; past it the answer is `complete: false` and the proxy drops every cached token. */
+export const REVOCATION_FEED_MAX_SUBJECTS = 5000
+
+export interface RevocationsInput {
+	/** IAM's clock, unix seconds: the feed answers revocations at or after it, within the window. `null`: the whole window. */
+	since: number | null
+}
+
+/** A subject (a token's `sub`: a principal, or an anonymous credential) and the latest revocation of it, IAM's clock. */
+export interface RevokedSubject {
+	subject: string
+	at: number
+}
+
+export type RevocationsResult =
+	/** `now` is IAM's clock at the read; `complete: false` when more subjects were revoked than one answer lists. */
+	| { ok: true; now: number; complete: boolean; subjects: RevokedSubject[] }
+	/** The caller is not the proxy (an application's binding on Cloudflare). */
+	| { ok: false; reason: 'not_allowed' }
+
+/** The revocation feed, as a contract of its own: only the proxy calls it. */
+export interface IamRevocationRpc {
+	revocations(input: RevocationsInput): Promise<RevocationsResult>
 }
 
 // ── Sign-in signals for Operations' security alerts ───────────────────────────

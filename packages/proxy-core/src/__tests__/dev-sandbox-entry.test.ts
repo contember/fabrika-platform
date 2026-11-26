@@ -82,7 +82,7 @@ async function mintedFor(audience: string): Promise<MintTokenResult> {
 
 function service(options: FakeIamOptions, delegations: DelegationIssuer | null = null): { iam: RecordingIam; verify: VerifyService } {
 	const iam = new RecordingIam(options)
-	const verify = createVerifyService({ manifest: manifest(), iam, issuer: ISSUER, cache: new MemoryTokenCache(), delegations })
+	const verify = createVerifyService({ manifest: manifest(), iam, revocations: iam, issuer: ISSUER, cache: new MemoryTokenCache(), delegations })
 	return { iam, verify }
 }
 
