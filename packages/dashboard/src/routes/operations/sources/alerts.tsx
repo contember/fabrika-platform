@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { fmtAgo, fmtDate } from '../../../lib/format'
 import { operationsClient } from '../../../operations/client'
 
-const ALERT_KINDS: OperationsAlertKind[] = [
+const APPLICATION_ALERT_KINDS: OperationsAlertKind[] = [
 	'new_issue',
 	'regression',
 	'spike',
@@ -12,6 +12,8 @@ const ALERT_KINDS: OperationsAlertKind[] = [
 	'recovery',
 	'unhealthy_telemetry',
 ]
+/** The installation source carries sign-in alerts only; it is the one source with sign-in thresholds. */
+const INSTALLATION_ALERT_KINDS: OperationsAlertKind[] = ['security']
 
 export default createPage()
 	.params({ sourceId: 'string' })
@@ -24,8 +26,12 @@ export default createPage()
 	})
 	.route('/operations/sources/:sourceId/alerts')
 	.render(({ data, invalidate }) => {
+		const security = data.alerts.security
+		const kinds = security === null ? APPLICATION_ALERT_KINDS : INSTALLATION_ALERT_KINDS
 		const [threshold, setThreshold] = useState(String(data.alerts.spike?.threshold ?? 20))
-		const [scope, setScope] = useState<OperationsAlertKind>('new_issue')
+		const [accountThreshold, setAccountThreshold] = useState(String(security?.accountThreshold ?? ''))
+		const [installationThreshold, setInstallationThreshold] = useState(String(security?.installationThreshold ?? ''))
+		const [scope, setScope] = useState<OperationsAlertKind>(kinds[0] ?? 'new_issue')
 		const [target, setTarget] = useState('')
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
@@ -56,57 +62,106 @@ export default createPage()
 				{error && <p className="error-text" role="alert">{error}</p>}
 
 				<div className="board">
-					<section className="card">
-						<div className="card-head">
-							<h2>Spike detection</h2>
-						</div>
-						<div className="card-body">
-							<label>
-								Events in the evaluation window
-								<input
-									type="number"
-									min={1}
-									value={threshold}
-									onChange={(event) => setThreshold(event.target.value)}
-								/>
-							</label>
-							<div className="form-row">
-								<button
-									type="button"
-									className="primary"
-									disabled={busy || Number(threshold) < 1}
-									onClick={() =>
-										perform(() =>
-											operationsClient.updateSpikeAlert({
-												sourceId: data.source.id,
-												input: {
-													threshold: Number(threshold),
-													enabled: true,
-												},
-											})
-										)}
-								>
-									Save and enable
-								</button>
-								<button
-									type="button"
-									disabled={busy || data.alerts.spike === null}
-									onClick={() =>
-										perform(() =>
-											operationsClient.updateSpikeAlert({
-												sourceId: data.source.id,
-												input: {
-													threshold: data.alerts.spike?.threshold ?? Number(threshold),
-													enabled: false,
-												},
-											})
-										)}
-								>
-									Disable
-								</button>
+					{security !== null && (
+						<section className="card">
+							<div className="card-head">
+								<h2>Sign-in thresholds</h2>
 							</div>
-						</div>
-					</section>
+							<div className="card-body">
+								<label>
+									Refused sign-ins per account in 15 minutes
+									<input
+										type="number"
+										min={1}
+										value={accountThreshold}
+										onChange={(event) => setAccountThreshold(event.target.value)}
+									/>
+								</label>
+								<label>
+									Refused sign-ins across the installation in 15 minutes
+									<input
+										type="number"
+										min={1}
+										value={installationThreshold}
+										onChange={(event) => setInstallationThreshold(event.target.value)}
+									/>
+								</label>
+								<div className="form-row">
+									<button
+										type="button"
+										className="primary"
+										disabled={busy || !positiveInteger(accountThreshold) || !positiveInteger(installationThreshold)}
+										onClick={() =>
+											perform(() =>
+												operationsClient.updateSecurityAlert({
+													sourceId: data.source.id,
+													input: {
+														accountThreshold: Number(accountThreshold),
+														installationThreshold: Number(installationThreshold),
+													},
+												})
+											)}
+									>
+										Save
+									</button>
+								</div>
+								<p className="hint">Each privileged sign-in alerts on its own. Nothing is sent until a Security rule and channel are enabled.</p>
+							</div>
+						</section>
+					)}
+					{security === null && (
+						<section className="card">
+							<div className="card-head">
+								<h2>Spike detection</h2>
+							</div>
+							<div className="card-body">
+								<label>
+									Events in the evaluation window
+									<input
+										type="number"
+										min={1}
+										value={threshold}
+										onChange={(event) => setThreshold(event.target.value)}
+									/>
+								</label>
+								<div className="form-row">
+									<button
+										type="button"
+										className="primary"
+										disabled={busy || Number(threshold) < 1}
+										onClick={() =>
+											perform(() =>
+												operationsClient.updateSpikeAlert({
+													sourceId: data.source.id,
+													input: {
+														threshold: Number(threshold),
+														enabled: true,
+													},
+												})
+											)}
+									>
+										Save and enable
+									</button>
+									<button
+										type="button"
+										disabled={busy || data.alerts.spike === null}
+										onClick={() =>
+											perform(() =>
+												operationsClient.updateSpikeAlert({
+													sourceId: data.source.id,
+													input: {
+														threshold: data.alerts.spike?.threshold ?? Number(threshold),
+														enabled: false,
+													},
+												})
+											)}
+									>
+										Disable
+									</button>
+								</div>
+							</div>
+						</section>
+					)}
 
 					<section className="card">
 						<div className="card-head">
@@ -114,7 +169,7 @@ export default createPage()
 						</div>
 						<div className="card-body flush">
 							<div className="feed">
-								{ALERT_KINDS.map((kind) => {
+								{kinds.map((kind) => {
 									const enabled = data.alerts.rules.find((rule) => rule.kind === kind)?.enabled ?? false
 									return (
 										<div className="feed-row" key={kind}>
@@ -217,8 +272,8 @@ export default createPage()
 						<div className="form-row">
 							<label>
 								Alert scope
-								<select value={scope} onChange={(event) => setScope(readKind(event.target.value))}>
-									{ALERT_KINDS.map((kind) => <option key={kind} value={kind}>{label(kind)}</option>)}
+								<select value={scope} onChange={(event) => setScope(readKind(kinds, event.target.value))}>
+									{kinds.map((kind) => <option key={kind} value={kind}>{label(kind)}</option>)}
 								</select>
 							</label>
 							<label className="field-wide">
@@ -314,8 +369,13 @@ export default createPage()
 		)
 	})
 
-function readKind(value: string): OperationsAlertKind {
-	return ALERT_KINDS.find((kind) => kind === value) ?? 'new_issue'
+function readKind(kinds: OperationsAlertKind[], value: string): OperationsAlertKind {
+	return kinds.find((kind) => kind === value) ?? kinds[0] ?? 'new_issue'
+}
+
+function positiveInteger(value: string): boolean {
+	const parsed = Number(value)
+	return Number.isInteger(parsed) && parsed >= 1
 }
 
 function label(kind: OperationsAlertKind): string {
