@@ -179,8 +179,10 @@ follow this decision. IAM serves a `write` grant at an environment whose `agent-
 `open` (unprotected, or protected with mode `off` and no passkey), and at one mirrored as `passkey` when a passkey
 confirmed the grant's approval (ADR-0083 §1, §4). The strict default is `off` with `stepUp: webauthn`: approving
 `write` there asks the person's passkey on the device page, on IAM's host, bound to the attempt, the scope and the
-lifetime they chose. IAM records when it answered on the attempt and on the grant (`passkey_confirmed_at`); a `write`
-grant without it is refused there as under `refuse`. A person without a passkey is offered `read`, with a link to add
+lifetime they chose. IAM records when it answered and which passkey answered on the attempt and on the grant
+(`passkey_confirmed_at`, `passkey_credential_id`), and the person's account page names that passkey; a `write` grant
+without a confirmation is refused there as under `refuse`. An administrator's passkey reset revokes the person's grants a
+reset passkey confirmed, so a lost authenticator does not leave them live until the login ends. A person without a passkey is offered `read`, with a link to add
 one. An environment with no gate mirrored reads `refuse`: the absence fails closed. IAM reads the gate on the device
 page and at every exchange, so a gate that tightens refuses a `write` grant from its next exchange on
 (`write_refused`), for as long as it holds. The
@@ -206,9 +208,10 @@ exchange in step 3, the scope's kinds in step 5) and "Principal kinds" say so.
   helper keys its refresh tokens by origin and scope, an addition to the spec's custody step.
 - **Rollout.**
   - The narrowing adds no column: the scope token is stored in `oauth_grants.scopes` as every scope is. The spec's
-    migrations (the grant's label, the audit actor columns, the mirror, `passkey_confirmed_at`) are additive. A `write`
-    grant approved before `passkey_confirmed_at` existed carries NULL, so it keeps being served only where the gate is
-    `open`.
+    migrations (the grant's label, the audit actor columns, the mirror, `passkey_confirmed_at`, `passkey_credential_id`)
+    are additive. A `write` grant approved before `passkey_confirmed_at` existed carries NULL, so it keeps being served
+    only where the gate is `open`. One confirmed before `passkey_credential_id` existed names no passkey: the account
+    page says only that a passkey confirmed it, and a passkey reset of its person revokes it.
   - No generated file or environment variable changes. An application that does not declare `agent` is served
     exactly as before.
   - A framework release that declares `agent` needs a platform release that knows it. Control reads the contract with

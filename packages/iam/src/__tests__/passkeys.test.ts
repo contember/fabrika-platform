@@ -4,7 +4,7 @@
 // authenticator is a WebCrypto key pair (`helpers/webauthn.ts`); IAM's verifier is real. Postgres runs when
 // FABRIKA_TEST_POSTGRES_URL is set and skips cleanly otherwise.
 
-import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { AGENT_CLIENT_ID, SESSION_COOKIE } from '@fabrika/auth-core'
 import {
 	NO_PASSKEY_ERROR,
 	type PasskeyCreationOptions,
@@ -160,6 +160,35 @@ async function installation(engine: Engine) {
 }
 
 type Installation = Awaited<ReturnType<typeof installation>>
+
+/** A live agent `write` grant of `principalId` that the passkey `credentialId` confirmed. */
+async function confirmedAgentGrant(i: Installation, principalId: string, credentialId: string): Promise<string> {
+	const now = unixNow()
+	const id = uuidv7()
+	const sessionId = await i.repositories.sessions.createSession({
+		tokenHash: await hashToken(randomToken(32)),
+		principalId,
+		authenticationMethod: 'password',
+		expiresAt: now + 3600,
+	})
+	await i.repositories.oauth.createGrant({
+		id,
+		principal_id: principalId,
+		session_id: sessionId,
+		client_id: AGENT_CLIENT_ID,
+		app: 'notes@prod',
+		resource: 'https://notes.example.test',
+		resources: null,
+		scopes: '["write"]',
+		created_at: now,
+		expires_at: now + 3600,
+		revoked_at: null,
+		agent_label: null,
+		passkey_confirmed_at: now,
+		passkey_credential_id: credentialId,
+	}, { token_hash: await hashToken(randomToken(32)), redirect_uri: 'urn:device', challenge: '', expires_at: now + 60 })
+	return id
+}
 
 function result<T>(answer: Answer, guard: (value: unknown) => value is T): T {
 	const value = prop(answer.body, 'result')
@@ -558,12 +587,18 @@ for (const { name, engine, skip } of engines) {
 				const authenticator = await TestAuthenticator.create()
 				expect(await added(i, person, authenticator)).toBe('passkey_added')
 				const pending = await challenged(i, person, 'approval:item-x')
+				const [held] = await i.repositories.passkeys.list(person)
+				const confirmed = await confirmedAgentGrant(i, person, held?.credential_id ?? 'none')
 
 				const listed = await i.as(admin, 'passkeys.listOf', { principalId: person })
 				expect(listed.status).toBe(200)
 				expect(JSON.stringify(listed.body)).toContain('Laptop')
 				expect(prop(prop(await i.as(admin, 'passkeys.reset', { principalId: person }), 'body'), 'result')).toEqual({ removed: 1 })
 				expect(await i.labels(person)).toEqual([])
+				// The agent grant the passkey confirmed ended with it, recorded under the administrator.
+				expect((await i.repositories.oauth.grant(confirmed))?.revoked_at).toBeNumber()
+				const revocations = await i.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: person, limit: 5 })
+				expect(revocations.map((event) => [event.principal_id, JSON.parse(event.metadata ?? 'null')])).toEqual([[admin, { reason: 'passkey_reset' }]])
 				// Its open challenges went with it.
 				const url = new URL(pending.url)
 				expect((await i.get(person, `${url.pathname}${url.search}`)).status).toBe(410)

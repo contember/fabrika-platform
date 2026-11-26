@@ -19,6 +19,7 @@ import {
 import type { IamAppContext } from '../app'
 import { stepUpUrl } from '../auth/passkey-pages'
 import { consumeStepUp, issueAssertionChallenge, passkeyDto, type PasskeyRefusal, relyingParty } from '../passkeys'
+import { unixNow } from '../repositories/sql'
 import { type AdminContext, adminEvent, fail } from './context'
 
 /** The person behind a signed-in session's console token. */
@@ -74,12 +75,24 @@ export async function listPasskeysOf(c: AdminContext, input: PrincipalIdInput): 
 	return { items: (await c.services.repositories.passkeys.list(input.principalId)).map(passkeyDto) }
 }
 
-/** Remove every passkey of the person, recorded as `iam.passkey.reset`; a person without one records nothing. */
+/**
+ * Remove every passkey of the person, recorded as `iam.passkey.reset`; a person without one records nothing. The agent
+ * grants those passkeys confirmed end with them, recorded as one `iam.oauth.grant.revoke` (`reason: 'passkey_reset'`).
+ */
 export async function resetPasskeys(c: AdminContext, input: PrincipalIdInput): Promise<PasskeyResetResponse> {
 	await requireInstallationPrincipal(c, input.principalId)
-	const removed = await c.services.repositories.passkeys.reset(
+	const { removed } = await c.services.repositories.passkeys.reset(
 		input.principalId,
-		adminEvent(c, { action: 'iam.passkey.reset', resourceType: 'principal', resourceId: input.principalId }),
+		{
+			reset: adminEvent(c, { action: 'iam.passkey.reset', resourceType: 'principal', resourceId: input.principalId }),
+			revocation: adminEvent(c, {
+				action: 'iam.oauth.grant.revoke',
+				resourceType: 'principal',
+				resourceId: input.principalId,
+				metadata: { reason: 'passkey_reset' },
+			}),
+		},
+		unixNow(),
 	)
 	return { removed }
 }

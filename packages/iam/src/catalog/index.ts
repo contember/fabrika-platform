@@ -121,6 +121,11 @@ export interface PageText {
 		readonly scopes: string
 		readonly allowed: string
 		readonly ends: string
+		/** Which passkey confirmed an agent's `write` grant: one the person holds, by its label, or one since removed. */
+		readonly confirmedWith: (passkey: string) => string
+		readonly confirmedWithRemoved: string
+		/** A grant confirmed before IAM recorded which passkey answered. */
+		readonly confirmedWithUnrecorded: string
 		readonly revoke: string
 		readonly revoked: string
 		readonly alreadyEnded: string

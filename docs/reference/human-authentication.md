@@ -176,10 +176,12 @@ takes an assertion bound to `iam:passkeys.remove:<id>`. Otherwise a browser driv
 authenticator of its own and pass every later step-up. The first registration has no such check, so a stolen session
 can register the first passkey of a person who has none. It is audited, and a reset removes it. A person who can no
 longer answer with any passkey asks an installation administrator. The administrator removes every passkey of that
-person: "Remove all passkeys" on the person's Sign-in tab, or `passkeys.reset` over `/admin/rpc`.
+person: "Remove all passkeys" on the person's Sign-in tab, or `passkeys.reset` over `/admin/rpc`. The reset also
+revokes the person's agent grants that one of those passkeys confirmed (ADR-0090 §5), and denies an approval so
+confirmed that the agent has not redeemed yet.
 
 **Records.** `iam.passkey.register` and `iam.passkey.remove` are filed under the person, and `iam.passkey.reset`
-under the administrator. Each is written in its change's own transaction. A verified assertion records only its use,
+under the administrator, with one `iam.oauth.grant.revoke` (`reason: passkey_reset`) when the reset revoked a grant. Each is written in its change's own transaction. A verified assertion records only its use,
 as the passkey's last-used time.
 
 **The step-up seam** is `passkeys.challenge` and `passkeys.verify` of IAM's `/admin/rpc`, for a person in a signed-in

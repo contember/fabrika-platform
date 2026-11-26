@@ -199,6 +199,7 @@ async function seedBothSides(h: Harness): Promise<string> {
 				revoked_at: null,
 				agent_label: null,
 				passkey_confirmed_at: null,
+				passkey_credential_id: null,
 			},
 			{ token_hash: `code-${grantId}`, redirect_uri: 'https://claude.example.test/cb', challenge: 'c'.repeat(43), expires_at: NOW + 60 },
 		)
