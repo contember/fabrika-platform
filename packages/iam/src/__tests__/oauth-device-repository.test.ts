@@ -45,6 +45,7 @@ function attempt(now: number) {
 		resources: '["https://control.example.test/api/rpc"]',
 		scopes: '["deploy:alpha"]',
 		interval_seconds: 5,
+		agent_label: null,
 		created_at: now,
 		expires_at: now + 300,
 	}
@@ -99,6 +100,7 @@ for (const engine of engines) {
 				created_at: now,
 				expires_at: now + 3600,
 				revoked_at: null,
+				agent_label: null,
 			}
 			const audit = {
 				requestId: 'request-device',

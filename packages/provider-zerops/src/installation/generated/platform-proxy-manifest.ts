@@ -128,6 +128,16 @@ export const PLATFORM_PROXY_MANIFEST_TEMPLATE: PlatformProxyManifestTemplate = {
 						oauth: null,
 					},
 					{
+						id: 'mint-grant',
+						kind: 'protocol',
+						method: '*',
+						path: '/auth/mint/grant',
+						callers: [],
+						requirement: null,
+						admission: null,
+						oauth: null,
+					},
+					{
 						id: 'admin-rpc',
 						kind: 'protocol',
 						method: 'POST',

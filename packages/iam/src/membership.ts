@@ -106,6 +106,8 @@ interface MemberCaller {
 	/** What the principal holds live and until when: what a grant it gives may not outlive (S8). */
 	readonly supports: readonly HeldEntry[]
 	readonly app: string
+	/** True when the caller is a person's token an agent holds (`act`, ADR-0090), false when the principal calls itself. */
+	readonly agent: boolean
 }
 
 type CallerOutcome = { ok: true; caller: MemberCaller } | MembershipFailure
@@ -114,21 +116,40 @@ type CallerOutcome = { ok: true; caller: MemberCaller } | MembershipFailure
  * Resolve the caller and its LIVE permissions, never more than its credential carries. A token's `perms`
  * are a snapshot up to five minutes old, so only the entries the principal still holds count; a `px_` key
  * is already resolved live, downscoped by its own grants. An
- * anonymous credential, a share link included, is never a member caller. `userOnly` refuses a service
+ * anonymous credential, a share link included, is never a member caller. A `write` operation refuses a service
  * principal: a workload creates no scope and manages no member, so a form plus a job cannot sign anyone up.
  */
-async function resolveMemberCaller(services: Services, env: CallerEnv, input: MembershipCaller, userOnly: boolean): Promise<CallerOutcome> {
-	return memberCallerOf(services, input, await resolveCaller(services, env, input), userOnly)
+async function resolveMemberCaller(
+	services: Services,
+	env: CallerEnv,
+	input: MembershipCaller,
+	operation: 'read' | 'write',
+): Promise<CallerOutcome> {
+	const writes = operation === 'write'
+	return memberCallerOf(services, input, await resolveCaller(services, env, input), { userOnly: writes, writes })
 }
 
-async function memberCallerOf(services: Services, input: MembershipCaller, resolution: CallerResolution, userOnly: boolean): Promise<CallerOutcome> {
+/**
+ * The member caller of a resolved credential. `writes` refuses a person's token an agent holds under a `read` scope
+ * (ADR-0090): it makes no membership, scope or link change and obtains no delegation grant.
+ */
+async function memberCallerOf(
+	services: Services,
+	input: MembershipCaller,
+	resolution: CallerResolution,
+	operation: { userOnly: boolean; writes: boolean },
+): Promise<CallerOutcome> {
 	if (!resolution.ok) {
 		return { ok: false, reason: resolution.reason }
 	}
 	const { caller, verifiedApp } = resolution
-	if (caller.type === undefined || (userOnly && caller.type !== 'user')) {
+	if (caller.type === undefined || (operation.userOnly && caller.type !== 'user')) {
 		return NOT_ALLOWED
 	}
+	if (operation.writes && caller.act !== undefined && caller.act.scope.mode !== 'write') {
+		return NOT_ALLOWED
+	}
+	const agent = caller.act !== undefined
 	const principal = await services.repositories.principals.getPrincipalById(caller.id)
 	if (principal === null) {
 		return { ok: false, reason: 'unknown_principal' }
@@ -138,7 +159,7 @@ async function memberCallerOf(services: Services, input: MembershipCaller, resol
 	}
 	const live = await resolveAuthorityAt(services, principal, verifiedApp)
 	if (input.credential?.startsWith(API_KEY_PREFIX) === true) {
-		return { ok: true, caller: { principal, permissions: caller.permissions, supports: live.supports, app: verifiedApp } }
+		return { ok: true, caller: { principal, permissions: caller.permissions, supports: live.supports, app: verifiedApp, agent } }
 	}
 	// A token is a ceiling too: one minted from a downscoped key carries only that key's grants. A person's token from a
 	// terminal is held to what that terminal brings now: the ceiling-narrowed person and the terminal's own grants.
@@ -147,7 +168,7 @@ async function memberCallerOf(services: Services, input: MembershipCaller, resol
 		return { ok: false, reason: 'invalid_token' }
 	}
 	const permissions = caller.permissions.filter((entry) => permits(held.permissions, entry.action, entry.scope ?? undefined))
-	return { ok: true, caller: { principal, permissions, supports: held.supports, app: verifiedApp } }
+	return { ok: true, caller: { principal, permissions, supports: held.supports, app: verifiedApp, agent } }
 }
 
 /**
@@ -176,7 +197,7 @@ async function resolveLinkOperationCaller(services: Services, env: CallerEnv, in
 			services,
 			input,
 			{ ok: true, caller: { ...caller, ...(type === undefined ? {} : { type }) }, verifiedApp },
-			false,
+			{ userOnly: false, writes: true },
 		)
 		return member.ok ? { ...member, job: null } : member
 	}
@@ -198,7 +219,13 @@ async function resolveLinkOperationCaller(services: Services, env: CallerEnv, in
 	const permissions = caller.permissions.filter((entry) => entry.scope === null && declaration.actions.includes(entry.action))
 	return {
 		ok: true,
-		caller: { principal, permissions, supports: permissions.map((entry) => ({ action: entry.action, scope: null, until: null })), app: verifiedApp },
+		caller: {
+			principal,
+			permissions,
+			supports: permissions.map((entry) => ({ action: entry.action, scope: null, until: null })),
+			app: verifiedApp,
+			agent: false,
+		},
 		job: { name: workload.name, issues: declaration.issues, actions: declaration.actions },
 	}
 }
@@ -323,7 +350,7 @@ export async function requestDelegation(
 	ctx: RequestContext,
 	input: RequestDelegationInput,
 ): Promise<RequestDelegationResult> {
-	const resolved = await resolveMemberCaller(services, env, input, true)
+	const resolved = await resolveMemberCaller(services, env, input, 'write')
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
 	const endpoint = await services.repositories.appSchema.getDelegatedEndpoint(caller.app, input.endpoint)
@@ -354,7 +381,7 @@ export async function requestDelegation(
  * the application, not values IAM creates.
  */
 export async function createScope(services: Services, env: CallerEnv, ctx: RequestContext, input: CreateScopeInput): Promise<CreateScopeResult> {
-	const resolved = await resolveMemberCaller(services, env, input, true)
+	const resolved = await resolveMemberCaller(services, env, input, 'write')
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
 	const spent = await spendDelegation(services, caller, input, 'creates', input.dimension)
@@ -404,7 +431,7 @@ export async function createScope(services: Services, env: CallerEnv, ctx: Reque
  * principal already holds it: only the mailbox's owner, proving it with the emailed link, may accept.
  */
 export async function assignMember(services: Services, env: CallerEnv, ctx: RequestContext, input: AssignMemberInput): Promise<AssignMemberResult> {
-	const resolved = await resolveMemberCaller(services, env, input, true)
+	const resolved = await resolveMemberCaller(services, env, input, 'write')
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
 	const spent = await spendDelegation(services, caller, input, 'members', input.scope.type)
@@ -607,7 +634,7 @@ async function invitationEmail(
  * principal still holds it, so a value never loses its last creator.
  */
 export async function revokeMember(services: Services, env: CallerEnv, ctx: RequestContext, input: RevokeMemberInput): Promise<RevokeMemberResult> {
-	const resolved = await resolveMemberCaller(services, env, input, true)
+	const resolved = await resolveMemberCaller(services, env, input, 'write')
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
 	const spent = await spendDelegation(services, caller, input, 'members', input.scope.type)
@@ -684,7 +711,7 @@ function sameScope(invitation: InvitationRow, scope: Scope): boolean {
 }
 
 export async function listMembers(services: Services, env: CallerEnv, ctx: RequestContext, input: ListMembersInput): Promise<ListMembersResult> {
-	const resolved = await resolveMemberCaller(services, env, input, false)
+	const resolved = await resolveMemberCaller(services, env, input, 'read')
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
 	const problem = membershipScopeProblem(input.scope)
@@ -744,7 +771,7 @@ export async function listAppMembers(
 	_ctx: RequestContext,
 	input: ListAppMembersInput,
 ): Promise<ListAppMembersResult> {
-	const resolved = await resolveMemberCaller(services, env, input, false)
+	const resolved = await resolveMemberCaller(services, env, input, 'read')
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
 	const people = await services.repositories.appSchema.getAppMembers(caller.app)
@@ -817,7 +844,7 @@ function byCodeUnit(a: string, b: string): number {
 }
 
 export async function findMember(services: Services, env: CallerEnv, ctx: RequestContext, input: FindMemberInput): Promise<FindMemberResult> {
-	const resolved = await resolveMemberCaller(services, env, input, false)
+	const resolved = await resolveMemberCaller(services, env, input, 'read')
 	if (!resolved.ok) return resolved
 	const { caller } = resolved
 	const problem = membershipScopeProblem(input.scope)
@@ -1172,6 +1199,13 @@ export async function issueLink(services: Services, env: CallerEnv, ctx: Request
 	return { ok: true, key, id, expiresAt }
 }
 
+/** Whether `caller` holds the mount's `issuedBy` on some value of a stored link chain, as `issueLink` requires. */
+async function issuesOnChain(services: Services, caller: MemberCaller, mountName: string, storedChain: string): Promise<boolean> {
+	const mount = await services.repositories.appSchema.getLinkMount(caller.app, mountName)
+	const chain = parseStoredChain(storedChain)
+	return mount !== null && chain !== null && chain.some((scope) => permits(caller.permissions, mount.issued_by, scope))
+}
+
 /**
  * Revoke a link: by its issuer, or by a holder of `members.manage` on a value of its chain. A job revokes only a link
  * it issued, of the mount its declaration still names.
@@ -1186,7 +1220,10 @@ export async function revokeLink(services: Services, env: CallerEnv, ctx: Reques
 	}
 	if (job !== null) {
 		if (credential.issued_by !== caller.principal.id || credential.link_mount !== job.issues) return NOT_ALLOWED
-	} else if (credential.issued_by !== caller.principal.id) {
+	} else if (credential.issued_by === caller.principal.id) {
+		// An agent's token reaches only its own entries: it revokes the person's link only where it could issue one (ADR-0090 §4).
+		if (caller.agent && !await issuesOnChain(services, caller, credential.link_mount, credential.link_chain)) return NOT_ALLOWED
+	} else {
 		let manager = false
 		for (const scope of parseStoredChain(credential.link_chain) ?? []) {
 			const dimension = await services.repositories.appSchema.getScope(caller.app, scope.type)

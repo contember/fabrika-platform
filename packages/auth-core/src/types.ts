@@ -246,6 +246,11 @@ export interface AppSchema {
 	directory?: 'labels'
 	/** The app's identification page for a person at an enrolled terminal (ADR-0067); absent, no terminal lists it. */
 	terminal?: { identify: string }
+	/**
+	 * A group of the contract admits the caller `agent` (ADR-0090): the environment's origin is then an OAuth resource of
+	 * the agent client. Absent or false, IAM serves the environment to no agent.
+	 */
+	agentCallers?: boolean
 }
 
 /**

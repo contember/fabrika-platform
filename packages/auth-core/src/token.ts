@@ -524,7 +524,7 @@ function parseActClaims(value: unknown, perms: readonly PermissionEntry[]): Agen
 	if (client !== AGENT_CLIENT_ID || grant === undefined || token === undefined || !isActField(grant)) {
 		return undefined
 	}
-	if (label !== undefined && (typeof label !== 'string' || !isActField(label))) {
+	if (label !== undefined && (typeof label !== 'string' || !isAgentLabel(label))) {
 		return undefined
 	}
 	const scope = parseAgentScope(token)
@@ -536,6 +536,14 @@ function parseActClaims(value: unknown, perms: readonly PermissionEntry[]): Agen
 
 function isActField(value: string): boolean {
 	return value !== '' && value.trim() === value && value.length <= MAX_AGENT_ACT_FIELD_LENGTH
+}
+
+/** The name an agent gives itself (`agent_label`): not blank, at most 64 characters, no control character. */
+export function isAgentLabel(value: string): boolean {
+	return isActField(value) && [...value].every((char) => {
+		const code = char.codePointAt(0) ?? 0
+		return code > 0x1f && (code < 0x7f || code > 0x9f)
+	})
 }
 
 /** A job, webhook or mount name, or an application id. */

@@ -14,7 +14,7 @@
 // resolve the CALLER server-side from a forwarded IAM-native credential (`resolveCaller` — a
 // `px_token` verified against our own signing keys, or a `px_` key), never app-asserted. On a valid `px_token` the credential's `aud` identifies the app and supersedes the
 // SDK-passed `app` for the audit row. `audit` takes its app from the caller's verified token the same
-// way (`verifiedTokenApp`). Note what this does NOT cover: `mintToken`, `mintFromKey` and `getJwks`
+// way (`verifiedTokenAuthor`). Note what this does NOT cover: `mintToken`, `mintFromKey` and `getJwks`
 // authenticate no caller of their own — on Workers the binding's unreachability is what stands in for
 // that, so an HTTP transport MUST supply an equivalent (see `rpc-http.ts`).
 
@@ -22,6 +22,7 @@ import type {
 	AuditInput,
 	ExchangeAuthCodeInput,
 	ExchangeAuthCodeResult,
+	IamGrantRpc,
 	IamHandoffRpc,
 	IamMembershipRpc,
 	IamRpc,
@@ -31,6 +32,8 @@ import type {
 	Jwks,
 	ListPrincipalsInput,
 	ListPrincipalsResult,
+	MintFromGrantInput,
+	MintFromGrantResult,
 	MintFromKeyInput,
 	MintFromKeyResult,
 	MintTokenInput,
@@ -40,7 +43,8 @@ import type {
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
 import { IAM_APP } from './admin/router'
-import { resolveCaller, verifiedTokenApp } from './auth'
+import { mintFromGrant } from './agent-grant'
+import { resolveCaller, verifiedTokenAuthor } from './auth'
 import { auditLabelOf } from './db'
 import { approveDeviceAuthorization, denyDeviceAuthorization, inspectDeviceAuthorization, listOwnDeviceAuthorizations } from './device'
 import type { Env, RequestContext } from './env'
@@ -65,7 +69,7 @@ import { getSigner } from './signing'
 import { mintFromKey, mintToken } from './tokens'
 
 /** Build the RPC surface bound to one env + request context. */
-export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoffRpc & IamMembershipRpc & IamTerminalRpc {
+export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoffRpc & IamGrantRpc & IamMembershipRpc & IamTerminalRpc {
 	// Built ONCE per RPC surface, not once per call (ARCH-1). It was constructed inside every method
 	// and, in `audit`, OUTSIDE the fail-closed try — so a configuration error there threw to the
 	// caller instead of failing closed. It also allocated an `OidcClient` and an email sender on the
@@ -258,6 +262,41 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 			}
 		},
 
+		/**
+		 * Exchange an agent's device grant for the approving person's application token (ADR-0090 §3). Reached only over
+		 * the proxy's own surface, like `exchangeAuthCode`. Never throws — fails closed to `invalid_grant`.
+		 */
+		async mintFromGrant(raw: MintFromGrantInput): Promise<MintFromGrantResult> {
+			const input = withAcceptedRequestId(raw)
+			try {
+				const { result, principalId } = await mintFromGrant(services, env, input)
+				ctx.waitUntil(
+					services.repositories.audit.writeAuthLog({
+						requestId: input.requestId,
+						app: input.app,
+						kind: 'authenticate',
+						principalId,
+						decision: result.ok ? 'allow' : 'deny',
+						reason: result.ok ? 'mint_grant' : result.reason,
+					}),
+				)
+				return result
+			} catch (err) {
+				logError(`mintFromGrant failed for request '${input.requestId}'`, err)
+				ctx.waitUntil(
+					services.repositories.audit.writeAuthLog({
+						requestId: input.requestId,
+						app: input.app,
+						kind: 'authenticate',
+						principalId: null,
+						decision: 'deny',
+						reason: 'internal_error',
+					}),
+				)
+				return { ok: false, reason: 'invalid_grant' }
+			}
+		},
+
 		/** The public signing key set — fetched once per isolate by the SDK to verify tokens locally. */
 		async getJwks(): Promise<Jwks> {
 			const signer = await getSigner(env)
@@ -268,14 +307,15 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		 * Fire-and-forget domain audit write. Returns void and NEVER throws to the caller — a failed
 		 * audit write must not fail or delay the user-facing op. The app is the one the caller's token
 		 * was minted for; an event whose token does not verify is dropped with a warning, never written
-		 * under an app nobody proved.
+		 * under an app nobody proved. The agent a person's token acts for (`act`, ADR-0090) is read from
+		 * that same token, never from the event.
 		 */
 		audit(raw: AuditInput): Promise<void> {
 			const { credential, ...event } = withAcceptedRequestId(raw)
 			ctx.waitUntil(
-				verifiedTokenApp(services, env, credential)
-					.then((app) => {
-						if (app === null) {
+				verifiedTokenAuthor(services, env, credential)
+					.then((author) => {
+						if (author === null) {
 							console.warn(`audit event refused for request '${event.requestId}': the credential does not verify`)
 							return
 						}
@@ -284,12 +324,14 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 							principalId: event.principalId,
 							principalLabel: event.principalLabel,
 							credentialId: event.credentialId ?? null,
-							app,
+							app: author.app,
 							action: event.action,
 							resourceType: event.resourceType,
 							resourceId: event.resourceId ?? null,
 							diff: event.diff,
 							metadata: event.metadata,
+							actorId: author.act === undefined ? null : `oauth:${author.act.grant}`,
+							actorLabel: author.act?.label ?? null,
 						})
 					})
 					.catch((err: unknown) => {

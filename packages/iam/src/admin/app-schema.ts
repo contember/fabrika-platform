@@ -217,6 +217,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 			),
 			members: schema.members === undefined ? null : { ...schema.members, directory: schema.directory ?? null },
 			terminal: schema.terminal ?? null,
+			agentCallers: schema.agentCallers === true,
 		},
 		adminEvent(c, {
 			action: 'iam.app.schema.reconcile',
@@ -235,6 +236,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				mail: Object.entries(schema.mail ?? {}).flatMap(([kind, byLocale]) => Object.keys(byLocale ?? {}).map((locale) => `${kind}.${locale}`)),
 				members: schema.members ?? null,
 				terminal: schema.terminal ?? null,
+				agentCallers: schema.agentCallers === true,
 			},
 		}),
 	)

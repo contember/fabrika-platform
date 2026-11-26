@@ -15,6 +15,8 @@ export interface AuditEventRow {
 	diff: string | null
 	metadata: string | null
 	created_at: number
+	actor_id: string | null
+	actor_label: string | null
 }
 
 export interface AuthLogRow {
@@ -62,6 +64,9 @@ export interface AuditEventInput {
 	resourceId?: string | null
 	diff?: unknown
 	metadata?: unknown
+	/** The agent the event was made through (ADR-0090): `oauth:<grant id>` and its label, read from a verified token. */
+	actorId?: string | null
+	actorLabel?: string | null
 }
 
 export interface AuthLogInput {
@@ -98,7 +103,7 @@ export interface SqlChange {
 export type SqlDialect = 'sqlite' | 'postgres'
 
 const AUDIT_COLUMNS =
-	'(id, request_id, principal_id, principal_label, credential_id, app, action, resource_type, resource_id, diff, metadata, created_at)'
+	'(id, request_id, principal_id, principal_label, credential_id, app, action, resource_type, resource_id, diff, metadata, created_at, actor_id, actor_label)'
 
 /** The bound values of one audit row, in `AUDIT_COLUMNS` order; `id` is the row's own. */
 function auditValues(id: string, event: AuditEventInput): unknown[] {
@@ -115,10 +120,12 @@ function auditValues(id: string, event: AuditEventInput): unknown[] {
 		event.diff === undefined ? null : JSON.stringify(event.diff),
 		event.metadata === undefined ? null : JSON.stringify(event.metadata),
 		unixNow(),
+		event.actorId ?? null,
+		event.actorLabel ?? null,
 	]
 }
 
-const AUDIT_PLACEHOLDERS = '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?'
+const AUDIT_PLACEHOLDERS = '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?'
 
 /**
  * The INSERT of one audit row, for the batch of an unconditional change it records: the row and the change commit
@@ -139,7 +146,7 @@ export function auditEventAboutStatement(db: SqlDatabase, event: AuditEventInput
 	const before = values.slice(0, 8)
 	const after = values.slice(9)
 	return db
-		.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} SELECT ?, ?, ?, ?, ?, ?, ?, ?, (${resourceId.sql}), ?, ?, ?`)
+		.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} SELECT ?, ?, ?, ?, ?, ?, ?, ?, (${resourceId.sql}), ?, ?, ?, ?, ?`)
 		.bind(...before, ...resourceId.binds, ...after)
 }
 

@@ -139,6 +139,8 @@ export interface AppSchemaReconcile {
 	members?: { manage: string; list: string; directory: 'labels' | null } | null
 	/** The app's identification page at a terminal; absent or null removes the row. */
 	terminal?: { identify: string } | null
+	/** The schema admits the caller `agent` (ADR-0090); absent or false removes the row. */
+	agentCallers?: boolean
 }
 
 export class AppSchemaRepository {
@@ -195,6 +197,11 @@ export class AppSchemaRepository {
 	/** Every app that declares its own people, for the apps an administrator of one may administer. */
 	async listAppMembers(): Promise<AppMembersRow[]> {
 		return (await this.db.prepare('SELECT * FROM app_members ORDER BY app').all<AppMembersRow>()).results
+	}
+
+	/** True when the app's reconciled schema admits the caller `agent`, so its return origins are agent resources (ADR-0090). */
+	async admitsAgent(app: string): Promise<boolean> {
+		return (await this.db.prepare('SELECT app FROM app_agents WHERE app = ?').bind(app).first<{ app: string }>()) !== null
 	}
 
 	/** True when the app's schema was compiled from a contract (ADR-0022 rule 6). */
@@ -409,7 +416,11 @@ export class AppSchemaRepository {
 			this.db.prepare('DELETE FROM app_mail_templates WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_members WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_terminals WHERE app = ?').bind(app),
+			this.db.prepare('DELETE FROM app_agents WHERE app = ?').bind(app),
 		]
+		if (input.agentCallers === true) {
+			statements.push(this.db.prepare('INSERT INTO app_agents (app) VALUES (?)').bind(app))
+		}
 		if (input.terminal != null) {
 			statements.push(this.db.prepare('INSERT INTO app_terminals (app, identify) VALUES (?, ?)').bind(app, input.terminal.identify))
 		}

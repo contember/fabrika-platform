@@ -10,6 +10,7 @@ import type {
 	AuditInput,
 	ExchangeAuthCodeInput,
 	ExchangeAuthCodeResult,
+	IamGrantRpc,
 	IamHandoffRpc,
 	IamMembershipRpc,
 	IamRpc,
@@ -35,6 +36,7 @@ import {
 	isRpcPath,
 	MINT_DELEGATION_PATH,
 	MINT_EXCHANGE_PATH,
+	MINT_GRANT_PATH,
 	MINT_KEY_PATH,
 	MINT_SESSION_PATH,
 } from '../rpc-http'
@@ -98,7 +100,7 @@ describe('RPC input normalization', () => {
 })
 
 /** Records the last input each method received, and answers with a canned result. */
-interface Recorder extends IamRpc, IamHandoffRpc, IamMembershipRpc {
+interface Recorder extends IamRpc, IamHandoffRpc, IamGrantRpc, IamMembershipRpc {
 	calls: { method: string; input: unknown }[]
 }
 
@@ -151,6 +153,10 @@ function recorder(canned: Canned = {}): Recorder {
 		revokeKey(input: RevokeKeyInput): Promise<RevokeKeyResult> {
 			note('revokeKey', input)
 			return Promise.resolve({ ok: true, revoked: true })
+		},
+		mintFromGrant(input) {
+			note('mintFromGrant', input)
+			return Promise.resolve({ ok: false, reason: 'write_refused' })
 		},
 		requestDelegation(input) {
 			note('requestDelegation', input)
@@ -480,15 +486,17 @@ describe('the proxy mint surface', () => {
 		return { rpc, response: handleMintHttp(request, rpc, PROXY_KEY) }
 	}
 
-	test('claims exactly the four contract paths and nothing else under /auth', () => {
+	test('claims exactly the five contract paths and nothing else under /auth', () => {
 		expect(MINT_SESSION_PATH).toBe('/auth/mint/session')
 		expect(MINT_KEY_PATH).toBe('/auth/mint/key')
 		expect(MINT_EXCHANGE_PATH).toBe('/auth/mint/exchange')
 		expect(MINT_DELEGATION_PATH).toBe('/auth/mint/delegation')
+		expect(MINT_GRANT_PATH).toBe('/auth/mint/grant')
 		expect(isMintPath(MINT_SESSION_PATH)).toBe(true)
 		expect(isMintPath(MINT_KEY_PATH)).toBe(true)
 		expect(isMintPath(MINT_EXCHANGE_PATH)).toBe(true)
 		expect(isMintPath(MINT_DELEGATION_PATH)).toBe(true)
+		expect(isMintPath(MINT_GRANT_PATH)).toBe(true)
 		// The public auth routes must keep reaching `handleAuth`, so nothing else here is claimed.
 		expect(isMintPath('/auth/login')).toBe(false)
 		expect(isMintPath('/auth/callback')).toBe(false)
@@ -549,6 +557,18 @@ describe('the proxy mint surface', () => {
 		const body: unknown = await res.json()
 		expect(prop(body, 'ok')).toBe(true)
 		expect(prop(body, 'grant')).toBe('grant')
+	})
+
+	test('/auth/mint/grant forwards {app, resource, token, requestId} to mintFromGrant and answers a refusal with 200', async () => {
+		const input = { app: 'notes@prod', resource: 'https://notes.example.test', token: 'resource-token', requestId: 'r1' }
+		const { rpc, response } = mint(MINT_GRANT_PATH, input)
+		const res = await response
+		expect(res.status).toBe(200)
+		expect(rpc.calls).toEqual([{ method: 'mintFromGrant', input }])
+		expect(await res.json()).toEqual({ ok: false, reason: 'write_refused' })
+		const closed = mint(MINT_GRANT_PATH, input, null)
+		expect((await closed.response).status).toBe(401)
+		expect(closed.rpc.calls).toEqual([])
 	})
 
 	test('the delegation route is closed without the proxy key', async () => {

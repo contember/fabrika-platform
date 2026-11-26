@@ -1,4 +1,13 @@
-import { BUILTIN_ROLE_KEYS, isCimdClientId, isOAuthClientId, isOAuthResourceUri, isScopeParameterText, parseOAuthScopes } from '@fabrika/auth-core'
+import {
+	AGENT_CLIENT_ID,
+	BUILTIN_ROLE_KEYS,
+	isAgentLabel,
+	isCimdClientId,
+	isOAuthClientId,
+	isOAuthResourceUri,
+	isScopeParameterText,
+	parseOAuthScopes,
+} from '@fabrika/auth-core'
 import type { KeyGrant } from '@fabrika/auth-core'
 
 /**
@@ -139,8 +148,11 @@ export type OAuthTokenRequest =
 /** RFC 8628 §3.1, with every resource the grant is asked for (RFC 8707): each token names one of them. */
 export interface OAuthDeviceAuthorizationRequest {
 	client_id: string
+	/** Empty only for the agent client, which then asks for its default scope (ADR-0090 §2). */
 	scope: string[]
 	resources: string[]
+	/** The agent client's name for itself, shown to the person as the agent's own words; ignored for any other client. */
+	agent_label?: string
 }
 
 /** RFC 8628 §3.2. */
@@ -510,14 +522,19 @@ export function parseOAuthDeviceAuthorizationRequest(
 ): OAuthDeviceAuthorizationRequest | null {
 	const clientId = field(value.fields, 'client_id')
 	const scope = field(value.fields, 'scope')
-	if (!isOAuthClientId(clientId) || typeof scope !== 'string') return null
-	const scopes = parseOAuthScopes(scope.split(' '))
+	if (!isOAuthClientId(clientId)) return null
+	const agent = clientId === AGENT_CLIENT_ID
+	if (typeof scope !== 'string' && !(agent && scope === undefined)) return null
+	const scopes = typeof scope === 'string' ? parseOAuthScopes(scope.split(' ')) : []
 	const resources = value.resources
 	if (
-		scopes === null || scopes.length === 0 || resources.length === 0 || resources.length > MAX_OAUTH_DEVICE_RESOURCES
+		scopes === null || (scopes.length === 0 && !agent) || resources.length === 0 || resources.length > MAX_OAUTH_DEVICE_RESOURCES
 		|| !resources.every(isOAuthResourceUri) || new Set(resources).size !== resources.length
 	) return null
-	return { client_id: clientId, scope: scopes, resources: [...resources] }
+	const label = field(value.fields, 'agent_label')
+	if (!agent || label === undefined) return { client_id: clientId, scope: scopes, resources: [...resources] }
+	if (typeof label !== 'string' || !isAgentLabel(label)) return null
+	return { client_id: clientId, scope: scopes, resources: [...resources], agent_label: label }
 }
 
 export function isOAuthDeviceGrantLifetime(value: number): value is OAuthDeviceGrantLifetime {

@@ -1,4 +1,6 @@
 import {
+	AGENT_CLIENT_ID,
+	type AgentScope,
 	buildResourceAccessClaims,
 	DEFAULT_TOKEN_TTL_SECONDS,
 	type KeyGrant,
@@ -20,6 +22,7 @@ import {
 	resolveOAuthScopeToken,
 } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
+import { agentScopeDeclared, applicationResource, storedAgentScope } from './agent-resource'
 import { sessionEndsAt, sessionUsable } from './auth'
 import { type AuditEventInput, type OAuthGrantRow, type PrincipalRow, principalStatus, type SessionRow } from './db'
 import type { Env } from './env'
@@ -41,24 +44,28 @@ export const OAUTH_CODE_TTL_SECONDS = 60
 type SigningEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 /**
- * A client an authorization or token request comes from: an operator-registered CIMD client, or the installation's own
- * command-line client, a public client IAM knows without a document. The CLI client has no redirect URI, so it never
- * completes an authorization request; it redeems the grants IAM gives it otherwise and refreshes them.
+ * A client an authorization or token request comes from: an operator-registered CIMD client, the installation's own
+ * command-line client, or the agent client (ADR-0090); IAM knows the last two, both public, without a document. Neither
+ * has a redirect URI, so neither completes an authorization request; each redeems its device grants and refreshes them.
  */
 export type EstablishedClient =
 	| { kind: 'managed'; registration: ManagedOAuthClient; metadata: OAuthClientMetadataDocument }
 	| { kind: 'cli'; clientId: string }
+	| { kind: 'agent'; clientId: typeof AGENT_CLIENT_ID }
 
 export type ManagedClient = Extract<EstablishedClient, { kind: 'managed' }>
 
-/** The grant types a client may use at the token endpoint: its document's, or the CLI client's fixed set. */
+/** The grant types a client may use at the token endpoint besides the device grant: its document's, or refresh alone. */
 function clientGrantTypes(client: EstablishedClient): readonly string[] {
-	return client.kind === 'cli' ? ['refresh_token'] : client.metadata.grant_types
+	return client.kind === 'managed' ? client.metadata.grant_types : ['refresh_token']
 }
 
-/** Whether `resource` is served to the command-line client (`cli`) or to the managed clients; never to both. */
-export function servesClient(resource: OAuthResourceDto, cli: boolean): boolean {
-	return (resource.client === 'cli') === cli
+/**
+ * Whether a configured `resource` is served to a client of `kind`: to the command-line client or to the managed
+ * clients, never to both. The agent client is served none: it is served application resources alone (`applicationResource`).
+ */
+export function servesClient(resource: OAuthResourceDto, kind: EstablishedClient['kind']): boolean {
+	return kind !== 'agent' && (resource.client === 'cli') === (kind === 'cli')
 }
 
 /** The resources a grant was given for: every token it mints names one of them. */
@@ -100,21 +107,22 @@ export async function grantAuthorization(
 ): Promise<string> {
 	const now = unixNow()
 	const code = generateToken()
-	const grantId = uuidv7()
+	const grant: OAuthGrantRow = {
+		id: uuidv7(),
+		principal_id: input.session.principal_id,
+		session_id: input.session.id,
+		client_id: input.request.client_id,
+		app: input.resource.app,
+		resource: input.resource.resource,
+		resources: null,
+		scopes: JSON.stringify(input.scopes),
+		created_at: now,
+		expires_at: input.session.expires_at,
+		revoked_at: null,
+		agent_label: null,
+	}
 	await services.repositories.oauth.createGrant(
-		{
-			id: grantId,
-			principal_id: input.session.principal_id,
-			session_id: input.session.id,
-			client_id: input.request.client_id,
-			app: input.resource.app,
-			resource: input.resource.resource,
-			resources: null,
-			scopes: JSON.stringify(input.scopes),
-			created_at: now,
-			expires_at: input.session.expires_at,
-			revoked_at: null,
-		},
+		grant,
 		{
 			token_hash: await hashToken(code),
 			redirect_uri: input.request.redirect_uri,
@@ -128,8 +136,8 @@ export async function grantAuthorization(
 			app: 'propustka',
 			action: 'iam.oauth.grant.create',
 			resourceType: 'oauth_grant',
-			resourceId: grantId,
-			metadata: { clientId: input.request.client_id, app: input.resource.app, resource: input.resource.resource, scopes: input.scopes },
+			resourceId: grant.id,
+			metadata: { ...grantRecord(grant), resource: input.resource.resource, scopes: input.scopes },
 		},
 	)
 	return code
@@ -178,7 +186,7 @@ async function redeemCode(
 	if (code === null) {
 		const spent = await repository.code(hash)
 		// A replayed code may mean it leaked; RFC 6749 §4.1.2 says revoke what it issued.
-		if (spent !== null) await repository.revokeGrant(spent.grant_id, now, grantRevocation(requestId, spent.grant_id, input.client_id, 'code_replay'))
+		if (spent !== null) await revokeReplayed(services, spent.grant_id, now, requestId, 'code_replay')
 		return { ok: false, error: 'invalid_grant' }
 	}
 	const grant = await repository.grant(code.grant_id)
@@ -220,7 +228,7 @@ async function rotateRefreshToken(
 	if (presented === null) {
 		const spent = await repository.refreshToken(hash)
 		// A rotated token presented again: one of the two holders is not the client. The grant is the family.
-		if (spent !== null) await repository.revokeGrant(spent.grant_id, now, grantRevocation(requestId, spent.grant_id, input.client_id, 'refresh_replay'))
+		if (spent !== null) await revokeReplayed(services, spent.grant_id, now, requestId, 'refresh_replay')
 		return { ok: false, error: 'invalid_grant' }
 	}
 	const grant = await repository.grant(presented.grant_id)
@@ -241,8 +249,8 @@ export async function revokeOAuthToken(services: Services, env: SigningEnv, inpu
 	const refresh = await repository.refreshToken(await hashToken(input.token))
 	if (refresh !== null) {
 		const grant = await repository.grant(refresh.grant_id)
-		if (grant?.client_id === input.client_id) {
-			await repository.revokeGrant(grant.id, now, grantRevocation(requestId, grant.id, input.client_id, 'client_revocation'))
+		if (grant !== null && grant.client_id === input.client_id) {
+			await repository.revokeGrant(grant.id, now, grantRevocation(requestId, grant, 'client_revocation'))
 		}
 		return
 	}
@@ -250,8 +258,20 @@ export async function revokeOAuthToken(services: Services, env: SigningEnv, inpu
 	if (claims?.oauth === undefined || claims.oauth.clientId !== input.client_id) return
 	const grant = await repository.grant(claims.oauth.grantId)
 	if (grant !== null && grant.client_id === input.client_id && grant.principal_id === claims.sub) {
-		await repository.revokeGrant(grant.id, now, grantRevocation(requestId, grant.id, input.client_id, 'client_revocation'))
+		await repository.revokeGrant(grant.id, now, grantRevocation(requestId, grant, 'client_revocation'))
 	}
+}
+
+/** Revoke the grant a replayed code, refresh token or device code gave, when it still exists. */
+export async function revokeReplayed(
+	services: Services,
+	grantId: string,
+	now: number,
+	requestId: string,
+	reason: 'code_replay' | 'refresh_replay' | 'device_code_replay',
+): Promise<void> {
+	const grant = await services.repositories.oauth.grant(grantId)
+	if (grant !== null) await services.repositories.oauth.revokeGrant(grant.id, now, grantRevocation(requestId, grant, reason))
 }
 
 /** An access token for `resource`, one of the grant's resources, carrying the grant's live authority there. */
@@ -293,13 +313,18 @@ export async function mintForGrant(
 	}
 }
 
-/** What a grant's next token carries. `identity` is present on an identity resource's: its roles, when it declares them. */
+/**
+ * What a grant's next token carries. `identity` is present on an identity resource's: its roles, when it declares them.
+ * `agent` is present on an application resource's (ADR-0090): the grant's scope, which the exchange applies to the
+ * person's live permissions; the resource token itself carries none.
+ */
 export interface GrantAuthority {
 	principal: PrincipalRow
 	scopes: string[]
 	permissions: PermissionEntry[]
 	expiresAt: number | null
 	identity?: { roles?: string[] }
+	agent?: AgentScope
 }
 
 /**
@@ -324,6 +349,9 @@ export async function grantAuthority(
 	}
 	const principal = await services.repositories.principals.getPrincipalById(grant.principal_id)
 	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') return null
+	if (ceiling.kind === 'application') {
+		return { principal, scopes, permissions: [], expiresAt: sessionEndsAt(session, services.config), agent: ceiling.scope }
+	}
 	if (ceiling.kind === 'identity') {
 		// An identity resource's token names the person and carries no permission. With declared roles it names those
 		// the person holds, and a person holding none gets no token: the grant stops at the next refresh.
@@ -341,10 +369,17 @@ export async function grantAuthority(
 	return { principal, scopes, permissions, expiresAt }
 }
 
+type GrantCeiling =
+	| { kind: 'identity'; roles: readonly OAuthIdentityRole[] | undefined }
+	| { kind: 'scoped'; permissions: KeyGrant[] }
+	| { kind: 'application'; scope: AgentScope }
+
 /**
  * What a grant's token may carry at `resourceUri` under the current configuration, or null when its client or resource
  * is no longer configured for it. An identity-only client is served its own resource alone, so a grant it holds for
  * any other one (given before it was bound) mints nothing, and a grant for an identity resource carries no permission.
+ * The agent client is served application environments alone: one that still admits `agent`, under one scope whose
+ * narrowed dimension the environment still declares (ADR-0090).
  */
 async function grantCeiling(
 	services: Services,
@@ -352,7 +387,13 @@ async function grantCeiling(
 	grant: OAuthGrantRow,
 	resourceUri: string,
 	scopes: readonly string[],
-): Promise<{ kind: 'identity'; roles: readonly OAuthIdentityRole[] | undefined } | { kind: 'scoped'; permissions: KeyGrant[] } | null> {
+): Promise<GrantCeiling | null> {
+	if (grant.client_id === AGENT_CLIENT_ID) {
+		const resource = await applicationResource(services, resourceUri)
+		const scope = storedAgentScope(scopes)
+		if (resource === null || resource.app !== grant.app || scope === null || !await agentScopeDeclared(services, grant.app, scope)) return null
+		return { kind: 'application', scope }
+	}
 	const cli = grant.client_id === OAUTH_CLI_CLIENT_ID
 	const client = cli ? null : await registeredClient(services, config, grant.client_id)
 	if (!cli && client === null) return null
@@ -361,7 +402,9 @@ async function grantCeiling(
 		const matches = identity.resource === resourceUri && identity.app === grant.app && sameScopes(scopes, [OAUTH_IDENTITY_SCOPE])
 		return matches ? { kind: 'identity', roles: identity.roles } : null
 	}
-	const resource = config.resources.find((entry) => entry.resource === resourceUri && entry.app === grant.app && servesClient(entry, cli))
+	const resource = config.resources.find((entry) =>
+		entry.resource === resourceUri && entry.app === grant.app && servesClient(entry, cli ? 'cli' : 'managed')
+	)
 	const permissions = resource === undefined ? null : scopeCeiling(resource, scopes)
 	return permissions === null ? null : { kind: 'scoped', permissions }
 }
@@ -411,8 +454,7 @@ export function scopeCeiling(resource: OAuthResourceDto, scopes: readonly string
 /** The record of a grant's revocation: by its client, or by IAM on a replayed code or refresh token. */
 export function grantRevocation(
 	requestId: string,
-	grantId: string,
-	clientId: string,
+	grant: OAuthGrantRow,
 	reason: 'code_replay' | 'refresh_replay' | 'device_code_replay' | 'client_revocation',
 ): AuditEventInput {
 	return {
@@ -422,7 +464,14 @@ export function grantRevocation(
 		app: 'propustka',
 		action: 'iam.oauth.grant.revoke',
 		resourceType: 'oauth_grant',
-		resourceId: grantId,
-		metadata: { clientId, reason },
+		resourceId: grant.id,
+		metadata: { ...grantRecord(grant), reason },
 	}
+}
+
+/** What every record of a grant names: its client and app, the agent's label, the approving login and the expiry. */
+export function grantRecord(
+	grant: Pick<OAuthGrantRow, 'client_id' | 'app' | 'agent_label' | 'session_id' | 'expires_at'>,
+): { clientId: string; app: string; agentLabel: string | null; sessionId: string; expiresAt: number } {
+	return { clientId: grant.client_id, app: grant.app, agentLabel: grant.agent_label, sessionId: grant.session_id, expiresAt: grant.expires_at }
 }

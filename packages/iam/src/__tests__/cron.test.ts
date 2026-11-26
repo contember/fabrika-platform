@@ -197,6 +197,7 @@ async function seedBothSides(h: Harness): Promise<string> {
 				created_at: NOW - DAY,
 				expires_at: NOW + DAY,
 				revoked_at: null,
+				agent_label: null,
 			},
 			{ token_hash: `code-${grantId}`, redirect_uri: 'https://claude.example.test/cb', challenge: 'c'.repeat(43), expires_at: NOW + 60 },
 		)
@@ -224,6 +225,7 @@ async function seedBothSides(h: Harness): Promise<string> {
 			resources: '["https://control.example.test/api/rpc"]',
 			scopes: '["deploy:alpha"]',
 			interval_seconds: 5,
+			agent_label: null,
 			created_at: NOW - 300,
 			expires_at: expiresAt,
 		})

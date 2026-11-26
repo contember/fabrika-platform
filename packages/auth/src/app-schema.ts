@@ -250,6 +250,7 @@ const appSchemaShape = z.object({
 			if (problem !== null) ctx.addIssue({ code: 'custom', message: `the terminal's identification path ${problem}` })
 		}),
 	}).strict().optional(),
+	agentCallers: z.boolean().optional(),
 })
 
 /** One message's templates by language, each refused with the same rule the contract build applies. */
