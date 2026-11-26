@@ -3,7 +3,8 @@
 //
 // One pass reads the target and does the one step it says is next:
 // - an image of the current manifest is recorded and nothing newer is in flight: set the service to it
-//   (`ensureAwsProxyService`), which settles the republish;
+//   (`ensureAwsProxyService`) and follow its rollout (`followAwsProxyRollout`); once the deployment of the revision
+//   completed, the secrets it no longer names are deleted and the republish is settled;
 // - a build of the current manifest is in flight: follow it (`followAwsProxyBuild`); built, the next pass sets the service;
 // - otherwise: start a build of the current manifest (`startAwsProxyBuild`), replacing an attempt of an older one.
 //
@@ -13,8 +14,10 @@
 // is how Control publishes a change it could not while the namespace was busy), and fails retryably
 // (`awsProxyPending`) when the wait runs out, so a later reconcile takes it up again.
 //
-// Not yet: the service's rollout and its verdict, and deleting the secrets of members no longer routed once a rollout
-// succeeded; the balancer's host rules and certificates.
+// A rollout the circuit breaker rolled back fails with `awsProxyRollout`, not retryable: the same revision would fail
+// again, and a new image or secret (a new fingerprint) is what sets the service anew.
+//
+// Not yet: the balancer's host rules and certificates.
 
 import {
 	type ProviderDeploymentNamespace,
@@ -37,7 +40,13 @@ import {
 	sha256Hex,
 	startAwsProxyBuild,
 } from './proxy-attempt'
-import { type AwsProxyIam, type AwsProxyServiceClients, ensureAwsProxyService } from './proxy-service'
+import {
+	type AwsProxyIam,
+	type AwsProxyRolloutClients,
+	type AwsProxyServiceClients,
+	ensureAwsProxyService,
+	followAwsProxyRollout,
+} from './proxy-service'
 
 /** How often a proxy build is read while a republish waits for it. */
 export const AWS_PROXY_POLL_MS = 10_000
@@ -51,7 +60,8 @@ export type AwsProxyClients =
 	& AwsProxyServiceClients
 	& {
 		readonly codeBuild: AwsProxyBuildClients['codeBuild'] & AwsProxyBuildFollowClients['codeBuild']
-		readonly ssm: AwsProxyBuildClients['ssm'] & AwsProxyServiceClients['ssm']
+		readonly ecs: AwsProxyServiceClients['ecs'] & AwsProxyRolloutClients['ecs']
+		readonly ssm: AwsProxyBuildClients['ssm'] & AwsProxyServiceClients['ssm'] & AwsProxyRolloutClients['ssm']
 		readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack'>
 	}
 
@@ -107,7 +117,13 @@ export async function republishAwsProxy(
 				iam: runtime.iam,
 				clients: runtime.clients,
 			})
-			return { namespace, settled: true }
+			// Settled only once the service serves the revision; its stale secrets go then, not before.
+			const rolled = await followAwsProxyRollout({ ...common, namespace, members: input.members, iam: runtime.iam, clients: runtime.clients })
+			namespace = rolled.namespace
+			if (rolled.state === 'rolled') return { namespace, settled: true }
+			if (now() >= giveUpAt) return { namespace, settled: false }
+			await runtime.sleep(runtime.pollIntervalMs ?? AWS_PROXY_POLL_MS, input.signal)
+			continue
 		}
 		if (target.proxyBuildId !== undefined && target.proxyBuildManifestSha256 === manifestSha256) {
 			const followed = await followAwsProxyBuild({ ...common, namespace, clients: runtime.clients })

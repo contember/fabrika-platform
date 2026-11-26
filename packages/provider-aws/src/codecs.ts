@@ -109,6 +109,8 @@ export interface AwsNamespaceTarget {
 	readonly proxyServiceTaskDefinitionArn?: string
 	readonly proxyServiceFingerprint?: string
 	readonly proxyServiceUpdated?: true
+	/** Once the service's deployment of the recorded revision completed, and the secrets it no longer names were deleted. */
+	readonly proxyServiceRolledOut?: true
 }
 
 /**
@@ -165,7 +167,11 @@ const namespaceTargetSchema = z.object({
 	proxyServiceTaskDefinitionArn: z.string().regex(TASK_DEFINITION_ARN).optional(),
 	proxyServiceFingerprint: z.string().regex(SHA256_HEX).optional(),
 	proxyServiceUpdated: z.literal(true).optional(),
-}).strict().refine((target) => (target.proxyServiceTaskDefinitionArn === undefined) === (target.proxyServiceFingerprint === undefined), {
+	proxyServiceRolledOut: z.literal(true).optional(),
+}).strict().refine((target) => target.proxyServiceRolledOut === undefined || target.proxyServiceUpdated === true, {
+	message: "the proxy service's rollout is recorded after its update",
+	path: ['proxyServiceUpdated'],
+}).refine((target) => (target.proxyServiceTaskDefinitionArn === undefined) === (target.proxyServiceFingerprint === undefined), {
 	message: "the proxy service's revision is recorded with its fingerprint",
 	path: ['proxyServiceFingerprint'],
 }).refine((target) => target.proxyServiceUpdated === undefined || target.proxyServiceTaskDefinitionArn !== undefined, {

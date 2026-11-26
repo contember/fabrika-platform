@@ -376,6 +376,7 @@ function targetOf(
 		...(stored?.proxyServiceTaskDefinitionArn === undefined ? {} : { proxyServiceTaskDefinitionArn: stored.proxyServiceTaskDefinitionArn }),
 		...(stored?.proxyServiceFingerprint === undefined ? {} : { proxyServiceFingerprint: stored.proxyServiceFingerprint }),
 		...(stored?.proxyServiceUpdated === undefined ? {} : { proxyServiceUpdated: stored.proxyServiceUpdated }),
+		...(stored?.proxyServiceRolledOut === undefined ? {} : { proxyServiceRolledOut: stored.proxyServiceRolledOut }),
 	}
 	return awsNamespaceTargetEnvelope(target)
 }
@@ -479,7 +480,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				submitted.proxyBuildToken !== undefined || submitted.proxyBuildManifestSha256 !== undefined || submitted.proxyBuildId !== undefined
 				|| submitted.proxyImageDigest !== undefined || submitted.proxyImageManifestSha256 !== undefined
 				|| submitted.proxyServiceTaskDefinitionArn !== undefined || submitted.proxyServiceFingerprint !== undefined
-				|| submitted.proxyServiceUpdated !== undefined
+				|| submitted.proxyServiceUpdated !== undefined || submitted.proxyServiceRolledOut !== undefined
 			) {
 				throw new Error("aws: a namespace's proxy build and image are recorded by its provider, never submitted")
 			}

@@ -18,9 +18,11 @@
 //   operator deletes the service first, then its parameters, then the stack (the namespace's instructions say so).
 // - No published port, no balancer yet: the proxy's group admits nothing until the balancer's host rules come.
 //
-// Not yet: following the rollout to its verdict, deleting the secrets of members no longer routed (only once a
-// rollout succeeded: a rollback to an older revision reads them), the balancer, and `republish`, which will call this.
-// Nothing calls it yet.
+// - The rollout (`followAwsProxyRollout`): read through the service's current service deployment, as an application's
+//   run reads its own (`run-attempt.ts`), because the service's reads lag an update. Only a successful deployment of the
+//   recorded revision deletes the secrets of members no longer routed (a rollback to an older revision reads them).
+//
+// Not yet: the balancer.
 //
 // UNVERIFIED: that a Service Connect configuration with a namespace and no services makes the tasks clients of it, and
 // that busybox `wget` is in the image's Alpine base, follow ECS's and Alpine's documentation; neither was checked here.
@@ -211,7 +213,7 @@ async function ensure(input: AwsProxyServiceInput): Promise<ProviderDeploymentNa
 			secretNames: Object.keys(secrets),
 		})
 		revision = (await clients.ecs.registerTaskDefinition(definition, signal)).arn
-		const { proxyServiceUpdated: _updated, ...rest } = stored
+		const { proxyServiceUpdated: _updated, proxyServiceRolledOut: _rolledOut, ...rest } = stored
 		current = await record({ ...rest, proxyServiceTaskDefinitionArn: revision, proxyServiceFingerprint: fingerprint })
 	}
 
@@ -242,4 +244,112 @@ async function ensure(input: AwsProxyServiceInput): Promise<ProviderDeploymentNa
 	}
 	await record({ ...current, proxyServiceUpdated: true })
 	return namespace
+}
+
+/** The stable code of a proxy rollout ECS's circuit breaker rolled back: not retryable until a new revision is set. */
+export const AWS_PROXY_ROLLOUT_FAILED = 'awsProxyRollout'
+
+/** The calls that follow the proxy service's rollout and delete the secrets it no longer names. */
+export interface AwsProxyRolloutClients {
+	readonly ecs: Pick<EcsClient, 'describeService' | 'describeServiceDeployment' | 'describeServiceRevision'>
+	readonly ssm: Pick<SsmClient, 'listNames' | 'deleteSecret'>
+}
+
+export interface AwsProxyRolloutInput {
+	readonly namespace: ProviderDeploymentNamespace
+	/** The members the recorded revision was set for: their secrets are the ones it names. */
+	readonly members: readonly ProviderNamespaceMember[]
+	readonly installation: AwsAppTarget
+	readonly proxySource: AwsProxySource
+	readonly iam: AwsProxyIam
+	readonly clients: AwsProxyRolloutClients
+	readonly events: ProviderNamespaceEvents
+	readonly signal: AbortSignal
+}
+
+/**
+ * Reads the proxy service's current service deployment once (the service, its deployment, the deployment's revision).
+ * - Successful, of the recorded revision: the secrets under `env/` that the revision no longer names are deleted (only
+ *   now: a rollback would start the older revision, which reads them), and the rollout is recorded, so it is `rolled`.
+ * - Stopped or rolled back by the circuit breaker (a state of the same deployment): `AWS_PROXY_ROLLOUT_FAILED`, not
+ *   retryable, because the same revision would fail again.
+ * - In progress, or not shown yet (no current deployment, or one of another revision: ECS's reads lag an update):
+ *   `pending`, so a wait polls again and a deadline leaves it to a reconcile.
+ * - A service ECS answers `MISSING` (deleted out of band, or just created and not shown yet): the update's mark is
+ *   dropped, so the next pass's `ensureAwsProxyService` creates it, a repeat of the same token for a create that landed,
+ *   and `pending`. A service already recorded as rolled out is not read again.
+ */
+export async function followAwsProxyRollout(
+	input: AwsProxyRolloutInput,
+): Promise<{ readonly namespace: ProviderDeploymentNamespace; readonly state: 'pending' | 'rolled' }> {
+	try {
+		return await rollout(input)
+	} catch (error) {
+		throw namespaceFailure(error)
+	}
+}
+
+async function rollout(
+	input: AwsProxyRolloutInput,
+): Promise<{ readonly namespace: ProviderDeploymentNamespace; readonly state: 'pending' | 'rolled' }> {
+	const { clients, installation, signal } = input
+	let namespace = input.namespace
+	const stored = checkNamespaceTarget(namespace, installation, input.proxySource)
+	if (stored.proxyServiceRolledOut === true) return { namespace, state: 'rolled' }
+	const revision = stored.proxyServiceTaskDefinitionArn
+	if (revision === undefined || stored.proxyServiceUpdated !== true) {
+		throw new Error("aws: the namespace's proxy service was not set to a revision to follow")
+	}
+	const resources = awsNamespaceResources(namespace.id, namespace.env)
+	const record = async (target: AwsNamespaceTarget): Promise<void> => {
+		namespace = { ...namespace, target: awsNamespaceTargetEnvelope(target) }
+		await input.events.checkpoint(namespace)
+	}
+
+	const found = await clients.ecs.describeService({ cluster: installation.cluster, service: resources.service }, signal)
+	if (found === null || found.status !== 'active') {
+		const { proxyServiceUpdated: _updated, ...rest } = stored
+		await record(rest)
+		return { namespace, state: 'pending' }
+	}
+	if (found.currentDeploymentArn === null) return { namespace, state: 'pending' }
+	const deployment = await clients.ecs.describeServiceDeployment(found.currentDeploymentArn, signal)
+	if (deployment === null || deployment.targetRevisionArn === null) return { namespace, state: 'pending' }
+	const target = await clients.ecs.describeServiceRevision(deployment.targetRevisionArn, signal)
+	if (target === null || target.taskDefinitionArn !== revision) return { namespace, state: 'pending' }
+	switch (deployment.status) {
+		case 'pending':
+		case 'in_progress':
+		case 'stop_requested':
+			return { namespace, state: 'pending' }
+		case 'stopped':
+		case 'rollback_requested':
+		case 'rollback_in_progress':
+		case 'rollback_successful':
+		case 'rollback_failed':
+			throw new ProviderNamespaceError(
+				`aws: the proxy service ${resources.service}'s deployment of ${revision} is ${deployment.status}`,
+				AWS_PROXY_ROLLOUT_FAILED,
+				false,
+			)
+		case 'successful':
+			break
+	}
+
+	// The revision serves: what it does not name is read by no task that may still start. The kept names are the
+	// revision's own only if the members and key given are the ones it was set for, so its fingerprint is checked here.
+	const secrets = awsProxySecrets(input.members, input.iam.key)
+	if (
+		stored.proxyImageDigest === undefined
+		|| (await awsProxyServiceFingerprint(stored.proxyImageDigest, input.iam.issuer, secrets)) !== stored.proxyServiceFingerprint
+	) {
+		throw new Error("aws: the members given are not the ones the proxy's revision was set for; no secret is deleted")
+	}
+	const kept = new Set(Object.keys(secrets).map((name) => `${resources.parameterPath}/env/${name}`))
+	// A failed delete fails the pass before the rollout is recorded, so the next one deletes again (a gone name is no error).
+	for (const name of await clients.ssm.listNames(`${resources.parameterPath}/env`, signal)) {
+		if (!kept.has(name)) await clients.ssm.deleteSecret(name, signal)
+	}
+	await record({ ...stored, proxyServiceRolledOut: true })
+	return { namespace, state: 'rolled' }
 }

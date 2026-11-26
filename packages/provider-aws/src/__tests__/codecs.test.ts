@@ -113,6 +113,10 @@ describe('the AWS codecs', () => {
 		expect(roundTrip(awsNamespaceTargetCodec, serving)).toEqual({ decoded: serving, json: serving })
 		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyServiceTaskDefinitionArn: revision })).toContain('proxyServiceFingerprint')
 		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyServiceUpdated: true })).toContain('proxyServiceTaskDefinitionArn')
+		// The rollout's mark only after the update's.
+		expect(roundTrip(awsNamespaceTargetCodec, { ...serving, proxyServiceRolledOut: true }).decoded).toMatchObject({ proxyServiceRolledOut: true })
+		const { proxyServiceUpdated: _updated, ...notUpdated } = serving
+		expect(refused(awsNamespaceTargetCodec, { ...notUpdated, proxyServiceRolledOut: true })).toContain('proxyServiceUpdated')
 		// The pin is required: a target without it is one this release does not read.
 		const { proxyCommitSha: _sha, ...unpinned } = namespace
 		expect(refused(awsNamespaceTargetCodec, unpinned)).toContain('proxyCommitSha')
