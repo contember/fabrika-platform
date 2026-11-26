@@ -69,14 +69,12 @@ import {
 } from './execution'
 import {
 	createdServices,
-	type ExposureFinding,
+	declaredBuckets,
 	formatExposureFindings,
 	formatStorageProvenance,
-	isObjectStorageType,
 	parseStorageProvenance,
+	readExposure,
 	STORAGE_PROVENANCE_KEY,
-	type StorageProvenanceMarker,
-	unprovenBucketReason,
 } from './exposure'
 import {
 	assertApplicationSecretName,
@@ -500,9 +498,6 @@ const awaitVersion = async (env: StepEnv, checkpoint: ZeropsRunState, processId:
 	})
 }
 
-const declaredBuckets = (artifact: FabrikaManifest): string[] =>
-	artifact.target.importDocument.services.filter((service) => isObjectStorageType(service.type)).map((service) => service.hostname)
-
 interface CreatedBucket {
 	readonly hostname: string
 	readonly id: string
@@ -550,41 +545,18 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 		log('  [dry-run] would read back subdomain access and bucket provenance of every declared service')
 		return
 	}
-	const created = env.attempt.created ?? new Map<string, string>()
-	const buckets = declaredBuckets(artifact)
-	const records = buckets.length === 0 ? [] : await zerops.api.listServiceEnv({ serviceId: target.serviceId, signal })
-	const marker = records.find((record) => record.key === STORAGE_PROVENANCE_KEY)
-	const markerState: StorageProvenanceMarker = marker === undefined ? 'absent' : marker.sensitive ? 'sensitive' : 'readable'
-	if (markerState === 'sensitive') {
+	const { findings, bucketIds, marker } = await readExposure({
+		api: zerops.api,
+		artifact,
+		projectId: target.projectId,
+		serviceId: target.serviceId,
+		created: env.attempt.created ?? new Map<string, string>(),
+		createdBuckets: target.createdBuckets ?? [],
+		signal,
+		assertRunning,
+	})
+	if (marker === 'sensitive') {
 		log(`  [warn] ${STORAGE_PROVENANCE_KEY} was written sensitive by an earlier release; it names no bucket until it is rewritten readable`)
-	}
-	const known = new Set([...parseStorageProvenance(readableContent(marker)), ...(target.createdBuckets ?? [])])
-	const findings: ExposureFinding[] = []
-	const bucketIds: string[] = []
-	for (const hostname of manifestServiceHostnames(artifact)) {
-		assertRunning(signal)
-		const service = await zerops.api.findService({ projectId: target.projectId, hostname, signal })
-		if (service === null) {
-			findings.push({ hostname, reason: 'is absent after the import, so its exposure cannot be read back' })
-			continue
-		}
-		if (service.subdomainAccess !== false) {
-			findings.push({
-				hostname,
-				reason: service.subdomainAccess === true
-					? 'has a `.zerops.app` subdomain, which reaches it past the namespace proxy; disable it in Zerops'
-					: 'did not report its subdomain access',
-			})
-		}
-		if (!buckets.includes(hostname)) continue
-		if (created.get(hostname) === service.id || known.has(service.id)) {
-			bucketIds.push(service.id)
-		} else {
-			findings.push({
-				hostname,
-				reason: unprovenBucketReason({ bucketId: service.id, deployService: artifact.target.deployService, marker: markerState }),
-			})
-		}
 	}
 	if (findings.length > 0) {
 		const dsn = managedValue(env.managed, 'FABRIKA_OPERATIONS_DSN')

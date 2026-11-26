@@ -22,7 +22,7 @@ import { z } from 'zod'
 import { createZeropsApi, waitForProcess, type ZeropsApi, ZeropsServiceEnvValueTooLargeError } from './api'
 import { lockfileBuildBaseRefusal } from './build-base'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
-import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
+import { createdServices, type ExposureAlerter, isObjectStorageType, readExposure } from './exposure'
 import { assertApplicationSecretName, assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference } from './managed-env'
 import {
 	assertFabrikaManifestCoordinates,
@@ -474,6 +474,28 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			})
 			input.signal.throwIfAborted()
 			return { state: result.status, ...(result.artifactState === undefined ? {} : { artifactState: result.artifactState }) }
+		},
+		/**
+		 * The deploy's exposure read-back between deploys. Nothing was imported, so only the marker and the stored target
+		 * vouch for a bucket, and a declared service the project does not hold yet is left to the deploy that creates it.
+		 */
+		exposure: {
+			check: async ({ environment, signal }) => {
+				signal.throwIfAborted()
+				const placement = resolvedEnvironment(environment, { requireReady: false })
+				const target = serviceTargetOf(placement.target)
+				const { findings } = await readExposure({
+					api,
+					artifact: artifactFor(environment),
+					projectId: placement.projectId,
+					serviceId: target.serviceId,
+					created: new Map<string, string>(),
+					createdBuckets: target.createdBuckets ?? [],
+					signal,
+					assertRunning: (running) => running.throwIfAborted(),
+				})
+				return findings.flatMap((finding) => finding.absent === true ? [] : [{ service: finding.hostname, reason: finding.reason }])
+			},
 		},
 		devSandboxes,
 		cancel: async (input): Promise<ProviderCancelOutcome> => {
