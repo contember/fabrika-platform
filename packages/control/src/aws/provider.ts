@@ -21,6 +21,9 @@
 //   hosts: a certificate and a host rule each, forwarding to the namespace's proxy. Its default action is a fixed answer.
 // - `FABRIKA_AWS_INSTALLATION_HOSTS` (comma-separated): the installation's own hosts (IAM's, Control's, the console's,
 //   the platform proxy's), which no namespace's host rule may take.
+// - `FABRIKA_AWS_BALANCER_SUBNET_CIDRS` (comma-separated IPv4 blocks inside the VPC's): the balancer's own subnets, the
+//   only addresses a namespace proxy trusts `X-Forwarded-For` from. No task may run in them: a trusted range that held a
+//   task would let it choose the client address its requests are seen from (`AwsInstallationBalancer`).
 // - `FABRIKA_AWS_PROXY_REPOSITORY` (an HTTPS GitHub URL) and `FABRIKA_AWS_PROXY_COMMIT_SHA` (a full commit): the
 //   installation's release of the public platform repository. A namespace being planned is pinned to it, and keeps
 //   its pin through an upgrade; no namespace may be pinned to another repository (ADR-0045).
@@ -89,6 +92,7 @@ export function awsControlProvider(source: Record<string, string | undefined>, s
 			vpcCidr: required(source, 'FABRIKA_AWS_VPC_CIDR').trim(),
 			listenerArn: required(source, 'FABRIKA_AWS_BALANCER_LISTENER').trim(),
 			installationHosts: required(source, 'FABRIKA_AWS_INSTALLATION_HOSTS').split(',').map((host) => host.trim().toLowerCase()),
+			balancerSubnetCidrs: required(source, 'FABRIKA_AWS_BALANCER_SUBNET_CIDRS').split(',').map((cidr) => cidr.trim()),
 		},
 		// The installation's release of the public platform repository: a planned namespace's proxy pin (ADR-0045).
 		proxySource: {

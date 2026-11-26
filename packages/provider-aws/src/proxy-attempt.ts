@@ -82,6 +82,8 @@ export interface AwsProxyBuildAttemptInput {
 	readonly members: readonly ProviderNamespaceMember[]
 	readonly installation: AwsAppTarget
 	readonly proxySource: AwsProxySource
+	/** The range Caddy trusts forwarding headers from: the VPC's, where the balancer's addresses are. */
+	readonly trustedProxies: string
 	readonly clients: AwsProxyBuildClients
 	readonly source: AwsProxySourceUpload
 	readonly events: ProviderNamespaceEvents
@@ -103,6 +105,18 @@ export async function sha256Hex(text: string): Promise<string> {
 	return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
+/** Whether the recorded image is of this manifest and these trusted ranges, with nothing newer in flight. */
+export function awsProxyImageCurrent(target: AwsNamespaceTarget, manifestSha256: string, trustedProxies: string): boolean {
+	return target.proxyBuildToken === undefined && target.proxyImageManifestSha256 === manifestSha256
+		&& target.proxyImageTrustedProxies === trustedProxies
+}
+
+/** Whether the recorded build attempt is of this manifest and these trusted ranges. */
+export function awsProxyBuildCurrent(target: AwsNamespaceTarget, manifestSha256: string, trustedProxies: string): boolean {
+	return target.proxyBuildToken !== undefined && target.proxyBuildManifestSha256 === manifestSha256
+		&& target.proxyBuildTrustedProxies === trustedProxies
+}
+
 /** How long deleting an attempt's URL parameter may take. */
 const CLEANUP_TIMEOUT_MS = 10_000
 
@@ -113,7 +127,7 @@ function sourceUrlParameterOf(resources: AwsNamespaceResources, token: string): 
 
 /** `target` without a proxy build in flight. */
 function withoutBuild(target: AwsNamespaceTarget): AwsNamespaceTarget {
-	const { proxyBuildToken: _token, proxyBuildManifestSha256: _manifest, proxyBuildId: _id, ...rest } = target
+	const { proxyBuildToken: _token, proxyBuildManifestSha256: _manifest, proxyBuildId: _id, proxyBuildTrustedProxies: _trusted, ...rest } = target
 	return rest
 }
 
@@ -125,7 +139,7 @@ function withoutBuild(target: AwsNamespaceTarget): AwsNamespaceTarget {
  */
 export function withProxyPin(target: AwsNamespaceTarget, commitSha: string): AwsNamespaceTarget {
 	if (commitSha === target.proxyCommitSha) return target
-	const { proxyImageDigest: _digest, proxyImageManifestSha256: _manifest, ...rest } = withoutBuild(target)
+	const { proxyImageDigest: _digest, proxyImageManifestSha256: _manifest, proxyImageTrustedProxies: _trusted, ...rest } = withoutBuild(target)
 	return { ...rest, proxyCommitSha: commitSha }
 }
 
@@ -155,10 +169,10 @@ async function start(input: AwsProxyBuildAttemptInput): Promise<ProviderDeployme
 		return target
 	}
 
-	// The image of this manifest is built, and nothing newer is in flight: there is nothing to start.
-	if (stored.proxyBuildToken === undefined && stored.proxyImageManifestSha256 === manifestSha256) return namespace
+	// The image of this manifest and these trusted ranges is built, and nothing newer is in flight: there is nothing to start.
+	if (awsProxyImageCurrent(stored, manifestSha256, input.trustedProxies)) return namespace
 	let attempt: AwsNamespaceTarget
-	if (stored.proxyBuildToken !== undefined && stored.proxyBuildManifestSha256 === manifestSha256) {
+	if (stored.proxyBuildToken !== undefined && awsProxyBuildCurrent(stored, manifestSha256, input.trustedProxies)) {
 		// This manifest's attempt is recorded: started, or to be found by its token before anything is sent again.
 		if (stored.proxyBuildId !== undefined) return namespace
 		const found = await clients.codeBuild.findBuild(resources.buildProject, stored.proxyBuildToken, signal)
@@ -169,7 +183,12 @@ async function start(input: AwsProxyBuildAttemptInput): Promise<ProviderDeployme
 		attempt = stored
 	} else {
 		const token = (input.newToken ?? (() => crypto.randomUUID()))()
-		attempt = await record({ ...withoutBuild(stored), proxyBuildToken: token, proxyBuildManifestSha256: manifestSha256 })
+		attempt = await record({
+			...withoutBuild(stored),
+			proxyBuildToken: token,
+			proxyBuildManifestSha256: manifestSha256,
+			proxyBuildTrustedProxies: input.trustedProxies,
+		})
 		// The attempt it replaces is of an older manifest, and its token is recorded nowhere once replaced: its URL
 		// parameter goes now. Best effort; a build of it still queued then fails to fetch, and its image would be stale.
 		// That build is not stopped: one already past its fetch runs to its end and pushes an image under its own tag, which
@@ -210,6 +229,7 @@ async function start(input: AwsProxyBuildAttemptInput): Promise<ProviderDeployme
 		buildToken: token,
 		sourceUrlParameter: parameter,
 		repositoryUri: `${installation.accountId}.dkr.ecr.${installation.region}.amazonaws.com/${resources.repository}`,
+		trustedProxies: input.trustedProxies,
 	})
 	let started: CodeBuildBuild
 	try {
@@ -301,6 +321,11 @@ async function follow(input: AwsProxyBuildFollowInput): Promise<AwsProxyBuildFol
 	const image = await clients.ecr.findImage(resources.repository, { tag }, signal)
 	if (image === null) return await ended(`aws: the proxy build ${buildId} succeeded but pushed no image tagged ${tag}`)
 	await dropUrl()
-	await record({ ...withoutBuild(stored), proxyImageDigest: image.digest, proxyImageManifestSha256: manifestSha256 })
+	await record({
+		...withoutBuild(stored),
+		proxyImageDigest: image.digest,
+		proxyImageManifestSha256: manifestSha256,
+		...(stored.proxyBuildTrustedProxies === undefined ? {} : { proxyImageTrustedProxies: stored.proxyBuildTrustedProxies }),
+	})
 	return { namespace, state: 'built' }
 }

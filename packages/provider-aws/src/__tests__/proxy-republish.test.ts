@@ -81,7 +81,10 @@ const BALANCER = {
 	vpcCidr: '10.0.0.0/16',
 	listenerArn: LISTENER,
 	installationHosts: ['console.example.com'],
+	balancerSubnetCidrs: ['10.0.240.0/24', '10.0.241.0/24'],
 }
+/** What the proxy's image trusts forwarding headers from: the balancer's own subnets, never the VPC's whole range. */
+const TRUSTED = '10.0.240.0/24,10.0.241.0/24'
 const DEPLOYMENT_ARN = 'arn:aws:ecs:eu-central-1:123456789012:service-deployment/fabrika-apps/ns_shared_prod_proxy/deployment1'
 const REVISION = 'arn:aws:ecs:eu-central-1:123456789012:service-revision/fabrika-apps/ns_shared_prod_proxy/revision1'
 const OLDER_REVISION = 'arn:aws:ecs:eu-central-1:123456789012:service-revision/fabrika-apps/ns_shared_prod_proxy/revision0'
@@ -293,7 +296,7 @@ describe('republishAwsProxy', () => {
 
 	test('an image of the current manifest is set at once, with no build', async () => {
 		const fake = new Fake()
-		const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST })
+		const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyImageTrustedProxies: TRUSTED })
 		const result = await republishAwsProxy(fake.context, {
 			namespace: built,
 			members: MEMBERS,
@@ -303,6 +306,45 @@ describe('republishAwsProxy', () => {
 		})
 		expect(result.settled).toBe(true)
 		expect(fake.calls).toEqual(['registerTaskDefinition', 'createService'])
+	})
+
+	test("an image of other trusted ranges, or of none, is built again with the balancer's subnets, and is not set meanwhile", async () => {
+		const image = { ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST }
+		for (const older of [{ ...image, proxyImageTrustedProxies: '10.0.0.0/16' }, image]) {
+			const fake = new Fake()
+			const result = await republishAwsProxy(fake.context, {
+				namespace: namespaceOf(older),
+				members: MEMBERS,
+				events: fake.events,
+				signal: fake.signal,
+				wait: 'started',
+			})
+			expect(result.settled).toBe(false)
+			expect(fake.calls).toEqual(['upload', 'startBuild'])
+			expect(decoded(result.namespace)).toMatchObject({ proxyBuildManifestSha256: MANIFEST, proxyBuildTrustedProxies: TRUSTED })
+		}
+	})
+
+	test('an attempt of other trusted ranges is not followed: one of the current ranges replaces it', async () => {
+		const fake = new Fake()
+		const result = await republishAwsProxy(fake.context, {
+			namespace: namespaceOf({
+				...PINNED,
+				proxyBuildToken: TOKEN,
+				proxyBuildManifestSha256: MANIFEST,
+				proxyBuildTrustedProxies: '10.0.0.0/16',
+				proxyBuildId: BUILD_ID,
+			}),
+			members: MEMBERS,
+			events: fake.events,
+			signal: fake.signal,
+			wait: 'started',
+		})
+		expect(result.settled).toBe(false)
+		expect(fake.calls).not.toContain('getBuild')
+		expect(fake.calls).toContain('startBuild')
+		expect(decoded(result.namespace).proxyBuildToken).not.toBe(TOKEN)
+		expect(decoded(result.namespace).proxyBuildTrustedProxies).toBe(TRUSTED)
 	})
 
 	test("a build still running when 'active' runs out of time answers unsettled", async () => {
@@ -321,7 +363,7 @@ describe('republishAwsProxy', () => {
 })
 
 describe("the proxy service's rollout", () => {
-	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST })
+	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyImageTrustedProxies: TRUSTED })
 	const ENV = '/fabrika/namespaces/shared/prod/env'
 
 	test('settles once the deployment of the revision completed, and only then deletes the secrets it no longer names', async () => {
@@ -464,7 +506,7 @@ describe("the proxy service's rollout", () => {
 })
 
 describe("the hosts on the installation's listener", () => {
-	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST })
+	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyImageTrustedProxies: TRUSTED })
 	/** The hosts stack's rules as `<host>@<priority>`, from the template it was last sent. */
 	const served = (template: string | null): readonly string[] => {
 		const parsed: unknown = JSON.parse(template === null || template === '' ? '{}' : template)
@@ -530,6 +572,7 @@ describe("the hosts on the installation's listener", () => {
 			...PINNED,
 			proxyImageDigest: DIGEST,
 			proxyImageManifestSha256: MANIFEST,
+			proxyImageTrustedProxies: TRUSTED,
 			proxyCertificates: [{ host: 'notes.example.com', arn, status: 'ISSUED', priority: '7' }],
 		})
 		fake.rules = [otherRule(7, 'other.example.com', [THEIRS])]
@@ -546,6 +589,7 @@ describe("the hosts on the installation's listener", () => {
 			...PINNED,
 			proxyImageDigest: DIGEST,
 			proxyImageManifestSha256: MANIFEST,
+			proxyImageTrustedProxies: TRUSTED,
 			proxyCertificates: [{ host, arn, status: 'ISSUED' }],
 		})
 	}
@@ -660,7 +704,7 @@ describe('withAwsProxyRepublish', () => {
 	test('a reconcile of a converged namespace reads the stack and makes no proxy call', async () => {
 		const fake = new Fake()
 		const set = await republishAwsProxy(fake.context, {
-			namespace: namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST }),
+			namespace: namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyImageTrustedProxies: TRUSTED }),
 			members: MEMBERS,
 			events: fake.events,
 			signal: fake.signal,

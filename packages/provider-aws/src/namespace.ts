@@ -381,16 +381,39 @@ export interface AwsInstallationBalancer {
 	 * take one, whatever the listener's rules say. Lower-case.
 	 */
 	readonly installationHosts: readonly string[]
+	/**
+	 * The IPv4 blocks of the balancer's own subnets: the only addresses each proxy trusts forwarding headers from
+	 * (`proxy-build.ts`). Caddy walks `X-Forwarded-For` from the right past every trusted address, so a trusted range
+	 * that held a task would let that task, connecting to the balancer's private address, choose the address its request
+	 * is seen from. No task may run in these subnets: the installation gives the balancer subnets of its own (step 11).
+	 * Each lies inside the VPC's range, none overlaps another, and there are at most `AWS_MAX_BALANCER_SUBNETS`.
+	 */
+	readonly balancerSubnetCidrs: readonly string[]
 }
 
-/** An IPv4 CIDR block of a VPC's size (a /16 to a /28). */
+/** The most balancer subnets a namespace's proxy trusts: one per availability zone, and no region has more. */
+export const AWS_MAX_BALANCER_SUBNETS = 8
+
+/** An IPv4 CIDR block of a VPC's or a subnet's size (a /16 to a /28). */
 const VPC_CIDR = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:1[6-9]|2[0-8])$/
+
+/** The first address of `cidr` (of the `VPC_CIDR` form) as a number, and its prefix length. */
+function blockOf(cidr: string): { readonly start: number; readonly prefix: number } {
+	const [address = '', prefix = ''] = cidr.split('/')
+	return { start: address.split('.').reduce((sum, octet) => sum * 256 + Number(octet), 0), prefix: Number(prefix) }
+}
 
 /** Whether `cidr` (of the `VPC_CIDR` form) names its network address: no bit is set past its prefix, as a VPC's block. */
 function isNetworkAddress(cidr: string): boolean {
-	const [address = '', prefix = ''] = cidr.split('/')
-	const value = address.split('.').reduce((sum, octet) => sum * 256 + Number(octet), 0)
-	return value % 2 ** (32 - Number(prefix)) === 0
+	const { start, prefix } = blockOf(cidr)
+	return start % 2 ** (32 - prefix) === 0
+}
+
+/** Whether the block `inner` lies inside the block `outer`, both named by their network address. */
+function blockContains(outer: string, inner: string): boolean {
+	const a = blockOf(outer)
+	const b = blockOf(inner)
+	return b.prefix >= a.prefix && Math.floor(b.start / 2 ** (32 - a.prefix)) === a.start / 2 ** (32 - a.prefix)
 }
 
 /**
@@ -401,6 +424,18 @@ export function checkInstallationBalancer(balancer: AwsInstallationBalancer): Aw
 	if (!SECURITY_GROUP_ID.test(balancer.securityGroupId)) throw new Error("aws: the installation's balancer names a security group id of another form")
 	if (!VPC_CIDR.test(balancer.vpcCidr) || !isNetworkAddress(balancer.vpcCidr)) {
 		throw new Error("aws: the installation's VPC range is not an IPv4 block of a VPC's size named by its network address")
+	}
+	const subnets = balancer.balancerSubnetCidrs
+	if (
+		subnets.length === 0 || subnets.length > AWS_MAX_BALANCER_SUBNETS
+		|| !subnets.every((cidr) => VPC_CIDR.test(cidr) && isNetworkAddress(cidr) && blockContains(balancer.vpcCidr, cidr))
+		// A subnet the size of the VPC leaves no room for a task outside it.
+		|| subnets.some((cidr) => blockOf(cidr).prefix === blockOf(balancer.vpcCidr).prefix)
+		|| subnets.some((cidr, i) => subnets.some((other, j) => i !== j && (blockContains(cidr, other) || blockContains(other, cidr))))
+	) {
+		throw new Error(
+			`aws: the balancer's subnet ranges are none, more than ${AWS_MAX_BALANCER_SUBNETS}, one of another form, one not inside the VPC's range, or two that overlap`,
+		)
 	}
 	if (!LISTENER_ARN.test(balancer.listenerArn)) throw new Error("aws: the installation's balancer names a listener of another form")
 	const hosts = balancer.installationHosts
@@ -559,6 +594,8 @@ function targetOf(
 		...(stored?.proxyBuildToken === undefined ? {} : { proxyBuildToken: stored.proxyBuildToken }),
 		...(stored?.proxyBuildManifestSha256 === undefined ? {} : { proxyBuildManifestSha256: stored.proxyBuildManifestSha256 }),
 		...(stored?.proxyBuildId === undefined ? {} : { proxyBuildId: stored.proxyBuildId }),
+		...(stored?.proxyBuildTrustedProxies === undefined ? {} : { proxyBuildTrustedProxies: stored.proxyBuildTrustedProxies }),
+		...(stored?.proxyImageTrustedProxies === undefined ? {} : { proxyImageTrustedProxies: stored.proxyImageTrustedProxies }),
 		...(stored?.proxyImageDigest === undefined ? {} : { proxyImageDigest: stored.proxyImageDigest }),
 		...(stored?.proxyImageManifestSha256 === undefined ? {} : { proxyImageManifestSha256: stored.proxyImageManifestSha256 }),
 		...(stored?.proxyServiceTaskDefinitionArn === undefined ? {} : { proxyServiceTaskDefinitionArn: stored.proxyServiceTaskDefinitionArn }),
@@ -680,6 +717,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				|| submitted.proxyServiceTaskDefinitionArn !== undefined || submitted.proxyServiceFingerprint !== undefined
 				|| submitted.proxyServiceUpdated !== undefined || submitted.proxyServiceRolledOut !== undefined
 				|| submitted.proxyCertificates !== undefined || submitted.proxyHostsFailure !== undefined
+				|| submitted.proxyBuildTrustedProxies !== undefined || submitted.proxyImageTrustedProxies !== undefined
 			) {
 				throw new Error("aws: a namespace's proxy build, image and certificates are recorded by its provider, never submitted")
 			}

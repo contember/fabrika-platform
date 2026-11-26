@@ -202,7 +202,8 @@ Fabrika does not use. The Control vault's key-encryption key can live in KMS ($1
 
 - One VPC in two availability zones, one internet-facing ALB ($0.027 an hour plus $0.008 an LCU-hour), ACM
   certificates validated by DNS records the operator adds, host rules sending each host to the platform proxy or a
-  namespace proxy. The ALB appends `X-Forwarded-For`, so Caddy's `trusted_proxies` is the VPC range.
+  namespace proxy. The ALB appends `X-Forwarded-For`, so Caddy's `trusted_proxies` is the ALB's own subnets, where
+  no task runs (not the VPC's range, which would let a task inside it choose its address).
 - Outbound internet (GitHub, ECR, the email provider, cron jobs with public egress): a public IPv4 address per task
   ($0.005 an hour each) with an ingress-free security group is cheaper than a NAT gateway ($0.052 an hour plus $0.052 a
   GB) up to about seven tasks; the regional NAT gateway is the answer for private subnets and for larger installations.
@@ -475,69 +476,88 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the installation balancer's group, on :8080 and :8081, and its egress is TCP 443 anywhere (IAM, ECR, logs) and the
     applications' port in the VPC's range. Control reads the balancer's group and the range from
     `FABRIKA_AWS_BALANCER_SECURITY_GROUP` and `FABRIKA_AWS_VPC_CIDR` (the VPC's primary block, its network address; a
-    secondary block is not covered), which the installation's stack will give. Not yet: Caddy's `trusted_proxies` set
-    to the VPC's range, so a request's client address is the caller's, not the balancer's.
-    **The certificates** (built, `src/proxy-certificates.ts`, `src/aws/acm.ts`): every republish and reconcile first
-    requests a public ACM certificate, validated by DNS, for each routed host that has none, and records it in the
-    namespace target as ACM answers (its idempotency token derived from the namespace, the host and the certificate it
-    replaces). It reads every recorded one again: its status and the `CNAME` the operator adds, which the namespace's
-    presentation shows with "add it and keep it in place, and reconcile the namespace". Nothing waits for a certificate
-    and nothing fails on one: validation waits on the operator's DNS, and a namespace that is not ready refuses
-    deploys. One ACM no longer knows is requested anew; one that failed or timed out stays shown until the operator deletes it in
-    ACM. The operator keeps the validation record in DNS: ACM's renewal uses it. Nothing tags or deletes a
-    certificate: a departed host's entry is marked `departed` and shown to the operator to delete, and the pass after
-    the delete forgets it. At most 25 entries per namespace, departed ones counted (a listener's certificate quota
-    besides its default one; the quota is the installation's, shared by every namespace): a host over it gets none
-    until a place is free, and the rest of the pass runs as ever.
-    **The host rules** (built, `src/host-rules.ts`, `src/proxy-hosts.ts`, `src/aws/elb.ts`): a stack of the namespace's
-    own, `fabrika-nh-<length of id>-<id>-<env>`, holds for each served host its certificate on the installation's HTTPS
-    listener (`FABRIKA_AWS_BALANCER_LISTENER`) and a host-header rule forwarding to the namespace's target group; the
-    rule is named by its host and the certificate by its ARN, so a priority chosen anew is an in-place update. Every
-    republish and reconcile applies it after the certificates, and its failure (a rollback, a priority two namespaces
-    chose at once, the listener's rule or certificate quota) is recorded (`proxyHostsFailure`) and shown, never thrown:
-    the namespace's own stack, the proxy's build and rollout and deploys into it never wait on it. A served host is one
-    whose certificate is issued and that no other rule of the listener matches (exact or by a wildcard) and that is
-    not one of the installation's own hosts (`FABRIKA_AWS_INSTALLATION_HOSTS`); a rule is the namespace's own only when
-    it names that host alone and forwards to the namespace's own target group. A host that conflicts is marked
-    (`listenerConflict`) and shown. **First come keeps a host**: a namespace whose member names a host already routed
-    never takes it over, whoever its rightful owner is. ACM reuses one validation record per domain in an account, so a
-    second namespace gets an issued certificate for a host whose record is in DNS without touching DNS; that buys it no
-    route, because the conflict check, not the certificate, decides. If the later namespace is the rightful owner, the
-    operator resolves it: the conflict's instruction says to remove the domain from the environment (or the listener's
-    rule) that holds it, then reconcile. Nothing in AWS can know which claim is right; an installation-wide check of a
-    routed domain in Control, with the installation's own hosts reserved, would refuse the second claim at
-    registration (a separate change across providers, not built). Two namespaces putting one host on in the same moment
-    are settled by the listener's own order: the one whose rule the listener serves first (the lower priority number)
-    keeps the host, whichever of them reconciles first, and the other drops it on its next pass. A priority is unique per listener: each host's
-    is chosen against the rules as read, from a hash of the host to the next free one, and recorded with its
-    certificate; one another rule has taken since is chosen anew. The listener's default action must be a fixed answer:
-    one that forwards to the namespace's target group serves it nothing (`defaultForwards`). A departed host's rule and
-    listener certificate leave the hosts stack; its certificate is the operator's to delete (above).
-    **Republish** (built, `src/proxy-republish.ts`): the namespace capability's `republish` drives the proxy to the
-    members, one resumable step per pass from what the target records: an image of the current manifest sets the
-    service (settled); a build of it in flight is followed; otherwise a build of it starts, replacing an older
-    attempt. `wait: 'started'` answers unsettled once a build is in flight; `'active'` polls it, bounded by
-    `AWS_PROXY_WAIT_MS`. `reconcile`, after the stack, carries on proxy work in flight the same way and fails retryably
-    (`awsProxyPending`) when the wait runs out; `provision` stays the stack's. Control's composition reads the proxies'
-    IAM (`FABRIKA_AWS_PROXY_IAM_URL`, `FABRIKA_AWS_PROXY_IAM_KEY`, refused when malformed) and uploads the pinned
-    platform commit with the manifest appended.
-    **The rollout** (built, `followAwsProxyRollout`): read through the service's current service deployment and its
-    revision, as an application's run reads its own, because ECS's reads lag an update. A republish settles only once
-    that deployment is of the recorded revision and successful. Only then are the secrets under `env/` it no longer
-    names deleted (a rollback would start an older revision, which reads them), after the members given are checked
-    against the revision's fingerprint; a failed delete fails the pass retryably before `proxyServiceRolledOut` is
-    recorded. A deployment in progress, or one not shown yet, polls within the same wait. One stopped or rolled back by
-    the circuit breaker fails with `awsProxyRollout`, not retryable, because the same revision would fail again; a new
-    image or secret is a new fingerprint and sets the service anew. A service that ECS answers missing before the
-    rollout is recorded drops the update's mark, so the next pass creates it (or finds the create that landed). Once the
-    rollout is recorded the service is not read again, so one deleted out of band after that is not created again.
-    Not yet: relaying the build's log to an operator, and a needless build when an older manifest's build is in flight
-    while the current one's image is recorded; then
-    the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
-    application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
-    with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
-    a message: a stack's absence is decided from `ListStacks` (or a `DescribeStacks` by the stack's id, which keeps
-    answering a deleted stack), never from that error.
+    secondary block is not covered), which the installation's stack will give. Caddy trusts the forwarding headers
+    from the balancer's own subnets alone (`FABRIKA_AWS_BALANCER_SUBNET_CIDRS`, one to eight blocks inside the VPC's,
+    none overlapping), so a request's client address is the caller's, not the balancer's: the ranges are a build
+    argument of the proxy's image (`FABRIKA_PROXY_TRUSTED_PROXIES`, baked into `caddy.json`), recorded with the attempt
+    and the image (`proxyBuildTrustedProxies`, `proxyImageTrustedProxies`), so an image of other ranges, or one built
+    before this, is built again. Not the VPC's whole range: Caddy walks `X-Forwarded-For` from the right past every
+    trusted address, so a task in a trusted range that connects to the balancer's private address with a forged header
+    would have its own address (the balancer's last append) skipped and the forged one taken. Two things hold it, and
+    step 11 must keep both:
+    - **No task runs in the balancer's subnets.** The installation gives the balancer subnets of their own, apart from
+      `FABRIKA_AWS_SUBNETS`; an adopted VPC must have them too. A NAT gateway may share them: what reaches the
+      balancer through it comes from its public address, which is not trusted.
+    - **The balancer keeps `routing.http.xff_header_processing.mode` at `append`** (the default). With `preserve`, the
+      caller's own header reaches the proxy unchanged and its forged entry is taken, from the internet too; `remove`
+      is safe but makes every client the balancer.
+      **The certificates** (built, `src/proxy-certificates.ts`, `src/aws/acm.ts`): every republish and reconcile first
+      requests a public ACM certificate, validated by DNS, for each routed host that has none, and records it in the
+      namespace target as ACM answers (its idempotency token derived from the namespace, the host and the certificate it
+      replaces). It reads every recorded one again: its status and the `CNAME` the operator adds, which the namespace's
+      presentation shows with "add it and keep it in place, and reconcile the namespace". Nothing waits for a certificate
+      and nothing fails on one: validation waits on the operator's DNS, and a namespace that is not ready refuses
+      deploys. One ACM no longer knows is requested anew; one that failed or timed out stays shown until the operator deletes it in
+      ACM. The operator keeps the validation record in DNS: ACM's renewal uses it. Nothing tags or deletes a
+      certificate: a departed host's entry is marked `departed` and shown to the operator to delete, and the pass after
+      the delete forgets it. At most 25 entries per namespace, departed ones counted (a listener's certificate quota
+      besides its default one; the quota is the installation's, shared by every namespace): a host over it gets none
+      until a place is free, and the rest of the pass runs as ever.
+      **The host rules** (built, `src/host-rules.ts`, `src/proxy-hosts.ts`, `src/aws/elb.ts`): a stack of the namespace's
+      own, `fabrika-nh-<length of id>-<id>-<env>`, holds for each served host its certificate on the installation's HTTPS
+      listener (`FABRIKA_AWS_BALANCER_LISTENER`) and a host-header rule forwarding to the namespace's target group; the
+      rule is named by its host and the certificate by its ARN, so a priority chosen anew is an in-place update. Every
+      republish and reconcile applies it after the certificates, and its failure (a rollback, a priority two namespaces
+      chose at once, the listener's rule or certificate quota) is recorded (`proxyHostsFailure`) and shown, never thrown:
+      the namespace's own stack, the proxy's build and rollout and deploys into it never wait on it. A served host is one
+      whose certificate is issued and that is not one of the installation's own hosts (`FABRIKA_AWS_INSTALLATION_HOSTS`),
+      and that no other rule of the listener matches (exact or by a wildcard) ahead of the namespace's own: a namespace
+      without a rule of its own for the host defers to any matching rule, and one with its own rule defers only to a
+      matching rule of a lower priority number, which the listener evaluates first. So a rule added later with a higher
+      number (another namespace's, the operator's or the installation's) takes no host a namespace already routes, and
+      shows no conflict, because the listener still serves the namespace's rule. The installation's own hosts are
+      therefore protected by that list, not by their rules, and the installation's stack must write it (step 11). A rule
+      is the namespace's own only when it names that host alone and forwards to the namespace's own target group. A host
+      that conflicts is marked
+      (`listenerConflict`) and shown. **First come keeps a host**: a namespace whose member names a host already routed
+      never takes it over, whoever its rightful owner is. ACM reuses one validation record per domain in an account, so a
+      second namespace gets an issued certificate for a host whose record is in DNS without touching DNS; that buys it no
+      route, because the conflict check, not the certificate, decides. If the later namespace is the rightful owner, the
+      operator resolves it: the conflict's instruction says to remove the domain from the environment (or the listener's
+      rule) that holds it, then reconcile. Nothing in AWS can know which claim is right; an installation-wide check of a
+      routed domain in Control, with the installation's own hosts reserved, would refuse the second claim at
+      registration (a separate change across providers, not built). Two namespaces putting one host on in the same moment
+      are settled by the listener's own order: the one whose rule the listener serves first (the lower priority number)
+      keeps the host, whichever of them reconciles first, and the other drops it on its next pass. A priority is unique per listener: each host's
+      is chosen against the rules as read, from a hash of the host to the next free one, and recorded with its
+      certificate; one another rule has taken since is chosen anew. The listener's default action must be a fixed answer:
+      one that forwards to the namespace's target group serves it nothing (`defaultForwards`). A departed host's rule and
+      listener certificate leave the hosts stack; its certificate is the operator's to delete (above).
+      **Republish** (built, `src/proxy-republish.ts`): the namespace capability's `republish` drives the proxy to the
+      members, one resumable step per pass from what the target records: an image of the current manifest sets the
+      service (settled); a build of it in flight is followed; otherwise a build of it starts, replacing an older
+      attempt. `wait: 'started'` answers unsettled once a build is in flight; `'active'` polls it, bounded by
+      `AWS_PROXY_WAIT_MS`. `reconcile`, after the stack, carries on proxy work in flight the same way and fails retryably
+      (`awsProxyPending`) when the wait runs out; `provision` stays the stack's. Control's composition reads the proxies'
+      IAM (`FABRIKA_AWS_PROXY_IAM_URL`, `FABRIKA_AWS_PROXY_IAM_KEY`, refused when malformed) and uploads the pinned
+      platform commit with the manifest appended.
+      **The rollout** (built, `followAwsProxyRollout`): read through the service's current service deployment and its
+      revision, as an application's run reads its own, because ECS's reads lag an update. A republish settles only once
+      that deployment is of the recorded revision and successful. Only then are the secrets under `env/` it no longer
+      names deleted (a rollback would start an older revision, which reads them), after the members given are checked
+      against the revision's fingerprint; a failed delete fails the pass retryably before `proxyServiceRolledOut` is
+      recorded. A deployment in progress, or one not shown yet, polls within the same wait. One stopped or rolled back by
+      the circuit breaker fails with `awsProxyRollout`, not retryable, because the same revision would fail again; a new
+      image or secret is a new fingerprint and sets the service anew. A service that ECS answers missing before the
+      rollout is recorded drops the update's mark, so the next pass creates it (or finds the create that landed). Once the
+      rollout is recorded the service is not read again, so one deleted out of band after that is not created again.
+      Not yet: relaying the build's log to an operator, and a needless build when an older manifest's build is in flight
+      while the current one's image is recorded; then
+      the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
+      application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
+      with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
+      a message: a stack's absence is decided from `ListStacks` (or a `DescribeStacks` by the stack's id, which keeps
+      answering a deleted stack), never from that error.
 11. **`src/installation/`**: the CloudFormation template rendered from the installation model (N9), `platform install`,
     `plan`, `deploy`, `upgrade` and `admin`, the GitHub OIDC role, Control's role with its permissions boundary, the
     sidecar workflow, and an operator guide. Control's role is scoped by the prefixes step 9 derives its names under,
