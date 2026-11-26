@@ -71,7 +71,10 @@ describe("a stack's recorded base", () => {
 
 describe('the composition takes its ports from the checkout', () => {
 	test('every compose call passes both ports', () => {
-		expect(composeEnv(['down'])).toMatchObject({ [PLATFORM_PORT_VARIABLE]: String(LOCAL_PORTS.platform), [APPS_PORT_VARIABLE]: String(LOCAL_PORTS.apps) })
+		expect(composeEnv(['down'])).toMatchObject({
+			[PLATFORM_PORT_VARIABLE]: String(LOCAL_PORTS.platform),
+			[APPS_PORT_VARIABLE]: String(LOCAL_PORTS.apps),
+		})
 	})
 
 	test('no compose file names a fixed public port, and both publishes are the variables', () => {
