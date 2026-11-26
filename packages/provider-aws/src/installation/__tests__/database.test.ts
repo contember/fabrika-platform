@@ -123,13 +123,24 @@ const PASSWORDS: Readonly<Record<AwsDatabaseService, string>> = {
 }
 const ADMIN_PASSWORD = 'Admin0123456789abcdefghijABCDEFG'
 
-/** A session that answers each probe from a set of existing names and records what ran. */
-function fakeSession(existing: ReadonlySet<string>, failOn?: string): { session: AwsDatabaseSession; ran: string[] } {
+/**
+ * A session that answers each existence probe from a set of existing names, each check (a probe with a condition) with
+ * no row unless it names `failingCheck`, and records what ran.
+ */
+function fakeSession(
+	existing: ReadonlySet<string>,
+	options: { readonly failOn?: string; readonly failingCheck?: string } = {},
+): { session: AwsDatabaseSession; ran: string[] } {
 	const ran: string[] = []
 	const session: AwsDatabaseSession = {
-		count: async (_text, params) => (params.some((param) => existing.has(param)) ? 1 : 0),
+		count: async (text, params) => {
+			if (text.includes(' AND ')) return options.failingCheck !== undefined && text.includes(options.failingCheck) ? 1 : 0
+			return params.some((param) => existing.has(param)) ? 1 : 0
+		},
 		execute: async (statement) => {
-			if (failOn !== undefined && statement.includes(failOn)) throw new Error(`driver error quoting ${statement}`)
+			if (options.failOn !== undefined && statement.includes(options.failOn)) {
+				throw Object.assign(new Error(`driver error quoting ${statement}`), { errno: '42501' })
+			}
 			ran.push(statement)
 		},
 	}
@@ -137,12 +148,13 @@ function fakeSession(existing: ReadonlySet<string>, failOn?: string): { session:
 }
 
 describe("the services' users and databases", () => {
-	test('a fresh instance: each service gets a user, the master SET on it, a database it owns, closed to everyone else', async () => {
+	test('a fresh instance: each service gets a user, the master a membership in it, a database it owns, closed to everyone else', async () => {
 		const { session, ran } = fakeSession(new Set())
 		await runAwsDatabaseSetup(session, awsDatabaseSetupSteps(PASSWORDS))
-		expect(ran.slice(0, 4)).toEqual([
-			`CREATE ROLE "fabrika_iam" WITH LOGIN PASSWORD '${PASSWORDS.iam}'`,
-			'GRANT "fabrika_iam" TO CURRENT_USER WITH SET TRUE, INHERIT FALSE',
+		expect(ran[0]).toMatch(/^CREATE ROLE "fabrika_iam" WITH LOGIN PASSWORD 'SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+'$/)
+		expect(ran.slice(1, 4)).toEqual([
+			// INHERIT, or the master is not counted as the owner and the REVOKE would revoke nothing.
+			'GRANT "fabrika_iam" TO CURRENT_USER WITH SET TRUE, INHERIT TRUE',
 			'CREATE DATABASE "fabrika_iam" OWNER "fabrika_iam"',
 			'REVOKE ALL ON DATABASE "fabrika_iam" FROM PUBLIC',
 		])
@@ -150,21 +162,43 @@ describe("the services' users and databases", () => {
 		for (const service of ['control', 'operations']) expect(ran).toContain(`CREATE DATABASE "fabrika_${service}" OWNER "fabrika_${service}"`)
 		// No service's user is granted another's role or database.
 		expect(ran.filter((statement) => statement.startsWith('GRANT')).every((statement) => statement.includes('TO CURRENT_USER'))).toBe(true)
+		// The passwords themselves are never sent, only their verifiers.
+		for (const password of Object.values(PASSWORDS)) expect(ran.join('\n')).not.toContain(password)
+	})
+
+	test('every database is checked for its owner and for PUBLIC holding neither CONNECT nor TEMP', () => {
+		const checks = awsDatabaseSetupSteps(PASSWORDS).filter((step) => step.kind === 'check')
+		expect(checks.map((step) => step.label)).toEqual(
+			['fabrika_iam', 'fabrika_control', 'fabrika_operations'].flatMap((
+				role,
+			) => [`the owner of the database ${role}`, `the database ${role} closed to PUBLIC`]),
+		)
+		const closed = checks.find((step) => step.label === 'the database fabrika_iam closed to PUBLIC')
+		expect(closed?.kind === 'check' ? closed.probe : '').toContain("has_database_privilege('public', datname, 'CONNECT')")
+		expect(closed?.kind === 'check' ? closed.probe : '').toContain("has_database_privilege('public', datname, 'TEMP')")
+	})
+
+	test('a check that does not hold fails the setup, naming it', async () => {
+		const { session } = fakeSession(new Set(), { failingCheck: 'has_database_privilege' })
+		await expect(runAwsDatabaseSetup(session, awsDatabaseSetupSteps(PASSWORDS))).rejects.toThrow(
+			"the database setup's check of the database fabrika_iam closed to PUBLIC does not hold",
+		)
 	})
 
 	test('an upgrade: what exists is brought to the same state, each password set to its parameter', async () => {
 		const { session, ran } = fakeSession(new Set(['fabrika_iam', 'fabrika_control', 'fabrika_operations']))
 		await runAwsDatabaseSetup(session, awsDatabaseSetupSteps(PASSWORDS))
 		expect(ran.some((statement) => statement.startsWith('CREATE'))).toBe(false)
-		expect(ran).toContain(`ALTER ROLE "fabrika_control" WITH LOGIN PASSWORD '${PASSWORDS.control}'`)
+		expect(ran).toContainEqual(expect.stringMatching(/^ALTER ROLE "fabrika_control" WITH LOGIN PASSWORD 'SCRAM-SHA-256\$/))
 		expect(ran).toContain('ALTER DATABASE "fabrika_control" OWNER TO "fabrika_control"')
 	})
 
-	test('a failing step is named by its label, never by its statement, which carries a password', async () => {
-		const { session } = fakeSession(new Set(), 'CREATE ROLE "fabrika_control"')
+	test('a failing step is named by its label and SQLSTATE, never by its statement', async () => {
+		const { session } = fakeSession(new Set(), { failOn: 'CREATE ROLE "fabrika_control"' })
 		const failure = await runAwsDatabaseSetup(session, awsDatabaseSetupSteps(PASSWORDS)).catch((error: unknown) => error)
 		expect(failure).toBeInstanceOf(Error)
-		expect(String(failure)).toContain('the user fabrika_control')
+		expect(String(failure)).toContain('the user fabrika_control (SQLSTATE 42501)')
+		expect(String(failure)).not.toContain('SCRAM-SHA-256')
 		expect(String(failure)).not.toContain(PASSWORDS.control)
 	})
 

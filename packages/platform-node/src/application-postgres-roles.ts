@@ -1,7 +1,8 @@
 import type { SqlDatabase } from '@fabrika/platform'
-import { createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto'
+import { createHmac } from 'node:crypto'
 import { acquireMigrationLock } from './application-postgres-grants'
 import { PostgresMigrationError } from './postgres-migration-error'
+import { scramVerifier } from './scram'
 
 /** An application's schema and the two roles that reach it (ADR-0017). */
 export interface ApplicationDatabaseRoles {
@@ -14,7 +15,6 @@ export interface ApplicationDatabaseRoles {
 }
 
 const ROLE_NAME = /^(?:app|run)_[a-z0-9_]{1,59}$/
-const SCRAM_ITERATIONS = 4096
 
 function validateRoles(roles: ApplicationDatabaseRoles): void {
 	for (const name of [roles.schema, roles.migration, roles.runtime]) {
@@ -41,14 +41,7 @@ function derivedPassword(provisioningPassword: string, role: string): string {
 	return createHmac('sha256', provisioningPassword).update(`fabrika-db-role:${role}`, 'utf8').digest('base64url')
 }
 
-/** Postgres' SCRAM-SHA-256 verifier (RFC 7677): the password itself never reaches the server, so no statement log holds it. */
-export function scramVerifier(password: string): string {
-	const salt = randomBytes(16)
-	const salted = pbkdf2Sync(password, salt, SCRAM_ITERATIONS, 32, 'sha256')
-	const storedKey = createHash('sha256').update(createHmac('sha256', salted).update('Client Key').digest()).digest()
-	const serverKey = createHmac('sha256', salted).update('Server Key').digest()
-	return `SCRAM-SHA-256$${SCRAM_ITERATIONS}:${salt.toString('base64')}$${storedKey.toString('base64')}:${serverKey.toString('base64')}`
-}
+export { scramVerifier }
 
 /** The URL `role` connects with: the provisioning URL's host, database and options, the role's name and derived password. */
 export function postgresRoleUrl(provisioningUrl: string, role: string): string {

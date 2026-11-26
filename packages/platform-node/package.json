@@ -30,6 +30,11 @@
 			"bun": "./src/sql.ts",
 			"types": "./src/sql.ts",
 			"default": "./src/sql.ts"
+		},
+		"./scram": {
+			"bun": "./src/scram.ts",
+			"types": "./src/scram.ts",
+			"default": "./src/scram.ts"
 		}
 	},
 	"scripts": {

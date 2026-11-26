@@ -3,7 +3,8 @@
 //
 // - **One instance, a database and a user for each.** IAM, Control and Operations each connect as a user of their own
 //   (`fabrika_iam`, `fabrika_control`, `fabrika_operations`) that owns a database of the same name and can connect to
-//   no other, so a misused Control reads none of IAM's tables (its users, sessions and keys) nor Operations'. The
+//   no other service's (`postgres` and `template1` keep PostgreSQL's default `CONNECT` for `PUBLIC`, and hold nothing),
+//   so a misused Control reads none of IAM's tables (its users, sessions and keys) nor Operations'. The
 //   instance's master user (`fabrika_admin`) creates them and is no service's: its password is read only by the
 //   operator's command, which runs `awsDatabaseSetupSteps` as a one-off task in the platform's network on install and
 //   on every upgrade (idempotent: it creates what is missing and sets each password to its parameter's). RDS backs the
@@ -17,13 +18,21 @@
 // - **No password in a template.** The operator's command generates each (the master's and one per service) into a
 //   Parameter Store SecureString under `/fabrika/platform/database/`, out of Control's reach; the instance reads the
 //   master's through a dynamic reference. Each service's task reads its own parameter alone (the services' step).
+//   CloudFormation resolves that reference only when the stack is created or its template changes, so the command
+//   writes the master's parameter once, on install, and never overwrites it: a new value there would no longer be the
+//   instance's, and the setup could not log in. Rotating it is its own step (the instance's password and the parameter
+//   together), not an upgrade's. The services' passwords the setup itself sets, so their parameters may change.
 //
 // UNVERIFIED: the resources' properties, that `{{resolve:ssm-secure:…}}` is accepted for `MasterUserPassword`, the
 // engine version's availability and that RDS enforces TLS by default for PostgreSQL 15 and later follow the RDS and
-// CloudFormation references; that RDS's master user may grant itself `SET` on a role it created and so create a
-// database that role owns follows PostgreSQL 16's rules for `CREATEROLE`. None was checked against an account.
+// CloudFormation references. That the master may grant itself `SET` and `INHERIT` on a role it created, and so create
+// a database that role owns and revoke `PUBLIC`'s privileges on it, follows PostgreSQL 16's rules for `CREATEROLE`, and
+// a test runs the setup as a `CREATEROLE CREATEDB` non-superuser on a real PostgreSQL; RDS's `rds_superuser` was not
+// checked against an account, which is why the setup's checks assert the result.
 
+import { scramVerifier } from '@fabrika/platform-node/scram'
 import type { JsonValue } from '@fabrika/provider-contract'
+import type { SQL } from 'bun'
 import { blockAt, blocksOverlap } from '../cidr'
 import type { AwsStack } from '../stack'
 import { AWS_PLATFORM_PATH } from './access'
@@ -53,8 +62,8 @@ export function awsDatabasePasswordParameter(service: AwsDatabaseService): strin
 }
 
 /**
- * A password the operator's command generates: letters and digits alone, so it stands in a SQL literal and a URL as
- * it is, and RDS takes it for the master (which refuses `/`, `'`, `"` and `@`).
+ * A password the operator's command generates: letters and digits alone, so it stands in a URL as it is, and RDS
+ * takes it for the master (which refuses `/`, `'`, `"` and `@`).
  */
 const PASSWORD = /^[A-Za-z0-9]{32,128}$/
 
@@ -215,8 +224,9 @@ export function awsDatabaseAdminUrl(outputs: AwsDatabaseOutputs, password: strin
 }
 
 /**
- * One step of the setup: a statement, or a probe that decides between creating an object and bringing an existing one
- * to the same state. `label` names the object and never a password, so an error can carry it.
+ * One step of the setup: a statement; a probe that decides between creating an object and bringing an existing one to
+ * the same state; or a check, a probe that must answer no row, which fails the setup when the state it asserts is not
+ * the database's. `label` names the object and never a password, so an error can carry it.
  */
 export type AwsDatabaseSetupStep =
 	| { readonly kind: 'run'; readonly label: string; readonly statement: string }
@@ -229,28 +239,45 @@ export type AwsDatabaseSetupStep =
 		readonly create: string
 		readonly update: string
 	}
+	| {
+		readonly kind: 'check'
+		readonly label: string
+		/** Answers a row when the asserted state does not hold. */
+		readonly probe: string
+		readonly params: readonly string[]
+	}
 
 /**
- * The setup the master runs, connected to `postgres`: for each service its user (created, or its password set to the
- * parameter's), the master's `SET` on it (PostgreSQL 16 and later create a database another role owns only for a role
- * that may `SET ROLE` to it), its database owned by it, and `CONNECT` on that database taken from everyone else.
+ * The setup the master runs, connected to `postgres`. For each service:
+ *
+ * - its user, created or its password set to the parameter's, sent as a SCRAM-SHA-256 verifier so no server log or
+ *   statement statistics hold the password (`scramVerifier`);
+ * - the master's membership in it, with `SET` (PostgreSQL 16 and later create a database another role owns only for a
+ *   role that may `SET ROLE` to it) and `INHERIT` (without it the master is not counted as the database's owner, so the
+ *   `REVOKE` below would only warn and revoke nothing, and `ALTER DATABASE … OWNER` could not repair a drifted owner).
+ *   The master is the operator's alone, so holding the services' privileges costs nothing;
+ * - its database, owned by it;
+ * - `CONNECT` and `TEMP` on that database taken from `PUBLIC`, so no other service connects to it;
+ * - checks that the owner is the service's user and that `PUBLIC` holds neither, which hold whatever RDS's own changes
+ *   to PostgreSQL's ownership rules do.
+ *
  * Idempotent, so install and every upgrade run it whole. Role and database names are this module's own; a password is
- * letters and digits alone.
+ * letters and digits alone, and only its verifier is sent.
  */
 export function awsDatabaseSetupSteps(passwords: Readonly<Record<AwsDatabaseService, string>>): readonly AwsDatabaseSetupStep[] {
 	return AWS_DATABASE_SERVICES.flatMap((service): AwsDatabaseSetupStep[] => {
 		const role = awsDatabaseRole(service)
-		const password = checkPassword(passwords[service], `${service}'s`)
+		const verifier = scramVerifier(checkPassword(passwords[service], `${service}'s`))
 		return [
 			{
 				kind: 'ensure',
 				label: `the user ${role}`,
 				probe: 'SELECT 1 FROM pg_roles WHERE rolname = $1',
 				params: [role],
-				create: `CREATE ROLE "${role}" WITH LOGIN PASSWORD '${password}'`,
-				update: `ALTER ROLE "${role}" WITH LOGIN PASSWORD '${password}'`,
+				create: `CREATE ROLE "${role}" WITH LOGIN PASSWORD '${verifier}'`,
+				update: `ALTER ROLE "${role}" WITH LOGIN PASSWORD '${verifier}'`,
 			},
-			{ kind: 'run', label: `the master's SET on ${role}`, statement: `GRANT "${role}" TO CURRENT_USER WITH SET TRUE, INHERIT FALSE` },
+			{ kind: 'run', label: `the master's membership in ${role}`, statement: `GRANT "${role}" TO CURRENT_USER WITH SET TRUE, INHERIT TRUE` },
 			{
 				kind: 'ensure',
 				label: `the database ${role}`,
@@ -260,6 +287,19 @@ export function awsDatabaseSetupSteps(passwords: Readonly<Record<AwsDatabaseServ
 				update: `ALTER DATABASE "${role}" OWNER TO "${role}"`,
 			},
 			{ kind: 'run', label: `the database ${role} closed to others`, statement: `REVOKE ALL ON DATABASE "${role}" FROM PUBLIC` },
+			{
+				kind: 'check',
+				label: `the owner of the database ${role}`,
+				probe: 'SELECT 1 FROM pg_database WHERE datname = $1 AND datdba IS DISTINCT FROM (SELECT oid FROM pg_roles WHERE rolname = $1)',
+				params: [role],
+			},
+			{
+				kind: 'check',
+				label: `the database ${role} closed to PUBLIC`,
+				probe:
+					"SELECT 1 FROM pg_database WHERE datname = $1 AND (has_database_privilege('public', datname, 'CONNECT') OR has_database_privilege('public', datname, 'TEMP'))",
+				params: [role],
+			},
 		]
 	})
 }
@@ -272,17 +312,47 @@ export interface AwsDatabaseSession {
 	execute(statement: string): Promise<void>
 }
 
+/** A SQLSTATE: five digits or upper-case letters, which never carry a statement's text. */
+const SQLSTATE = /^[0-9A-Z]{5}$/
+
+/** The SQLSTATE a driver's error carries (Bun's PostgreSQL client in `errno`, others in `code`), or `null`. */
+function sqlState(error: unknown): string | null {
+	if (typeof error !== 'object' || error === null) return null
+	for (const field of ['errno', 'code']) {
+		const value: unknown = Reflect.get(error, field)
+		if (typeof value === 'string' && SQLSTATE.test(value)) return value
+	}
+	return null
+}
+
 /**
- * Runs the setup's steps in order. A failing step is reported by its label alone: a statement carries a password, and
- * a driver's error may quote it.
+ * Runs the setup's steps in order. A failing step is reported by its label and the driver's SQLSTATE alone: a
+ * statement carries a verifier, and a driver's error may quote it. A check that answers a row fails the setup.
  */
 export async function runAwsDatabaseSetup(session: AwsDatabaseSession, steps: readonly AwsDatabaseSetupStep[]): Promise<void> {
 	for (const step of steps) {
+		let held = true
 		try {
 			if (step.kind === 'run') await session.execute(step.statement)
-			else await session.execute((await session.count(step.probe, step.params)) > 0 ? step.update : step.create)
-		} catch {
-			throw new Error(`aws: the database setup failed at ${step.label}`)
+			else if (step.kind === 'ensure') await session.execute((await session.count(step.probe, step.params)) > 0 ? step.update : step.create)
+			else held = (await session.count(step.probe, step.params)) === 0
+		} catch (error) {
+			const state = sqlState(error)
+			throw new Error(`aws: the database setup failed at ${step.label}${state === null ? '' : ` (SQLSTATE ${state})`}`)
 		}
+		if (!held) throw new Error(`aws: the database setup's check of ${step.label} does not hold`)
+	}
+}
+
+/** The setup's session over a Bun PostgreSQL client: the master's, to `postgres`, outside a transaction. */
+export function awsDatabaseSession(sql: SQL): AwsDatabaseSession {
+	return {
+		async count(text, params) {
+			const rows: unknown = await sql.unsafe(text, [...params])
+			return Array.isArray(rows) ? rows.length : 0
+		},
+		async execute(statement) {
+			await sql.unsafe(statement)
+		},
 	}
 }
