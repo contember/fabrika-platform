@@ -3,12 +3,12 @@
 // version still serves; the whole schema, widenings included, follows once the version is live (`applyApprovedSchema`).
 
 import { appSchemaSchema } from '@fabrika/auth'
-import type { AppDelegationDef, AppLinkMountDef, AppSchema, AppScopeDef, AppWorkloadDef, RoleDef } from '@fabrika/auth-core'
+import type { AppSchema, AppScopeDef, AppWorkloadDef, RoleDef } from '@fabrika/auth-core'
 
 /**
- * `none`: the new schema removes nothing the running one grants. `narrowing`: the running schema with only the new
- * schema's removals applied. `inexpressible`: those removals alone do not form a schema IAM accepts, so they reach IAM
- * with the whole schema after the publish, as before.
+ * `none`: the new schema narrows nothing the ahead write may take away. `narrowing`: the running schema with those
+ * removals applied. `inexpressible`: they do not form a schema IAM accepts on their own, so they reach IAM with the whole
+ * schema after the publish, as before.
  */
 export type Narrowing =
 	| { readonly kind: 'none' }
@@ -16,71 +16,61 @@ export type Narrowing =
 	| { readonly kind: 'inexpressible' }
 
 /**
- * `before` with what `after` removes taken away, and nothing added: a role, an action, a role's action or relation, a
- * link mount or one of its grants, a delegation, a workload or one of its actions, member management, a creator role, a
- * lookup, a directory, the external flag of a role and the terminal page. A field `after` changes rather than removes keeps
- * `before`'s value, as anything the comparison cannot show to narrow counts as a widening. Presentation (names, locale,
- * mail) stays `before`'s.
+ * `before` with what `after` takes away from roles and actions, and nothing added: a role, a role's action or relation,
+ * its assigners and external flag, a workload's action, a creator role, a lookup, a directory, a shorter link lifetime,
+ * and every action nothing kept still names. A field `after` changes rather than removes keeps `before`'s value, as
+ * anything the comparison cannot show to narrow counts as a widening.
+ *
+ * Every workload, link mount, delegation, member declaration and terminal page of `before` stays, whatever `after` says:
+ * IAM revokes a dropped workload's or mount's keys and deletes the membership transport key with the last of them, which
+ * no later write restores, so a deploy that fails after this write would leave the running version without them. Each of
+ * them grants only actions the roles and keys carry, so the window until the whole write is the one before this change.
  */
 export function narrowingOf(before: AppSchema, after: AppSchema): Narrowing {
-	const afterActions = new Set(after.actions.map((action) => action.action))
-	const actions = before.actions.filter((action) => afterActions.has(action.action))
-	const catalog = new Set(actions.map((action) => action.action))
-	const inCatalog = (action: string): boolean => catalog.has(action)
-
 	const roles: Record<string, RoleDef> = {}
 	for (const [key, role] of Object.entries(before.roles)) {
 		const next = Object.hasOwn(after.roles, key) ? after.roles[key] : undefined
-		if (next === undefined) continue
-		roles[key] = narrowRole(role, next)
+		if (next !== undefined) roles[key] = narrowRole(role, next)
 	}
-	const links: Record<string, AppLinkMountDef> = {}
-	for (const [mount, link] of Object.entries(before.links ?? {})) {
-		const next = after.links !== undefined && Object.hasOwn(after.links, mount) ? after.links[mount] : undefined
-		if (next === undefined || next.dimension !== link.dimension || !inCatalog(link.issuedBy)) continue
-		const grants = intersect(link.grants, next.grants)
-		if (grants.length === 0) continue
-		links[mount] = { dimension: link.dimension, grants, issuedBy: link.issuedBy, maxDays: Math.min(link.maxDays, next.maxDays) }
-	}
-	const delegations: Record<string, AppDelegationDef> = {}
-	for (const [endpoint, delegation] of Object.entries(before.delegations ?? {})) {
-		const kept = after.delegations !== undefined && Object.hasOwn(after.delegations, endpoint)
-		if (kept && inCatalog(delegation.action)) delegations[endpoint] = delegation
-	}
-	const workloads: AppWorkloadDef[] = []
-	for (const workload of before.workloads ?? []) {
-		const next = (after.workloads ?? []).find((candidate) => candidate.kind === workload.kind && candidate.name === workload.name)
-		if (next === undefined) continue
-		const issues = workload.issues !== undefined && next.issues === workload.issues && Object.hasOwn(links, workload.issues)
-			? workload.issues
-			: undefined
-		workloads.push({
-			kind: workload.kind,
-			name: workload.name,
-			actions: intersect(workload.actions, next.actions),
-			...(issues === undefined ? {} : { issues }),
-		})
-	}
+	const workloads = before.workloads?.map((workload) => narrowWorkload(workload, after.workloads ?? []))
 	const scopes = before.scopes.map((scope) =>
-		narrowScope(scope, after.scopes.find((candidate) => candidate.type === scope.type) ?? { type: scope.type }, inCatalog, roles)
+		narrowScope(scope, after.scopes.find((candidate) => candidate.type === scope.type) ?? { type: scope.type }, roles)
 	)
-	const members = keptMembers(before.members, after.members, inCatalog)
+	const links = before.links === undefined ? undefined : Object.fromEntries(
+		Object.entries(before.links).map(([mount, link]) => {
+			const next = after.links !== undefined && Object.hasOwn(after.links, mount) ? after.links[mount] : undefined
+			return [mount, next === undefined ? link : { ...link, maxDays: Math.min(link.maxDays, next.maxDays) }]
+		}),
+	)
+
+	// An action stays while the new schema declares it, or while something kept from the running one still names it.
+	const named = new Set(after.actions.map((action) => action.action))
+	const keep = (action: string | undefined): void => {
+		if (action !== undefined) named.add(action)
+	}
+	for (const link of Object.values(links ?? {})) {
+		keep(link.issuedBy)
+		link.grants.forEach(keep)
+	}
+	for (const delegation of Object.values(before.delegations ?? {})) keep(delegation.action)
+	for (const workload of workloads ?? []) workload.actions.forEach(keep)
+	for (const scope of scopes) {
+		keep(scope.members?.manage)
+		keep(scope.members?.list)
+		keep(scope.valueSource?.action)
+	}
+	keep(before.members?.manage)
+	keep(before.members?.list)
 
 	const narrowed: AppSchema = {
+		...before,
 		scopes,
-		actions,
+		actions: before.actions.filter((action) => named.has(action.action)),
 		roles,
-		...(before.contract === undefined ? {} : { contract: before.contract }),
-		...(before.links === undefined ? {} : { links }),
-		...(before.delegations === undefined ? {} : { delegations }),
-		...(before.workloads === undefined ? {} : { workloads }),
-		...(before.locale === undefined ? {} : { locale: before.locale }),
-		...(before.displayName === undefined ? {} : { displayName: before.displayName }),
-		...(before.mail === undefined ? {} : { mail: before.mail }),
-		...(members === undefined ? {} : { members }),
-		...(members !== undefined && before.directory !== undefined && after.directory !== undefined ? { directory: before.directory } : {}),
-		...(before.terminal !== undefined && after.terminal !== undefined ? { terminal: before.terminal } : {}),
+		...(links === undefined ? {} : { links }),
+		...(workloads === undefined ? {} : { workloads }),
 	}
+	if (before.directory !== undefined && after.directory === undefined) delete narrowed.directory
 	if (canonicalJson(narrowed) === canonicalJson(before)) return { kind: 'none' }
 	return appSchemaSchema.safeParse(narrowed).success ? { kind: 'narrowing', schema: narrowed } : { kind: 'inexpressible' }
 }
@@ -96,44 +86,27 @@ function narrowRole(role: RoleDef, next: RoleDef): RoleDef {
 		name: role.name,
 		...(role.description === undefined ? {} : { description: role.description }),
 		permissions: intersect(role.permissions, next.permissions),
-		...(role.member === undefined
-			? {}
-			: { member: { scope: role.member.scope, ...(assignableBy === undefined || assignableBy.length === 0 ? {} : { assignableBy }) } }),
+		...(role.member === undefined ? {} : { member: { scope: role.member.scope, ...(assignableBy === undefined ? {} : { assignableBy }) } }),
 		...(role.external === true && next.external === true ? { external: true } : {}),
-		...(Object.keys(via).length === 0 ? {} : { via }),
+		...(role.via === undefined ? {} : { via }),
 	}
 }
 
-function narrowScope(
-	scope: AppScopeDef,
-	next: AppScopeDef,
-	inCatalog: (action: string) => boolean,
-	roles: Readonly<Record<string, RoleDef>>,
-): AppScopeDef {
-	const members = keptMembers(scope.members, next.members, inCatalog)
-	const lookups = scope.lookups === undefined ? [] : intersect(scope.lookups, next.lookups ?? []).filter(inCatalog)
-	const creator = scope.creator !== undefined && next.creator !== undefined && Object.hasOwn(roles, scope.creator) ? scope.creator : undefined
-	return {
-		type: scope.type,
-		...(scope.label === undefined ? {} : { label: scope.label }),
-		...(scope.in === undefined ? {} : { in: scope.in }),
-		...(creator === undefined ? {} : { creator }),
-		...(members === undefined ? {} : { members }),
-		...(members !== undefined && scope.directory !== undefined && next.directory !== undefined ? { directory: scope.directory } : {}),
-		...(lookups.length === 0 ? {} : { lookups }),
-		...(scope.values === undefined ? {} : { values: scope.values }),
-		...(scope.valueSource === undefined || !inCatalog(scope.valueSource.action) ? {} : { valueSource: scope.valueSource }),
-	}
+/** A workload `after` still declares keeps the actions both name; one whose actions all change keeps its own. */
+function narrowWorkload(workload: AppWorkloadDef, after: readonly AppWorkloadDef[]): AppWorkloadDef {
+	const next = after.find((candidate) => candidate.kind === workload.kind && candidate.name === workload.name)
+	const actions = next === undefined ? [] : intersect(workload.actions, next.actions)
+	return actions.length === 0 ? workload : { ...workload, actions }
 }
 
-/** Member management stays while the new schema still declares it and its actions stay in the catalog. */
-function keptMembers(
-	members: { manage: string; list: string } | undefined,
-	next: { manage: string; list: string } | undefined,
-	inCatalog: (action: string) => boolean,
-): { manage: string; list: string } | undefined {
-	if (members === undefined || next === undefined || !inCatalog(members.manage) || !inCatalog(members.list)) return undefined
-	return { manage: members.manage, list: members.list }
+function narrowScope(scope: AppScopeDef, next: AppScopeDef, roles: Readonly<Record<string, RoleDef>>): AppScopeDef {
+	const narrowed: AppScopeDef = { ...scope }
+	if (scope.creator !== undefined && (next.creator === undefined || !Object.hasOwn(roles, scope.creator))) delete narrowed.creator
+	const lookups = intersect(scope.lookups ?? [], next.lookups ?? [])
+	if (lookups.length === 0) delete narrowed.lookups
+	else if (scope.lookups !== undefined) narrowed.lookups = lookups
+	if (scope.directory !== undefined && next.directory === undefined) delete narrowed.directory
+	return narrowed
 }
 
 const intersect = (values: readonly string[], kept: readonly string[]): string[] => values.filter((value) => kept.includes(value))

@@ -276,11 +276,13 @@ other environment, before the provider prepares anything, and the write maps a r
   when `FABRIKA_IAM_ISSUER` is set (`iamSchemaDeps`, `src/services.ts`); every composition that settles runs spreads it.
   A provider never calls IAM's admin surface for an application, and nothing else here does per deploy, with one
   exception: before the namespace republish and `provider.deploy`, `applyNarrowing` writes what the approved schema
-  removes from the schema of the environment's last succeeded run, and nothing it adds (`narrowingOf`,
-  `src/iam-narrowing.ts`; backlog 226). Any failure there, an unavailable IAM included, fails the run with nothing
-  published, so no version serves while IAM still grants what it removed. A field the new schema changes rather than
-  removes keeps the running value; removals that do not form a schema IAM accepts on their own wait for the whole
-  write, with a log line. A dry run and a dev bootstrap narrow nothing ahead.
+  takes away from the roles and actions of the schema of the environment's last succeeded run, and nothing it adds
+  (`narrowingOf`, `src/iam-narrowing.ts`; backlog 226). Any failure there, an unavailable IAM included, fails the run
+  with nothing published, so no version serves while IAM still grants what a role lost. Every workload, link mount,
+  delegation, member declaration and terminal page of the running schema stays in that write: IAM revokes a dropped
+  workload's or mount's keys and deletes the membership transport key with the last of them, which no later write
+  restores, so a deploy that fails afterwards would leave the running version without them. A field the new schema
+  changes rather than removes keeps the running value. A dry run and a dev bootstrap narrow nothing ahead.
 - **The return origin is `app_envs.public_origin` (ADR-0022).** `projectedReturnOrigins` (`src/return-origins.ts`)
   reads it from the DEPLOYING environment only. Never collect another environment's origin: registered under
   `notes@prod`, a `stage` host would be handed production sessions. No origin → the field is ABSENT, not
