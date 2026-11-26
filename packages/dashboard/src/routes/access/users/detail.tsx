@@ -92,7 +92,7 @@ export default createPage()
 					</div>
 				)}
 
-				<nav className="user-detail-tabs" aria-label="User details">
+				<nav className="page-tabs" aria-label="User details">
 					{sections.map((section) => (
 						<Link
 							key={section.id}

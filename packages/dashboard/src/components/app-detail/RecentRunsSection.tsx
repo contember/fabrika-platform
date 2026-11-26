@@ -5,14 +5,14 @@ import { Icon } from '../Icon'
 import { RunStatus } from '../Status'
 import { EmptyState, Table } from '../Table'
 
-export function RecentRunsSection({ runs }: { runs: RunDto[] }) {
+export function RecentRunsSection({ appId, runs }: { appId: string; runs: readonly RunDto[] }) {
 	return (
 		<section>
 			<div className="section-head">
 				<Icon name="runs" size={15} />
 				<h2>Recent runs</h2>
 				<span className="spacer" />
-				<Link to="runs" className="card-link">
+				<Link to="apps/deploys" params={{ id: appId }} className="card-link">
 					All runs
 					<Icon name="chevron-right" size={13} />
 				</Link>
@@ -20,7 +20,7 @@ export function RecentRunsSection({ runs }: { runs: RunDto[] }) {
 			<Table
 				colSpan={5}
 				isEmpty={runs.length === 0}
-				empty={<EmptyState icon="runs" title="No runs for this app yet" body="Deploy an environment above, or push to its trigger ref." />}
+				empty={<EmptyState icon="runs" title="No runs for this app yet" body="Deploy an environment, or push to its trigger branch." />}
 				head={
 					<tr>
 						<th>Status</th>

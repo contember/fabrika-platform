@@ -1,4 +1,5 @@
 import { Link, Outlet, useNavigate, useRoute } from '@buzola/router'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useCallback, useEffect, useRef, useState } from 'react'
 // The console ships from the installation's own checkout, whose packages carry the release's version
 // (`release:validate` holds every package and the tag to it), so the console's version is the installation's.
@@ -8,7 +9,7 @@ import { GateScreen } from '../components/GateScreen'
 import { BrandMark, Icon, type IconName } from '../components/Icon'
 import { RouteError } from '../components/RouteError'
 import { api } from '../lib/api'
-import { type ConsoleCaller, mayOpen, type NavPage, opensDataView } from '../lib/console-access'
+import { type ConsoleCaller, holdsAtApp, mayOpen, type NavPage, opensDataView } from '../lib/console-access'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import { findPeople } from '../lib/iam'
 import { type ConsoleSession, consoleSession } from '../lib/session'
@@ -514,7 +515,25 @@ function Navigation({ caller, pathname }: { caller: ConsoleCaller; pathname: str
 }
 
 /** The data view lies under Applications' path, but its rule is its own: no global `app.manage`, and no rail page. */
-const DATA_VIEW_PATH = /^\/apps\/[^/]+\/environments\/[^/]+\/data$/
+const DATA_VIEW_PATH = /^\/apps\/[^/]+\/(?:data\/[^/]+|environments\/[^/]+\/data)$/
+
+/** An application's own tabs open to a manager of that one application, who cannot list the others. */
+const APP_PAGE_PATH = /^\/apps\/(?!new$)([^/]+)(?:\/|$)/
+
+function managesAppAt(caller: ConsoleCaller, pathname: string): boolean {
+	const segment = APP_PAGE_PATH.exec(pathname)?.[1]
+	const app = segment === undefined ? null : decodedSegment(segment)
+	return app !== null && (caller.access === null || holdsAtApp(caller.access, CONTROL_ACTIONS.APP_MANAGE, app))
+}
+
+/** A malformed escape in a typed address names no application. */
+function decodedSegment(segment: string): string | null {
+	try {
+		return decodeURIComponent(segment)
+	} catch {
+		return null
+	}
+}
 
 export type WorkspaceGate =
 	| { readonly kind: 'page' }
@@ -531,6 +550,7 @@ export function workspaceGate(caller: ConsoleCaller, pathname: string): Workspac
 	const first = lead ?? sections[0]?.items[0] ?? null
 	const dataView = DATA_VIEW_PATH.test(pathname)
 	if (dataView && opensDataView(caller.access)) return { kind: 'page' }
+	if (!dataView && managesAppAt(caller, pathname)) return { kind: 'page' }
 	if (first === null) return { kind: 'no-access' }
 	if (pathname === '/' && lead === null) return { kind: 'redirect', to: first.to }
 	const here = [LEAD, ...NAV.flatMap((section) => section.items)].find((item) => isActive(item, pathname)) ?? null
@@ -615,11 +635,11 @@ function AccountMenu({ session }: { session: ConsoleSession | null }) {
 				className="account-trigger"
 				aria-expanded={open}
 				aria-controls="account-panel"
-				aria-label="Account and settings"
 				onClick={() => setOpen((value) => !value)}
 			>
 				{principal === null ? <Icon name="users" /> : <span className="avatar" aria-hidden="true">{initials(principal.label)}</span>}
 				<span className="account-name">{principal?.label ?? 'Account'}</span>
+				<span className="sr-only">: account and settings</span>
 				<Icon name="chevron-down" size={13} />
 			</button>
 			<div id="account-panel" className="account-panel" hidden={!open}>

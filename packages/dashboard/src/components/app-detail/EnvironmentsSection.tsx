@@ -1,9 +1,5 @@
-import { useNavigate } from '@buzola/router'
-import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useId, useRef, useState } from 'react'
-import { api, ApiError, type AppEnvDto, type DeploymentNamespaceDto, type TriggerDeployRequest } from '../../lib/api'
-import { mayDo } from '../../lib/console-access'
-import { useConsoleAccess } from '../../lib/console-caller'
+import { api, type AppEnvDto, type DeploymentNamespaceDto } from '../../lib/api'
 import { editableTriggerRef } from '../../lib/format'
 import { formProvider } from '../../lib/provider-registration'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -42,7 +38,7 @@ export function EnvironmentsSection(
 					</button>
 				)}
 			</div>
-			<p className="section-note">Where this app runs, how it deploys, and which other websites may call it.</p>
+			<p className="section-note">Where each environment runs, what deploys it, and which other websites may call it.</p>
 			<div className="environment-table">
 				<Table
 					colSpan={6}
@@ -87,38 +83,6 @@ export function EnvironmentsSection(
 				</p>
 			)}
 		</section>
-	)
-}
-
-function DeployButton({ appId, env }: { appId: string; env: AppEnvDto }) {
-	const access = useConsoleAccess()
-	const navigate = useNavigate()
-	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
-
-	async function deploy() {
-		setBusy(true)
-		setError(null)
-		try {
-			const body: TriggerDeployRequest = { appId, env: env.env }
-			const run = await api.deploy(body)
-			navigate('runs/detail', { params: { id: run.id } })
-		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'Deploy failed.')
-			setBusy(false)
-		}
-	}
-
-	if (!mayDo(access, CONTROL_ACTIONS.DEPLOY_TRIGGER, { app: appId, env: env.env })) return null
-
-	return (
-		<div className="environment-deploy">
-			<button type="button" className="accent small" onClick={deploy} disabled={busy}>
-				<Icon name="bolt" size={12} />
-				{busy ? 'Deploying…' : 'Deploy'}
-			</button>
-			{error && <div className="error-text small" role="alert">{error}</div>}
-		</div>
 	)
 }
 
@@ -194,7 +158,6 @@ function EnvironmentRow(
 				</td>
 				<td>
 					<div className="environment-row-actions">
-						{!editing && <DeployButton appId={appId} env={env} />}
 						<button
 							ref={editButton}
 							type="button"
@@ -205,6 +168,7 @@ function EnvironmentRow(
 							aria-controls={editing ? editorId : undefined}
 						>
 							{editing ? 'Editing' : 'Edit'}
+							<span className="sr-only">{` ${env.env}`}</span>
 						</button>
 					</div>
 					{confirming && (

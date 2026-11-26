@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { isValidElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { dataTabEnvironment } from '../components/app/AppFrame'
 import {
 	type ConsoleAccessDto,
 	type ControlFetch,
@@ -12,6 +13,7 @@ import {
 } from '../lib/api'
 import type { ConsoleCaller } from '../lib/console-access'
 import { ConsoleAccessContext } from '../lib/console-caller'
+import { type EnvironmentState, environmentState, needsDataAttention, readEnvironmentState, stateLabel, stateLamp } from '../lib/environment-state'
 import { fmtDate } from '../lib/format'
 import { workspaceGate } from '../routes/_layout'
 import {
@@ -213,8 +215,10 @@ describe('a refusal is a plain not-allowed state, never an error', () => {
 		for (const text of [...MANAGE_ONLY_TEXT, 'Show the error message']) expect(html).not.toContain(text)
 	})
 
-	test('an environment without an ops channel says to redeploy', () => {
-		expect(markup(holding(['data.read']), { kind: 'no-channel' })).toContain('Redeploy')
+	test('an environment without an ops channel says what the console cannot do there and when a deploy opens it', () => {
+		const html = markup(holding(['data.read']), { kind: 'no-channel' })
+		expect(html).toContain('Control has no ops channel to this environment.')
+		expect(html).toContain('a deploy at a current framework release opens it')
 	})
 
 	test('the loader reads the view, the operations, the backups and their schedule, and maps 404 and 403 to not-allowed, 409 to no channel', async () => {
@@ -426,7 +430,8 @@ function elementsOf(node: ReactNode, type: unknown): { key: string | null; props
 	return [...own, ...elementsOf(node.props.children, type)]
 }
 
-const DATA_PATH = '/apps/notes/environments/prod/data'
+const DATA_PATH = '/apps/notes/data/prod'
+const LEGACY_DATA_PATH = '/apps/notes/environments/prod/data'
 
 const consoleCaller = (access: ConsoleAccessDto | null): ConsoleCaller => ({ access, iam: false, administersPeople: false })
 
@@ -446,6 +451,22 @@ describe('a data reader reaches the page', () => {
 		expect(workspaceGate(consoleCaller(holding(['app.manage'])), DATA_PATH)).toEqual({ kind: 'not-available' })
 		expect(workspaceGate(consoleCaller(holding([])), DATA_PATH)).toEqual({ kind: 'no-access' })
 		expect(workspaceGate(consoleCaller(holding(['app.manage'])), '/apps/notes')).toEqual({ kind: 'page' })
+	})
+
+	test('the old data address stays a data view, so its redirect reaches a data reader', () => {
+		expect(workspaceGate(consoleCaller(holding(['data.read'])), LEGACY_DATA_PATH)).toEqual({ kind: 'page' })
+		expect(workspaceGate(consoleCaller(holding(['app.manage'])), LEGACY_DATA_PATH)).toEqual({ kind: 'not-available' })
+	})
+
+	test("a manager of one application opens that application's tabs and no other application", () => {
+		const manager = consoleCaller(holding([], { type: 'app', value: 'notes', actions: ['app.manage'] }))
+		for (const path of ['/apps/notes', '/apps/notes/settings', '/apps/notes/secrets', '/apps/notes/approvals']) {
+			expect(workspaceGate(manager, path)).toEqual({ kind: 'page' })
+		}
+		expect(workspaceGate(manager, '/apps/vozka')).not.toEqual({ kind: 'page' })
+		expect(workspaceGate(manager, '/apps/new')).not.toEqual({ kind: 'page' })
+		expect(workspaceGate(manager, '/apps/%E0')).not.toEqual({ kind: 'page' })
+		expect(workspaceGate(manager, DATA_PATH)).not.toEqual({ kind: 'page' })
 	})
 
 	test('the back link to the application shows only to an app.manage holder', () => {
@@ -836,5 +857,58 @@ describe('following a running operation', () => {
 		scheduleOperationPoll(page([]), () => undefined, schedule)
 		scheduleOperationPoll({ kind: 'not-allowed' }, () => undefined, schedule)
 		expect(scheduled).toHaveLength(1)
+	})
+})
+
+describe("an environment's state lamp", () => {
+	const env = { appId: 'notes', env: 'prod', publishedRunId: 'run-1' }
+	const open = view({ maintenance: { mode: 'open', generation: 7, published: true }, bootFailure: null })
+
+	test('the worst fact wins: offline, then a stuck operation, then a boot failure, then a restricted mode', () => {
+		const failed = operation('op-1', { state: 'failed' })
+		expect(environmentState({ ...env, suspendedAt: 1_790_000_000 }, open, [failed])).toEqual({ kind: 'suspended', at: 1_790_000_000 })
+		expect(environmentState(env, view({ bootFailure: { at: '2026-10-24T08:00:00.000Z' } }), [failed])).toEqual({
+			kind: 'operation',
+			operation: failed,
+		})
+		expect(environmentState(env, view(), [])).toEqual({ kind: 'boot-failure', at: '2026-10-24T09:30:00.000Z' })
+		expect(environmentState(env, view({ bootFailure: null }), [])).toEqual({ kind: 'mode', mode: 'read-only' })
+		expect(environmentState(env, open, [operation('op-1', { state: 'succeeded' })])).toEqual({ kind: 'serving', published: true, source: 'object' })
+		expect(environmentState({ ...env, publishedRunId: null }, null, [])).toEqual({ kind: 'serving', published: false, source: 'control' })
+	})
+
+	test('labels and lamps name the state, and only data states ask for the Data tab', () => {
+		const running: EnvironmentState = { kind: 'operation', operation: operation('op-1') }
+		expect([stateLabel(running), stateLamp(running), needsDataAttention(running)]).toEqual(['Maintenance running', 'run', true])
+		const closed: EnvironmentState = { kind: 'mode', mode: 'closed' }
+		expect([stateLabel(closed), stateLamp(closed), needsDataAttention(closed)]).toEqual(['Closed', 'stop', true])
+		const offline: EnvironmentState = { kind: 'suspended', at: 1 }
+		expect([stateLabel(offline), stateLamp(offline), needsDataAttention(offline)]).toEqual(['Offline', 'stop', false])
+		const pending: EnvironmentState = { kind: 'reading' }
+		expect([stateLabel(pending), stateLamp(pending), needsDataAttention(pending)]).toEqual(['Reading…', 'idle', false])
+	})
+
+	test("a provider without an ops channel still reads as serving from Control's facts; a refusal or an outage says so", async () => {
+		const read = (answers: Record<string, () => Response>) => readEnvironmentState(createControlClient(fakeControl([], answers)), env)
+		const published = await read({ 'data.view': refusal(409), 'data.operations.list': result({ items: [], nextCursor: null }) })
+		expect(published).toEqual({ kind: 'serving', published: true, source: 'control' })
+		expect(stateLabel(published)).toBe('Published')
+		expect(await read({ 'data.view': result(open), 'data.operations.list': result({ items: [operation('op-2')], nextCursor: null }) })).toEqual({
+			kind: 'operation',
+			operation: operation('op-2'),
+		})
+		expect(await read({ 'data.view': refusal(403), 'data.operations.list': refusal(403) })).toEqual({ kind: 'unknown', reason: 'not-allowed' })
+		expect(await read({ 'data.view': refusal(502), 'data.operations.list': result({ items: [], nextCursor: null }) })).toEqual({
+			kind: 'unknown',
+			reason: 'unavailable',
+		})
+	})
+
+	test('the Data tab opens on the environment that needs a person, else prod, else the first', () => {
+		const envs = [{ env: 'test' }, { env: 'prod' }, { env: 'stage' }]
+		expect(dataTabEnvironment(envs, new Map())).toBe('prod')
+		expect(dataTabEnvironment(envs, new Map([['stage', { kind: 'mode', mode: 'closed' }]]))).toBe('stage')
+		expect(dataTabEnvironment([{ env: 'test' }], new Map())).toBe('test')
+		expect(dataTabEnvironment([], new Map())).toBeNull()
 	})
 })

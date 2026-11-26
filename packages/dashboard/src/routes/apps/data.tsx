@@ -1,6 +1,14 @@
 import { createPage, Link } from '@buzola/router'
 import { CONTROL_ACTIONS, OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/control-contract'
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import {
+	AppFrame,
+	type AppFrameData,
+	forgetEnvironmentState,
+	loadAppFrame,
+	readableEnvironments,
+	useEnvironmentStates,
+} from '../../components/app/AppFrame'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { Chip, type Lamp, Status } from '../../components/Status'
@@ -19,9 +27,10 @@ import {
 	type DataRehearsalOutcome,
 	type MaintenanceMode,
 } from '../../lib/api'
-import { holdsGlobally, mayDo, opensApplications } from '../../lib/console-access'
+import { holdsAtApp, holdsGlobally, mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate } from '../../lib/format'
+import { consoleSession } from '../../lib/session'
 
 // An application environment's data (ADR-0069, ADR-0070): what its object reports, its backups, the operations Control
 // ran on it, and the maintenance, backup schedule, restore and recovery controls. consoleAccess only shows or hides a
@@ -268,9 +277,65 @@ export function recoveryChoice(
 
 export default createPage()
 	.params({ id: 'string', env: 'string' })
-	.loader(({ params }) => loadDataView(api, params.id, params.env))
-	.route('/apps/:id/environments/:env/data')
-	.render(({ data, params, invalidate }) => <DataPage appId={params.id} env={params.env} data={data} onChanged={invalidate} />)
+	.loader(async ({ params }) => {
+		const { access } = await consoleSession()
+		// A data reader may manage no application: then the page stands alone, without the tabs.
+		const managesApp = access === null || holdsAtApp(access, CONTROL_ACTIONS.APP_MANAGE, params.id)
+		const [data, frame] = await Promise.all([loadDataView(api, params.id, params.env), managesApp ? loadAppFrame(params.id) : null])
+		return { data, frame }
+	})
+	.route('/apps/:id/data/:env')
+	.render(({ data, params, invalidate }) =>
+		data.frame === null
+			? <DataPage appId={params.id} env={params.env} data={data.data} onChanged={invalidate} />
+			: <DataTab frame={data.frame} env={params.env} data={data.data} onChanged={invalidate} />
+	)
+
+/** The Data tab of an application's page: one environment at a time, chosen above its sections. */
+function DataTab({ frame, env, data, onChanged }: {
+	frame: AppFrameData
+	env: string
+	data: Awaited<ReturnType<typeof loadDataView>>
+	onChanged: () => void
+}) {
+	const { app, envs } = frame
+	const states = useEnvironmentStates(envs)
+	const access = useConsoleAccess()
+	// Stable, so the running operation's poll keeps its timer; it forgets only this environment's held state.
+	const changed = useCallback(() => {
+		forgetEnvironmentState(app.id, env)
+		onChanged()
+	}, [app.id, env, onChanged])
+	return (
+		<AppFrame app={app} envs={envs} tab="data" states={states}>
+			<div className="toolbar">
+				<div className="filter-group" role="group" aria-label="Environment">
+					{readableEnvironments(access, envs).map((candidate) => (
+						<Link
+							key={candidate.env}
+							to="apps/data"
+							params={{ id: app.id, env: candidate.env }}
+							className="filter-option"
+							aria-current={candidate.env === env ? 'page' : undefined}
+						>
+							{candidate.env}
+						</Link>
+					))}
+				</div>
+			</div>
+			<DataView
+				key={JSON.stringify([app.id, env])}
+				appId={app.id}
+				env={env}
+				view={data.view}
+				operations={data.operations}
+				backups={data.backups}
+				schedule={data.schedule}
+				onChanged={changed}
+			/>
+		</AppFrame>
+	)
+}
 
 export function DataPage(
 	{ appId, env, data, onChanged }: {
@@ -911,8 +976,8 @@ function ReadProblem({ read }: { read: Exclude<DataRead<unknown>, { kind: 'ok' }
 		case 'no-channel':
 			return (
 				<EmptyState
-					title="This environment has no ops channel yet."
-					body="It needs a domain and a deploy at a framework release that serves one. Redeploy it to enable this view."
+					title="Control has no ops channel to this environment."
+					body="Its provider serves none, or the release it runs predates one. Without it the console cannot show or change this environment's data, maintenance or recovery; deploys, secrets and errors work as usual. On a provider that serves one, a deploy at a current framework release opens it."
 				/>
 			)
 		case 'unavailable':
