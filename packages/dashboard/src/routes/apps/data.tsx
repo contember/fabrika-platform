@@ -825,7 +825,9 @@ function migrationEffect(operation: DataOperationDto): string {
 		case 'migration_reverted':
 			return 'The last succeeded commit serves again, and the environment is open. The failed version needs a fix before it is deployed again.'
 		case 'migration_failed':
-			return 'The environment is closed, so nothing writes over the data. An operator decides what follows.'
+			return operation.candidateRecovered
+				? 'The failed version booted after all while the rollback deployed, so either version may serve. The environment is closed: an operator decides what follows.'
+				: 'The environment is closed, so nothing writes over the data. An operator decides what follows.'
 		default:
 			return 'The environment stays open.'
 	}
@@ -910,7 +912,8 @@ function StepsTable(
 function stepState(index: number, current: number, state: DataOperationState): { readonly lamp: Lamp; readonly label: string } {
 	if (index < current || (index === current && state === 'succeeded')) return { lamp: 'ok', label: 'done' }
 	if (index === current) return state === 'running' ? { lamp: 'run', label: 'current' } : { lamp: 'stop', label: 'stopped' }
-	return { lamp: 'idle', label: 'pending' }
+	// A finished operation never takes the steps after the one it ended at.
+	return state === 'running' ? { lamp: 'idle', label: 'pending' } : { lamp: 'idle', label: 'not taken' }
 }
 
 function RestoreControl({ appId, env, onChanged }: { appId: string; env: string; onChanged: () => void }) {

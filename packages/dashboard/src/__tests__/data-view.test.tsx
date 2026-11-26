@@ -88,6 +88,7 @@ const operation = (id: string, overrides: Partial<DataOperationDto> = {}): DataO
 	recordsBookmark: false,
 	migrationFailure: null,
 	revertRunId: null,
+	candidateRecovered: false,
 	...overrides,
 })
 
@@ -949,6 +950,12 @@ describe('following a running operation', () => {
 		])
 
 		const reverted = migration({ ...reverting, state: 'failed', errorCode: 'migration_reverted' })
+		// A finished operation shows the step it never took as not taken, not pending.
+		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={reverted} />))).toEqual([
+			['revert', 'done'],
+			['check', 'stopped'],
+			['restrict', 'not taken'],
+		])
 		const page_ = markup(holding(['data.manage']), undefined, page([reverted]))
 		expect(page_).toContain('Migration failed at step <code>check</code>')
 		expect(page_).toContain('<code>migration_reverted</code>')
@@ -963,6 +970,15 @@ describe('following a running operation', () => {
 		expect(closedHtml).toContain('the data is already migrated')
 		expect(closedHtml).toContain('The environment is closed')
 		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={closed} />))).toEqual([['restrict', 'stopped']])
+
+		const recovered = migration({
+			...closed,
+			step: 'restrict',
+			migrationFailure: 'record_unwritable',
+			revertRunId: 'run-back',
+			candidateRecovered: true,
+		})
+		expect(renderToStaticMarkup(<MigrationSituation operation={recovered} />)).toContain('booted after all while the rollback deployed')
 
 		const unconfirmed = migration({ state: 'failed', errorCode: 'migration_unconfirmed' })
 		const unconfirmedHtml = renderToStaticMarkup(<MigrationSituation operation={unconfirmed} />)
