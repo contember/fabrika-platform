@@ -357,7 +357,7 @@ describe.skipIf(!hasPostgres)('the mini-ORM on Postgres', () => {
 		await expect(call(within, 'notes.list', { after: 'not a cursor' })).rejects.toThrow('after takes the next cursor')
 		await expect(call(within, 'notes.list', { offset: 2 })).rejects.toThrow('offset is not an option of list')
 		await expect(call(within, 'notes.list', { limit: 501 })).rejects.toThrow('limit must be an integer from 1 to 500')
-		expect(keysOf(within)).toEqual(['note_comments', 'note_flags', 'notes'])
+		expect(keysOf(within)).toEqual(['note_comments', 'note_flags', 'notes', 'workspaces'])
 		await transaction.commit()
 	})
 

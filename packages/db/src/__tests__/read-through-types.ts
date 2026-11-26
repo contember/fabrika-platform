@@ -60,8 +60,8 @@ type Index = DbIndex<DB, Policies, typeof vocabulary>
 
 export type ReadThroughTypes = [
 	// A `Within` of `team` lists the tasks and boards it reads through `team_id`, and the view read through a board;
-	// without `readThrough` it would list none.
-	Expect<Equal<keyof WithinTables<Index, 'team', 'tasks.read', 'query'>, 'tasks' | 'boards' | 'board_titles'>>,
-	// A `Within` of `project` lists its contained tasks, as before.
-	Expect<Equal<keyof WithinTables<Index, 'project', 'tasks.read', 'query'>, 'tasks'>>,
+	// without `readThrough` it would list only its own table.
+	Expect<Equal<keyof WithinTables<Index, 'team', 'tasks.read', 'query'>, 'teams' | 'tasks' | 'boards' | 'board_titles'>>,
+	// A `Within` of `project` lists its own table and its contained tasks, as before.
+	Expect<Equal<keyof WithinTables<Index, 'project', 'tasks.read', 'query'>, 'projects' | 'tasks'>>,
 ]

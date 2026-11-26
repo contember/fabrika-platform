@@ -747,37 +747,12 @@ export function childListPredicate(context: TableContext, capability: unknown, o
 }
 
 /**
- * The column that places a row of `model` in `dimension`: the column of that link of its containment chain, or a
- * top-level table's own key; `undefined` when no `Within` of the dimension reaches the table.
- */
-export function reachColumn(model: TableModel, dimension: string): string | undefined {
-	if (model.scope.mode === 'dimension' && model.scope.container === undefined && model.scope.dimension === dimension) {
-		return model.scope.key
-	}
-	for (let index = 0; index < model.chain.length; index++) {
-		const link = model.chain[index]
-		if (link?.dimension === dimension) {
-			return link.column
-		}
-	}
-	return undefined
-}
-
-/**
- * Whether a `Within` of `dimension` lists the table: through its containment chain or a secondary path, and a child
- * view through its parent's, its parent's own dimension included.
+ * Whether a `Within` of `dimension` lists the table: a dimension table its own dimension's, then through its containment
+ * chain or a secondary path; a child view through its parent's.
  */
 export function reachedBy(context: TableContext, dimension: string): boolean {
 	const model = context.through?.context.model ?? context.model
-	return parentColumn(model, context.through !== undefined, dimension) !== undefined || secondaryPathsOf(model, dimension).length > 0
-}
-
-/** The column that places a row of `model` in `dimension`, a view's parent's own key among them (`own`). */
-function parentColumn(model: TableModel, own: boolean, dimension: string): string | undefined {
-	if (own && model.scope.mode === 'dimension' && model.scope.dimension === dimension) {
-		return model.scope.key
-	}
-	return reachColumn(model, dimension)
+	return nodeColumnOf(model, dimension) !== undefined || secondaryPathsOf(model, dimension).length > 0
 }
 
 /** The secondary read paths of `model` that reach `dimension`, a dimension outside its chain: at their node or above it. */
@@ -811,14 +786,14 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 		)
 	}
 	if (context.through !== undefined) {
-		return throughParent(context, context.through, grant, (parent, part) => withinReach(parent, part, true))
+		return throughParent(context, context.through, grant, withinReach)
 	}
-	return withinReach(context, grant, false)
+	return withinReach(context, grant)
 }
 
 /** A `Within`'s read of a table it reaches: through the column that places a row in its dimension, or its secondary paths. */
-function withinReach(context: TableContext, grant: WithinGrant, own: boolean): OperationNode | undefined {
-	const column = parentColumn(context.model, own, grant.dimension)
+function withinReach(context: TableContext, grant: WithinGrant): OperationNode | undefined {
+	const column = nodeColumnOf(context.model, grant.dimension)
 	if (column !== undefined) {
 		return withinPredicate(context, column, grant, 'read')
 	}
@@ -972,7 +947,7 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 		}
 		return [tests]
 	}
-	const column = reachColumn(model, grant.dimension)
+	const column = nodeColumnOf(model, grant.dimension)
 	if (column === undefined) {
 		throw new CapabilityError(
 			'out_of_reach',
@@ -1324,7 +1299,7 @@ export function claimScope(
 		throw new CapabilityError('table_kind', `${model.name} is an application table: claim it through ctx.db.app`)
 	}
 	checkAction(context, 'update', grant.action)
-	const column = reachColumn(model, grant.dimension)
+	const column = nodeColumnOf(model, grant.dimension)
 	if (column === undefined) {
 		throw new CapabilityError(
 			'out_of_reach',

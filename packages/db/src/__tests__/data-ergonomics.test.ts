@@ -249,7 +249,7 @@ describe.skipIf(!hasPostgres)('over lists every table whose containment chain ho
 		await transaction.commit()
 	})
 
-	test('a child table two levels down is listed too, and a Within of task reaches only what its chain holds', async () => {
+	test('a child table two levels down is listed too, and a Within of task reaches only its own table and what its chain holds', async () => {
 		const id = await seedTask()
 		await mutate((handles) => call(handles.target(task('tasks.write', id), 'on'), 'task_comments.insert', { body: `under ${id}` }))
 		const { transaction, handles } = invocation('query')
@@ -257,7 +257,7 @@ describe.skipIf(!hasPostgres)('over lists every table whose containment chain ho
 		expect(itemsOf(await call(byOrg, 'task_comments.list', { where: [['task_id', '=', id]] })).map((item) => item['body'])).toEqual([
 			`under ${id}`,
 		])
-		expect(keysOf(handles.within(alice.within('task', 'tasks.read', [id])))).toEqual(['task_comments'])
+		expect(keysOf(handles.within(alice.within('task', 'tasks.read', [id])))).toEqual(['task_comments', 'tasks'])
 		await expect(call(byOrg, 'tasks.list')).resolves.toBeDefined()
 		await expect(call(handles.within(alice.within('org', 'tasks.write', ['o1'])), 'tasks.list')).rejects.toThrow(
 			'read on tasks requires tasks.read; the capability holds tasks.write',

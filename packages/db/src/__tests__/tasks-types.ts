@@ -32,10 +32,10 @@ export type TaskTypes = [
 			Unavailable<"update on tasks needs the action 'tasks.write' or a column's own write action, and this endpoint holds 'tasks.read'">
 		>
 	>,
-	// over: every table whose containment chain holds the dimension.
+	// over: the dimension's own table and every table whose containment chain holds the dimension.
 	Expect<Equal<keyof WithinTables<Index, 'org', 'tasks.read', 'query'>, 'projects' | 'tasks' | 'task_comments'>>,
-	Expect<Equal<keyof WithinTables<Index, 'project', 'tasks.read', 'query'>, 'tasks' | 'task_comments'>>,
-	Expect<Equal<keyof WithinTables<Index, 'task', 'tasks.read', 'query'>, 'task_comments'>>,
+	Expect<Equal<keyof WithinTables<Index, 'project', 'tasks.read', 'query'>, 'projects' | 'tasks' | 'task_comments'>>,
+	Expect<Equal<keyof WithinTables<Index, 'task', 'tasks.read', 'query'>, 'tasks' | 'task_comments'>>,
 	// A column's own write action scopes an UPDATE of its table on a 'write' site, and reads nothing.
 	Expect<Equal<FragmentTable<Index, Within<'project', 'tasks.assign'>, 'write'>, 'tasks' | 'task_comments'>>,
 	Expect<

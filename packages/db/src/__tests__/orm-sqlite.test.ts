@@ -448,6 +448,21 @@ describe('a scoped read still sees only its scope on SQLite', () => {
 		expect(await invoke('query', (db) => call(db.within(within), 'events.count', { where: [['urgent', '=', true]] }))).toBe(0)
 	})
 
+	test("a Within of a contained dimension lists that dimension's own rows: its values, and a container grant's", async () => {
+		const own = await insertProject({ name: 'own' }, 'o1')
+		const sibling = await insertProject({ name: 'sibling' }, 'o1')
+		const foreign = await insertProject({ name: 'foreign' }, 'o2')
+		const listed = async (within: unknown) =>
+			new Set(itemsOf(await invoke('query', (db) => call(db.within(within), 'projects.list'))).map((row) => row['id']))
+		expect(await listed(alice.within('project', 'projects.read', [own]))).toEqual(new Set([own]))
+		expect(await listed(alice.within('project', 'projects.read', [own, foreign]))).toEqual(new Set([own, foreign]))
+		// A grant on the organization reaches every project in it through `organization_id`, and none of another.
+		const byOrganization = alice.within('project', 'projects.read', [], [{ dimension: 'organization', values: ['o1'] }])
+		expect(await listed(byOrganization)).toEqual(new Set([own, sibling]))
+		expect(await listed(alice.within('project', 'projects.read', []))).toEqual(new Set())
+		await expect(listed(alice.within('project', 'projects.write', [own]))).rejects.toThrow('projects.write')
+	})
+
 	test("a project's Ref reads its own events only, and not another project's by key", async () => {
 		const first = await insertProject({ name: 'first' })
 		const second = await insertProject({ name: 'second' })

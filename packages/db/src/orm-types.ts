@@ -10,7 +10,6 @@ import type {
 	ActionOf,
 	ApplicationTableName,
 	ChildTableName,
-	ContainerOf,
 	DimensionOf,
 	DimensionTableName,
 	InsertValues,
@@ -113,7 +112,7 @@ export interface IndexedTable {
 	readonly chain: string
 	/** The dimensions whose `Ref` reaches the table: a dimension table's own and every dimension of its chain. */
 	readonly refs: string
-	/** The dimensions whose `Within` lists the table: every dimension of its chain, and a top-level table's own. */
+	/** The dimensions whose `Within` lists the table: every dimension of its chain, and a dimension table's own. */
 	readonly reach: string
 	readonly versioned: boolean
 	/** A queue table: its rows are claimed and finished through `row.ref`. */
@@ -176,8 +175,8 @@ type ChainDimensions<P, T, V> = PolicyOf<P, T> extends { readonly scope: infer S
 	: never
 	: never
 
-/** The dimensions whose `Within` lists table `T`: every dimension of its chain, and a top-level table's own. */
-type ReachOf<P, T, V> = [ContainerOf<P, T>] extends [never] ? DimensionOf<P, T> | ChainDimensions<P, T, V> : ChainDimensions<P, T, V>
+/** The dimensions whose `Within` lists table `T`: every dimension of its chain, and a dimension table's own. */
+type ReachOf<P, T, V> = DimensionOf<P, T> | ChainDimensions<P, T, V>
 
 /**
  * The dimensions outside its chain whose `Within` reads table `T` through a foreign key (`readThrough`); a child view's
@@ -216,7 +215,7 @@ export type DbIndex<DB, P, V = unknown> = {
 	/** Dimension → the dimension tables listed in it: those it contains, and a top-level table its own. */
 	readonly listed: { readonly [T in DimensionTableName<P> as ListDimensionOf<P, T>]: T }
 	/**
-	 * Dimension → the tables an `over` of it lists: each whose containment chain holds it, a top-level table its own, and
+	 * Dimension → the tables an `over` of it lists: each whose containment chain holds it, a dimension table its own, and
 	 * each that reads through it (`readThrough`).
 	 */
 	readonly within: { readonly [T in DimensionTableName<P> | ChildTableName<P> as ReachOf<P, T, V> | ReadThroughOf<P, T>]: T }
@@ -533,7 +532,7 @@ type ListRefusal<T extends string, E extends IndexedTable, A extends string> = `
 
 /**
  * `ctx.db.within` of an `over` endpoint: every table whose containment chain holds its dimension (tasks two levels
- * down through their stamped `org_id`), and a top-level table its own; child tables included.
+ * down through their stamped `org_id`), and a dimension table its own; child tables included.
  */
 export type WithinTables<Ix extends AnyDbIndex, D extends string, A extends string, K extends DataKind> = {
 	readonly [T in WithinIn<Ix, D>]: WithinRows<T, Ix['tables'][T], A, K>
