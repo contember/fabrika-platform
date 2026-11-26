@@ -485,9 +485,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     trusted address, so a task in a trusted range that connects to the balancer's private address with a forged header
     would have its own address (the balancer's last append) skipped and the forged one taken. Two things hold it, and
     step 11 must keep both:
-    - **No task runs in the balancer's subnets.** The installation gives the balancer subnets of their own, apart from
-      `FABRIKA_AWS_SUBNETS`; an adopted VPC must have them too. A NAT gateway may share them: what reaches the
-      balancer through it comes from its public address, which is not trusted.
+    - **Nothing but the balancers' nodes (and a NAT gateway, if one is ever added) has an address in the balancer's
+      subnets.** The installation creates its own VPC with the balancers' subnets apart from the tasks'
+      (`FABRIKA_AWS_SUBNETS`), and its address plan refuses any overlap between the two (`installation/network.ts`).
+      A NAT gateway may share them: what reaches the balancer through it comes from its public address, which is not
+      trusted. The ranges are passed sorted, so the same subnets in another order rebuild no proxy.
     - **The balancer keeps `routing.http.xff_header_processing.mode` at `append`** (the default). With `preserve`, the
       caller's own header reaches the proxy unchanged and its forged entry is taken, from the internet too; `remove`
       is safe but makes every client the balancer.
@@ -558,9 +560,30 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
       with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
       a message: a stack's absence is decided from `ListStacks` (or a `DescribeStacks` by the stack's id, which keeps
       answering a deleted stack), never from that error.
-11. **`src/installation/`**: the CloudFormation template rendered from the installation model (N9), `platform install`,
-    `plan`, `deploy`, `upgrade` and `admin`, the GitHub OIDC role, Control's role with its permissions boundary, the
-    sidecar workflow, and an operator guide. Control's role is scoped by the prefixes step 9 derives its names under,
+11. **`src/installation/`**: the installation's CloudFormation stacks, `platform install`, `plan`, `deploy`, `upgrade`
+    and `admin`, the GitHub OIDC role, Control's role with its permissions boundary, the sidecar workflow, and an
+    operator guide. Decided (2026-11-26): the installation is built for AWS now, not from the neutral installation
+    model (N9) first, and kept as data the model can absorb later; it creates its own VPC rather than adopting the
+    operator's; and the platform's own hosts (IAM, Control, the console) get a balancer of their own, apart from the
+    applications' (about $16 a month), so no grant of Control's role reaches a listener that routes them. An
+    installation is one AWS account (the tags name no installation). Its stacks are under `fabrika-platform-`, which
+    no grant of Control's role names, and the operator applies them with their own credentials. In order, each its
+    own change:
+    1. **The network** (built, `installation/network.ts`): one VPC of the operator's /16 (`10.80.0.0/16` by default)
+       in two availability zones; the tasks' two /20s and the balancers' two /24s, all public through one internet
+       gateway, no NAT gateway (every task gets a public address); Control's network variables from its outputs.
+    2. **The balancers**: the applications' balancer (its group, the HTTPS listener with a fixed default answer and a
+       default certificate, `xff_header_processing.mode` at `append`, the HTTP listener's redirect) and the
+       platform's, with its rules for the installation's hosts to the platform proxy.
+    3. **Access**: the apps' permissions boundary, Control's role (the grants below), the ECS cluster, the sources
+       bucket, the ECS service-linked role.
+    4. **The database**: RDS PostgreSQL for IAM, Control and Operations, in subnets of its own.
+    5. **The platform's services**: Control, IAM, the console and the platform proxy on ECS, their images and
+       variables.
+    6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
+       GitHub OIDC role.
+
+    Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
     - ECS: `CreateService`, `UpdateService`, `DescribeServices`, the service deployment and revision reads, `RunTask`,
       `DescribeTasks` on `service/<cluster>/*` and `task/<cluster>/*`, and `TagResource` only with the condition

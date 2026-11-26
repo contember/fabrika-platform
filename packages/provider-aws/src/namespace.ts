@@ -45,6 +45,7 @@ import { type EcsClient, SERVICE_CONNECT_ARN, TARGET_GROUP_ARN } from './aws/ecs
 import { LISTENER_ARN } from './aws/elb'
 import type { SsmClient } from './aws/ssm'
 import { AwsError } from './aws/transport'
+import { blockContains, blockOf, blocksOverlap, isNetworkAddress, VPC_CIDR } from './cidr'
 import {
 	AWS_MAX_PROXY_CERTIFICATES,
 	AWS_PROVIDER,
@@ -394,26 +395,12 @@ export interface AwsInstallationBalancer {
 /** The most balancer subnets a namespace's proxy trusts: one per availability zone, and no region has more. */
 export const AWS_MAX_BALANCER_SUBNETS = 8
 
-/** An IPv4 CIDR block of a VPC's or a subnet's size (a /16 to a /28). */
-const VPC_CIDR = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:1[6-9]|2[0-8])$/
-
-/** The first address of `cidr` (of the `VPC_CIDR` form) as a number, and its prefix length. */
-function blockOf(cidr: string): { readonly start: number; readonly prefix: number } {
-	const [address = '', prefix = ''] = cidr.split('/')
-	return { start: address.split('.').reduce((sum, octet) => sum * 256 + Number(octet), 0), prefix: Number(prefix) }
-}
-
-/** Whether `cidr` (of the `VPC_CIDR` form) names its network address: no bit is set past its prefix, as a VPC's block. */
-function isNetworkAddress(cidr: string): boolean {
-	const { start, prefix } = blockOf(cidr)
-	return start % 2 ** (32 - prefix) === 0
-}
-
-/** Whether the block `inner` lies inside the block `outer`, both named by their network address. */
-function blockContains(outer: string, inner: string): boolean {
-	const a = blockOf(outer)
-	const b = blockOf(inner)
-	return b.prefix >= a.prefix && Math.floor(b.start / 2 ** (32 - a.prefix)) === a.start / 2 ** (32 - a.prefix)
+/**
+ * The ranges a namespace proxy's image trusts forwarding headers from, as its build passes them: the balancer's subnets,
+ * sorted and comma-joined, so the same subnets in another order are the same ranges.
+ */
+export function awsTrustedProxies(balancer: Pick<AwsInstallationBalancer, 'balancerSubnetCidrs'>): string {
+	return [...balancer.balancerSubnetCidrs].sort().join(',')
 }
 
 /**
@@ -431,7 +418,7 @@ export function checkInstallationBalancer(balancer: AwsInstallationBalancer): Aw
 		|| !subnets.every((cidr) => VPC_CIDR.test(cidr) && isNetworkAddress(cidr) && blockContains(balancer.vpcCidr, cidr))
 		// A subnet the size of the VPC leaves no room for a task outside it.
 		|| subnets.some((cidr) => blockOf(cidr).prefix === blockOf(balancer.vpcCidr).prefix)
-		|| subnets.some((cidr, i) => subnets.some((other, j) => i !== j && (blockContains(cidr, other) || blockContains(other, cidr))))
+		|| subnets.some((cidr, i) => subnets.some((other, j) => i !== j && blocksOverlap(cidr, other)))
 	) {
 		throw new Error(
 			`aws: the balancer's subnet ranges are none, more than ${AWS_MAX_BALANCER_SUBNETS}, one of another form, one not inside the VPC's range, or two that overlap`,

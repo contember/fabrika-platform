@@ -19,6 +19,7 @@ import {
 	awsNamespaceResources,
 	awsNamespaceStack,
 	awsNamespaceTargetEnvelope,
+	awsTrustedProxies,
 	checkInstallationBalancer,
 	namespaceOutputsOf,
 	readNamespaceOutputs,
@@ -250,6 +251,11 @@ describe('awsNamespaceStack', () => {
 		}
 		const eight = Array.from({ length: 8 }, (_, i) => `10.0.${240 + i}.0/24`)
 		expect(checkInstallationBalancer({ ...balancer, balancerSubnetCidrs: eight }).balancerSubnetCidrs).toEqual(eight)
+	})
+
+	test('the trusted ranges are the subnets sorted, so the same subnets in another order rebuild no proxy', () => {
+		expect(awsTrustedProxies({ balancerSubnetCidrs: ['10.0.241.0/24', '10.0.240.0/24'] })).toBe('10.0.240.0/24,10.0.241.0/24')
+		expect(awsTrustedProxies({ balancerSubnetCidrs: ['10.0.240.0/24', '10.0.241.0/24'] })).toBe('10.0.240.0/24,10.0.241.0/24')
 	})
 
 	test("holds the proxy's build: its repository, log group, a role under the boundary reaching only its own, and an x86 project", () => {
