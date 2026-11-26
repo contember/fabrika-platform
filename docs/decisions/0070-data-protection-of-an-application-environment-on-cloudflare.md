@@ -439,11 +439,12 @@ steps. The object accepts `prepare` and `arm` on itself only when all of these h
 - the object runs a gated release. Every boot of one writes `booted` into a record that lacks it before its first
   ordinary event, so no gated version served since the commit. A release before the gate has no such exception, and
   refuses the rewind as it refuses any rewind of the serving object;
-- the target is the record's bookmark before the migration, and nothing else.
+- the target is the record's bookmark before the migration, and nothing else;
+- the request names the operation that owns the record (ADR-0069 §3): the one whose `migrate` first found it. A record
+  left by an earlier operation, which a release before the gate may have served over, belongs to that operation, and
+  a later one cannot rewind to it.
 
-Control asks for it only within the operation whose own `migrate` answered that record, and only before that
-operation's redeploy. A record left by an earlier operation, which a release before the gate may have served over, is
-never rewound.
+Control asks for the rewind only before the operation's own redeploy, and never returns to it after.
 
 Control then redeploys the last succeeded run's commit and opens the object at a new generation. The undo bookmark
 `arm` answers is recorded like a side restore's. If `verify` finds the sentinel three times, the object stays `inspect`

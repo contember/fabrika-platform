@@ -204,9 +204,9 @@ migration bookmark, does all of it inside the `blockConcurrencyWhile` that holds
 1. It runs every boot check that does not read the migrated schema: the module, the contract digest, the variables,
    the bindings, the handlers.
 2. It reads `getCurrentBookmark()` and writes the **migration record**, `__fabrika/ops/<object>.migration.json` in the
-   environment's bucket, by a put conditioned on the version it read: the bookmark, the ledger digest it starts from, the pending files of both bundles with their checksums, and the time. A failed put
-   migrates nothing: the event answers 503, `migrate` answers `migration_failed` with `record_unwritable`, and the next
-   event tries again.
+   environment's bucket, by a put conditioned on the version it read: the bookmark, the ledger digest it starts from,
+   the pending files of both bundles with their checksums, and the time. A failed put migrates nothing: the event
+   answers 503, `migrate` answers `migration_failed` with `record_unwritable`, and the next event tries again.
 3. It applies every pending file of both bundles, the framework's then the application's, with their ledger rows, in
    one `transactionSync` that ends with `PRAGMA foreign_key_check`; a row it returns rolls the whole set back. A
    failure, or a reset past the 30 s bound, leaves the ledger the boot started from.
@@ -225,8 +225,10 @@ not fit is a schema migration plus a backfill job, over two deploys.
 **The migrating deploy.** A deploy that brings a pending migration to a candidate that records the bookmark runs as a
 `migrate` operation under the deploy lease and restricts nothing: the old version serves, writes included, until the
 new one has migrated. The operation runs its own deploy, then sends `POST /__fabrika/ops/migrate { generation }` at
-the published generation. In `open` that request starts the boot or awaits the one under way, and the object answers
-the ledger and the migration record.
+the published generation, naming the operation. In `open` that request starts the boot or awaits the one under way,
+and the object answers the ledger and the migration record. The first `migrate` that finds the record without an owner
+writes its operation's id into it, by the same conditional put; a record that already has another owner stays as it
+is. Only the owner may rewind to it (ADR-0070 §9), so a record left by an earlier operation is never rewound.
 
 **Which version answers.** Cloudflare updates an active object's code deferred by default: the old instance keeps
 accepting requests, ops requests included, until it hibernates or `max_delay` passes (300 s by default). An answer from
@@ -293,7 +295,7 @@ new generation.
 | The migration record cannot be written                                 | Nothing migrates; `migrate` answers `record_unwritable`; Control redeploys the last succeeded commit  |
 | The `migrate` answer comes from the old version                        | Its ledger lacks the candidate's files; Control asks again until the new version answers              |
 | The migration rolls back, or resets past 30 s                          | The ledger is unchanged; Control redeploys the last succeeded commit                                  |
-| The migration commits and the new version does not boot                | The in-place rewind to the record's bookmark, then the redeploy; until the rewind is built, see above |
+| The migration commits and the new version does not boot                | The in-place rewind, then the redeploy; until it is built, "Until the in-place rewind is built" above |
 | The redeployed commit does not answer `ok` by the deadline             | Control publishes `closed`; the run fails as `migration_failed`, for an operator                      |
 | A migrate request carries a generation that is not the published one   | Refused                                                                                               |
 | Control dies mid-operation                                             | The environment stays in its published mode; a successor fences and resumes from the recorded step    |
