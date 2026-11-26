@@ -36,7 +36,14 @@ import { type ElbClient } from './aws/elb'
 import type { AwsCredentialSource } from './aws/transport'
 import type { AwsAppTarget } from './codecs'
 import type { AwsInstallationNetwork } from './environment-stack'
-import { type AwsInstallationBalancer, type AwsProxySource, checkNamespaceTarget, namespaceFailure, readNamespaceOutputs } from './namespace'
+import {
+	type AwsInstallationBalancer,
+	type AwsProxySource,
+	awsTrustedProxies,
+	checkNamespaceTarget,
+	namespaceFailure,
+	readNamespaceOutputs,
+} from './namespace'
 import {
 	type AwsProxyBuildClients,
 	awsProxyBuildCurrent,
@@ -117,8 +124,9 @@ export async function republishAwsProxy(
 	const giveUpAt = now() + (input.wait === 'active' ? (runtime.waitMs ?? AWS_PROXY_WAIT_MS) : 0)
 	const manifestSha256 = await sha256Hex(awsProxyManifestFile(input.namespace.id, input.members))
 	// Behind the balancer, the client is the address it forwards: Caddy trusts the header from the balancer's own subnets
-	// alone, never from a range a task runs in (`AwsInstallationBalancer.balancerSubnetCidrs`).
-	const trustedProxies = context.balancer.balancerSubnetCidrs.join(',')
+	// alone, never from a range a task runs in (`AwsInstallationBalancer.balancerSubnetCidrs`). Sorted, so the same
+	// subnets in another order are the same ranges and rebuild no proxy.
+	const trustedProxies = awsTrustedProxies(context.balancer)
 	const common = { installation, proxySource, events: input.events, signal: input.signal }
 	// The hosts' certificates first: their DNS validation is the operator's, and the longer they have the better. Nothing
 	// here waits for one.
