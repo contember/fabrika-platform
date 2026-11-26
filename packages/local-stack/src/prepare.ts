@@ -426,6 +426,8 @@ const run = async (command: string[]): Promise<void> => {
 export const prepareLocalStack = async (): Promise<void> => {
 	refuseLocalOAuthClients(process.env)
 	mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+	// Before the console build, so a refused move costs nothing.
+	await recordLocalPorts()
 	// Made here, by the host's user, so a reset can remove the messages the IAM container writes as root.
 	mkdirSync(MAIL_DIRECTORY, { recursive: true, mode: 0o700 })
 	// Plain `bun run`, never wrapped in the developer's core-leasing helper: this also runs where that
@@ -436,7 +438,6 @@ export const prepareLocalStack = async (): Promise<void> => {
 	// against a `node_modules` the outer install was still writing. See this package's CLAUDE.md.
 	await run(['bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
 	await prepareLocalSecrets()
-	await recordLocalPorts()
 	await prepareLocalSourceConfiguration()
 	const authoring = readLocalMcpAuthoring(process.env)
 	// Rewritten on every prepare, so turning MCP off is switching it off and running `local:up`.
