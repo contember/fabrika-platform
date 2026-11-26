@@ -310,8 +310,8 @@ declare, "may change data" otherwise (ADR-0050 lists what keeps every value). Th
 any such migration runs, or refuses the run where it cannot (ADR-0050). On an environment with `protected` set (`prod` by
 default), a change with a line in one of the environment's chosen approval categories parks the run in
 `awaiting_approval`; it publishes nothing until a person approves it in the console. The default categories are the
-closer-review reasons; an environment may add permission categories (a role gains an action, a role opened to
-externals, a new role), a page anyone opens, a new CSP origin, or console grants, and may drop a default one
+closer-review reasons, a role opened to externals, an endpoint anyone opens and a new CSP origin; an environment may
+add the other permission categories (a role gains an action, a new role) or console grants, and may drop a default one
 ([ADR-0083](../decisions/0083-an-environment-chooses-what-waits-for-approval.md)). Any other change publishes at once. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation` and
 `protection_revision`, under the namespace lease. Every provider environment and namespace member then carries
 `approvedSnapshot`'s access: the providers publish a contract application's endpoint table from it, and Control

@@ -494,7 +494,7 @@ with one, takes the same human with `access.approve`.
 Unprotected environments do not wait. On an environment with `protected = true`, whatever its name or role, what
 waits is decided by one gate over a mode per change category that the environment chooses
 ([ADR-0083](0083-an-environment-chooses-what-waits-for-approval.md)); by default a change that needs closer review
-waits. Staging is unprotected by default, so a change applies there at once. When the same commit is deployed to a
+waits, and so does a role opened to externals, an endpoint anyone opens and a new CSP origin. Staging is unprotected by default, so a change applies there at once. When the same commit is deployed to a
 protected environment, Control classifies it again against that environment's active snapshot.
 
 The flag also governs who deploys by hand. **A person** here is a user principal without OAuth or link claims
@@ -712,8 +712,9 @@ never from the words of a line:
   then do in Postgres is bounded by the application's role family
   ([ADR-0017](0017-service-owned-postgres-migrations.md)), not by the approval and not by the classifiers' name
   rules, which are defense in depth.
-- The first deploy to a protected environment waits only when it holds a closer-review line: against the empty
-  snapshot, every item is an addition, and every step off the road among them is marked.
+- The first deploy to a protected environment waits when it holds a line of a default category: against the empty
+  snapshot, every item is an addition, so a step off the road or an endpoint anyone opens (a health check among them)
+  is marked.
 - An agent cannot unprotect an environment to avoid the prompt: the flag change needs the same human
   approval.
 - Every path that touches published access goes through one function and one compare-and-swap. A new
