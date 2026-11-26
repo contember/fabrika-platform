@@ -2873,54 +2873,163 @@ td {
 }
 
 /*
- * What lets each kind of change through on an environment (ADR-0083): the presets, then one row per category with its
- * mode and how many people decide, then the request settings.
+ * What lets each kind of change through on an environment (ADR-0083). The summary names the nearest preset and lists
+ * only what differs from it; the editor shows each group of rules as a matrix of modes, folded while it follows the preset.
  */
-.approval-categories {
+.policy-summary {
 	display: flex;
 	flex-direction: column;
-	gap: var(--s-2);
-	margin: var(--s-2) 0 0;
-	padding: 0;
-	border: 0;
+	gap: var(--s-1);
+	min-width: 0;
 }
 
-.approval-category-group {
+/* A row whose rules unfold keeps its environment, status and actions level with the rules' first line. */
+tr:has(> td > .policy-summary) > :is(th, td) {
+	vertical-align: top;
+}
+
+.policy-differences {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
+	margin: 0;
+	font-size: var(--t-sm);
 }
 
-.approval-presets {
+.policy-differences > div {
 	display: flex;
 	flex-wrap: wrap;
+	gap: 0 var(--s-2);
+}
+
+.policy-differences dt {
+	color: var(--ink-2);
+}
+
+.policy-differences dt::after {
+	content: ':';
+}
+
+.policy-differences dd {
+	margin: 0;
+}
+
+.policy-editor {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+}
+
+.rule-group {
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+	padding: var(--s-2) var(--s-3);
+}
+
+.rule-group > summary {
+	cursor: pointer;
+	font-size: var(--t-sm);
+	color: var(--ink-2);
+}
+
+.rule-group[open] > summary {
+	margin-bottom: var(--s-2);
+}
+
+.rule-matrix thead th:not(:first-child) {
+	text-align: center;
+	white-space: nowrap;
+}
+
+/* Fixed mode and deciding columns, so they line up from one group to the next. */
+.rule-matrix thead th:not(:first-child, :last-child) {
+	min-width: 9.5rem;
+}
+
+.rule-matrix thead th:last-child {
+	min-width: 10rem;
+}
+
+.rule-matrix tr.changed > th[scope='row'] {
+	box-shadow: inset 3px 0 0 var(--blueprint);
+	padding-left: var(--s-2);
+}
+
+.rule-matrix tr.changed > :is(th, td) {
+	background: var(--blueprint-wash);
+}
+
+.matrix-cell {
+	text-align: center;
+	white-space: nowrap;
+}
+
+.matrix-cell label {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	padding: var(--s-1);
+	cursor: pointer;
+}
+
+/* The preset's own choice: a dot beside the radio, so a changed rule shows what it changed from. */
+.preset-mark {
+	width: 0.5rem;
+	color: var(--ink-3);
+}
+
+/* Who decides opens below its row; the chevron turns while it is open. */
+.deciding-toggle .icon {
+	margin-left: var(--s-1);
+	transition: transform 0.15s;
+}
+
+.deciding-toggle[aria-expanded='true'] .icon {
+	transform: rotate(180deg);
+}
+
+.deciding-row > td {
+	background: var(--recess);
+	padding: var(--s-2) var(--s-3);
+}
+
+.deciding-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s-2) var(--s-5);
+	margin: 0;
+	padding: 0;
+	border: 0;
+	min-width: 0;
+}
+
+/* A request setting that differs from the preset, marked as a changed rule is. */
+.request-setting {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-1);
+}
+
+.request-setting.changed {
+	padding: var(--s-2) var(--s-3);
+	box-shadow: inset 3px 0 0 var(--blueprint);
+	background: var(--blueprint-wash);
+}
+
+/* Stays in view while the rules scroll, so the count of unsaved changes and Save are always at hand. */
+.save-bar {
+	position: sticky;
+	bottom: 0;
+	display: flex;
 	align-items: center;
 	gap: var(--s-2);
+	padding: var(--s-3) 0;
+	background: var(--floor);
+	border-top: 1px solid var(--rule);
 }
 
-.approval-mode {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	align-items: center;
-	gap: var(--s-2);
-	max-width: 66rem;
-}
-
-/* A category's controls, two to a line beside its label, so a third and fourth line up under the first two. */
-.approval-mode-controls {
-	display: grid;
-	grid-template-columns: repeat(2, 13rem);
-	gap: var(--s-1) var(--s-2);
-}
-
-@media (max-width: 700px) {
-	.approval-mode {
-		grid-template-columns: minmax(0, 1fr);
-		gap: 2px;
-	}
-	.approval-mode-controls {
-		grid-template-columns: minmax(0, 1fr);
-	}
+.save-bar .spacer {
+	flex: 1;
 }
 
 /* Two related values in one cell, the second under the first. */
@@ -2963,11 +3072,24 @@ th {
 	white-space: nowrap;
 }
 
-tbody tr:last-child td {
+/* A row heading names its row: it reads as a cell, not as a column label. */
+tbody th[scope='row'] {
+	padding-top: var(--s-2);
+	border-bottom-color: var(--rule-soft);
+	font-family: inherit;
+	font-size: inherit;
+	font-weight: 500;
+	text-transform: none;
+	letter-spacing: normal;
+	color: var(--ink);
+	white-space: normal;
+}
+
+tbody tr:last-child :is(td, th) {
 	border-bottom: none;
 }
 
-tbody tr:hover td {
+tbody tr:hover > :is(td, th) {
 	background: var(--rule-soft);
 }
 

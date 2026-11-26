@@ -3,27 +3,30 @@ import { BuzolaProvider } from '@buzola/router/react'
 import { RpcError } from '@fabrika/app'
 import {
 	type ApprovalStepUpChallenge,
-	APPROVER_CATEGORIES,
 	PERMISSIVE_POLICY,
 	PERMISSIVE_SETTINGS,
 	POLICY_CATEGORIES,
+	type PolicyCategory,
 	STRICT_POLICY,
 	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { PolicyEditor, ProtectionRow, UnprotectConsequences } from '../components/app-detail/ApprovalsSection'
+import { PolicyEditor, PolicySummary, ProtectionRow, UnprotectConsequences } from '../components/app-detail/ApprovalsSection'
 import { DecisionFailureText } from '../components/DecisionFailureNotice'
 import { type AppEnvDto, type ApprovalDto, type ConsoleAccessDto, type ControlFetch, createControlClient } from '../lib/api'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import {
 	APPROVAL_CATEGORY_GROUPS,
-	categoryLabel,
+	decidingText,
 	loosened,
 	loosenedSettings,
+	nearestPreset,
 	parkedRunsAt,
 	policyChange,
+	type PolicyChoice,
+	policyDifferences,
 	presetOf,
 	protectionChangeFailure,
 	protectionFailure,
@@ -31,9 +34,9 @@ import {
 	requesterBlocks,
 	requestTtl,
 	setEnvironmentProtection,
-	settingsSummary,
-	waitingSummary,
 } from '../lib/environment-protection'
+
+const strictChoice: PolicyChoice = { policy: STRICT_POLICY, settings: STRICT_SETTINGS }
 
 const environment = (env: string, isProtected: boolean): AppEnvDto => ({
 	appId: 'notes',
@@ -92,7 +95,7 @@ const withRouter = (element: ReactElement): ReactElement =>
 		router: new Router({
 			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
 			adapter: createMemoryNavigationAdapter(),
-			pageRegistry: { 'approvals/detail': '/approvals/:id' },
+			pageRegistry: { 'approvals/detail': '/approvals/:id', 'apps/approvals-edit': '/apps/:id/approvals/:env/edit' },
 		}),
 	}, element)
 
@@ -101,7 +104,9 @@ const row = (access: ConsoleAccessDto | null, env: AppEnvDto): string =>
 		createElement(
 			ConsoleAccessContext.Provider,
 			{ value: access },
-			createElement('table', null, createElement('tbody', null, createElement(ProtectionRow, { appId: 'notes', env, onDone: () => undefined }))),
+			withRouter(
+				createElement('table', null, createElement('tbody', null, createElement(ProtectionRow, { appId: 'notes', env, onDone: () => undefined }))),
+			),
 		),
 	)
 
@@ -123,27 +128,37 @@ function respondingFetch(calls: { method: string; input: unknown }[], response: 
 	}
 }
 
-const CHECKBOX_LABEL = 'Require approval for access changes'
-
 describe('turning approvals on and off for an environment', () => {
-	test('the switch shows only to a caller holding access.approve at the environment', () => {
+	test('turning approval off and editing the rules show only to a caller holding access.approve at the environment', () => {
 		const prod = environment('prod', true)
-		expect(row(holding(['access.approve']), prod)).toContain(CHECKBOX_LABEL)
-		expect(row(holding(['access.approve'], { type: 'app', value: 'notes' }), prod)).toContain(CHECKBOX_LABEL)
-		expect(row(holding(['access.approve'], { type: 'environment', value: 'prod' }), prod)).toContain(CHECKBOX_LABEL)
-
+		for (
+			const access of [
+				holding(['access.approve']),
+				holding(['access.approve'], { type: 'app', value: 'notes' }),
+				holding(['access.approve'], { type: 'environment', value: 'prod' }),
+			]
+		) {
+			const markup = row(access, prod)
+			expect(markup).toContain('Turn off<span class="sr-only"> approval on prod</span>')
+			expect(markup).toContain('href="/apps/notes/approvals/prod/edit"')
+		}
 		for (const access of [holding(['app.manage', 'deploy.trigger']), holding(['access.approve'], { type: 'environment', value: 'stage' })]) {
 			const markup = row(access, prod)
-			expect(markup).not.toContain(CHECKBOX_LABEL)
-			expect(markup).not.toContain('type="checkbox"')
-			expect(markup).toContain('Approval required')
+			expect(markup).not.toContain('Turn off')
+			expect(markup).not.toContain('/edit')
+			expect(markup).toContain('On</span>')
 		}
-		expect(row(holding(['app.manage']), environment('stage', false))).toContain('No approval required')
 	})
 
-	test('the switch shows the stored setting', () => {
-		expect(row(holding(['access.approve']), environment('prod', true))).toContain('checked=""')
-		expect(row(holding(['access.approve']), environment('stage', false))).not.toContain('checked=""')
+	test('the row shows the stored setting: on with its rules, off with what that means and a way to turn it on', () => {
+		const on = row(holding(['access.approve']), environment('prod', true))
+		expect(on).toContain('On</span>')
+		expect(on).toContain('<strong>Strict</strong>')
+		const off = row(holding(['access.approve']), environment('stage', false))
+		expect(off).toContain('Off</span>')
+		expect(off).toContain('A deploy that widens access publishes at once.')
+		expect(off).toContain('Turn on<span class="sr-only"> approval on stage</span>')
+		expect(off).not.toContain('/edit')
 	})
 
 	test('turning approvals off asks for a confirmation; turning them on applies at once', () => {
@@ -217,31 +232,45 @@ describe('turning approvals on and off for an environment', () => {
 
 // ADR-0083 §5: the mode of each category under a protected environment's switch, editable for a holder of `access.approve`.
 describe('approval modes', () => {
-	const editor = (env: AppEnvDto): string => renderToStaticMarkup(createElement(PolicyEditor, { appId: 'notes', env, onDone: () => undefined }))
+	const editor = (env: AppEnvDto): string =>
+		renderToStaticMarkup(createElement(PolicyEditor, { appId: 'notes', env, onDone: () => undefined, onCancel: () => undefined }))
+	const radios = (markup: string, category: string): string[] =>
+		[...markup.matchAll(new RegExp(`<input type="radio"[^>]*name="prod-${category}"[^>]*>`, 'g'))].map((match) => match[0])
 
-	test('every category is offered once with only the modes it takes, the stored ones selected and the defaults marked', () => {
+	test("every category is one row with a radio for each mode it takes, the stored one checked and the preset's marked", () => {
 		const markup = editor({ ...environment('prod', true), approvalPolicy: { ...STRICT_POLICY, grants: 'person', secrets: 'refuse' } })
 		const offered = APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options.map((option) => option.category))
 		expect([...offered].sort()).toEqual([...POLICY_CATEGORIES].sort())
-		// A mode per category; a number of approvers, whether the requester's person decides and whether a passkey confirms
-		// the decision per approver category; whether a passkey confirms an agent's write access; the commits a request may
-		// name; and what bounds a key an agent asks for.
-		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length * 3 + 1 + 2
-		expect(markup.match(/<select/g)).toHaveLength(selects)
-		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three, `agent-write` two; approvers one or
-		// two; the requester's person or someone else; a passkey or none; commits two; the key's ceiling two.
-		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + 2 + APPROVER_CATEGORIES.length * 6 + 2 + 2 + 2)
-		expect(markup.match(/selected=""/g)).toHaveLength(selects)
-		expect(markup).toContain('<option value="refuse" selected="">Refused</option>')
-		expect(markup).toContain('<option value="person" selected="">A person approves</option>')
-		expect(markup).toContain('<option value="person" selected="">A person approves (default)</option>')
-		expect(markup).toContain('<option value="webauthn" selected="">Passkey to decide (default)</option>')
-		expect(markup).toContain('<option value="webauthn" selected="">Passkey to allow (default)</option>')
-		expect(markup).toContain('<option value="off" selected="">No approval (default)</option>')
-		expect(markup).toContain('Custom')
+		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three, `agent-write` two.
+		expect(markup.match(/<input type="radio"[^>]*name="prod-[a-z-]+"[^>]*>/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + 2)
+		for (const category of POLICY_CATEGORIES) expect(radios(markup, category).filter((input) => input.includes('checked=""'))).toHaveLength(1)
+		expect(radios(markup, 'secrets').find((input) => input.includes('checked=""'))).toContain('aria-label="Secrets: Refused"')
+		expect(radios(markup, 'grants').find((input) => input.includes('checked=""'))).toContain(
+			'aria-label="Console grants and revocations: A person approves"',
+		)
+		// The preset's choice is marked once per category, for the eye and in the radio's name.
+		expect(markup.match(/aria-label="[^"]*: [^"]* \(Strict\)"/g)).toHaveLength(POLICY_CATEGORIES.length)
+		expect(markup.match(/<span class="preset-mark"[^>]*aria-hidden="true">•<\/span>/g)).toHaveLength(POLICY_CATEGORIES.length)
+		// No dropdowns per rule: who decides is one cell, opened on demand.
+		expect(markup.match(/<select/g)).toHaveLength(2)
+		expect(markup).toContain('1 person · passkey')
 	})
 
-	test('the presets are offered, the stored one pressed', () => {
+	test('a group whose rules follow the preset is folded and says so; one with a change opens, names the count and offers a reset', () => {
+		const markup = editor({ ...environment('prod', true), approvalPolicy: { ...STRICT_POLICY, secrets: 'off' } })
+		expect(markup).toContain(
+			'<details class="rule-group"><summary><span class="disclosure-title">Closer review</span><span class="muted">7 rules, all as Strict</span>',
+		)
+		expect(markup).toContain(
+			'<details class="rule-group" open=""><summary><span class="disclosure-title">What an agent or a key does</span><span class="muted">8 rules, 1 changed from Strict</span>',
+		)
+		expect(markup).toContain('1 change from Strict')
+		expect(markup).toContain('Reset to Strict<span class="sr-only">: Secrets</span>')
+		expect(markup).toContain('No changes')
+		expect(markup).toMatch(/<button type="button" class="primary" disabled="">Save approvals<\/button>/)
+	})
+
+	test('the presets are offered, the nearest one pressed', () => {
 		expect(editor(environment('prod', true))).toContain('aria-pressed="true" title="a person approves what an agent asks for; the default"')
 		expect(editor({ ...environment('prod', true), approvalPolicy: PERMISSIVE_POLICY, approvalSettings: PERMISSIVE_SETTINGS })).toContain(
 			'aria-pressed="true" title="an agent configures and deploys any commit with no approval"',
@@ -255,20 +284,18 @@ describe('approval modes', () => {
 		expect(presetOf({ ...STRICT_POLICY, csp: 'plan' }, STRICT_SETTINGS)).toBeNull()
 	})
 
-	test('an action no request routes yet says what applies today', () => {
+	test('an action no request routes yet is marked and says what applies today', () => {
 		const markup = editor(environment('prod', true))
-		expect(markup).toContain('Not enforced yet. Today it applies at once.')
-		expect(markup).toContain('aria-describedby="approval-prod-secrets"')
-		expect(markup).toContain('id="approval-prod-secrets"')
+		expect(markup).toContain('<span class="chip">not enforced yet</span> <span class="muted">Today it applies at once.</span>')
 	})
 
 	test('the ceiling of a key an agent asks for is a setting, the agent’s own by default', () => {
 		const markup = editor(environment('prod', true))
-		expect(markup).toContain('aria-label="Actions a key an agent asks for may hold"')
-		expect(markup).toContain('The agent&#x27;s own (default)')
-		expect(settingsSummary({ ...STRICT_SETTINGS, credentialCeiling: 'approver' }, STRICT_POLICY)).toContain(
-			'A key an agent asks for may hold any action its approver holds.',
-		)
+		expect(markup).toContain('Actions a key an agent asks for may hold<select>')
+		expect(markup).toContain('<option value="requester" selected="">The agent&#x27;s own</option>')
+		expect(policyDifferences({ policy: STRICT_POLICY, settings: { ...STRICT_SETTINGS, credentialCeiling: 'approver' } }, strictChoice)).toEqual([
+			{ key: 'credentialCeiling', label: 'Actions a key an agent asks for may hold', value: "The approver's", other: "The agent's own" },
+		])
 	})
 
 	test('a change that loosens any category asks first; one that tightens does not', () => {
@@ -316,26 +343,20 @@ describe('approval modes', () => {
 		expect(['0', '169', '1.5', '', 'x'].map(requestTtl)).toEqual([null, null, null, null, null])
 	})
 
-	test('a reader who cannot change the policy reads what waits', () => {
-		expect(waitingSummary(PERMISSIVE_POLICY)).toBe('Nothing waits.')
-		expect(waitingSummary({ ...PERMISSIVE_POLICY, 'deletes-data': 'person', registry: 'refuse' })).toBe(
-			'Waits for a person: Migrations that may change stored data; refused to an agent: Where a deploy points.',
+	test('a reader who cannot change the policy reads every rule, with who decides where it takes effect', () => {
+		const html = renderToStaticMarkup(
+			createElement(PolicySummary, { env: { env: 'prod', approvalPolicy: STRICT_POLICY, approvalSettings: STRICT_SETTINGS } }),
 		)
-		expect(settingsSummary(STRICT_SETTINGS, STRICT_POLICY)).toBe(
-			'An agent asks to deploy merged commits only. A request waits 24 h for a decision. A key an agent asks for holds only actions the agent holds. '
-				+ `A passkey confirms deciding: ${categoryLabel('credentials')}. `
-				+ "An agent writing as a person takes a passkey, confirmed on IAM's approval page.",
+		// An agent writes as a person with no approval, after its person's passkey.
+		expect(html).toContain('<dt>An agent writing as a person</dt><dd>No approval<span class="muted"> · passkey</span></dd>')
+		expect(html).toContain('<dt>A key an agent asks for</dt><dd>A person approves<span class="muted"> · 1 person · passkey</span></dd>')
+		// Under no approval nobody decides, so no one is named.
+		expect(html).toContain('<dt>A new role</dt><dd>No approval</dd>')
+		// A rule no request routes yet says what applies today.
+		expect(html).toContain(
+			'<dt>Variables</dt><dd>A person approves<span class="muted"> · 1 person</span> <span class="chip">not enforced yet</span> <span class="muted">Today it applies at once.</span></dd>',
 		)
-		// A refused agent-write is in what waits, not in the settings.
-		expect(settingsSummary(STRICT_SETTINGS, { ...STRICT_POLICY, 'agent-write': 'refuse' })).not.toContain('agent writing')
-		expect(settingsSummary(PERMISSIVE_SETTINGS, STRICT_POLICY)).not.toContain('passkey')
-		expect(settingsSummary({ ...PERMISSIVE_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } }, STRICT_POLICY)).toContain(
-			'An agent may ask to deploy any commit.',
-		)
-		expect(
-			settingsSummary({ ...STRICT_SETTINGS, requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, 'deploy-request': false } }, STRICT_POLICY),
-		)
-			.toContain("Someone other than the requester's person decides: A deploy started by an agent or a key.")
+		expect(html).toContain('<dt>Hours a request waits for a decision</dt><dd>24 h</dd>')
 	})
 
 	test('the protection call sends the policy and settings only when given', async () => {
@@ -453,5 +474,89 @@ describe('a change that weakens a passkey on deciding', () => {
 			message: 'A deploy of prod is running. Approvals change between deploys: try again when it finishes.',
 			noPasskey: false,
 		})
+	})
+})
+
+describe("an environment's rules at a glance", () => {
+	const strict = { policy: STRICT_POLICY, settings: STRICT_SETTINGS }
+
+	test('who decides reads as one person by default, then only what differs', () => {
+		expect(decidingText('secrets', STRICT_SETTINGS)).toBe('1 person')
+		expect(decidingText('credentials', STRICT_SETTINGS)).toBe('1 person · passkey')
+		expect(decidingText('agent-write', STRICT_SETTINGS)).toBe('passkey')
+		expect(decidingText('grants', STRICT_SETTINGS)).toBeNull()
+		const tighter = {
+			...STRICT_SETTINGS,
+			approvers: { ...STRICT_SETTINGS.approvers, secrets: 2 },
+			requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, secrets: false },
+		}
+		expect(decidingText('secrets', tighter)).toBe('2 people · not the requester')
+	})
+
+	test('the differences from a preset name each changed rule and setting, with what the preset says', () => {
+		expect(policyDifferences(strict, strict)).toEqual([])
+		const choice: PolicyChoice = {
+			policy: { ...STRICT_POLICY, secrets: 'off' },
+			settings: { ...STRICT_SETTINGS, requestTtlHours: 48, approvers: { ...STRICT_SETTINGS.approvers, 'deletes-data': 2 } },
+		}
+		expect(policyDifferences(choice, strict)).toEqual([
+			{
+				key: 'deletes-data',
+				label: 'Migrations that may change stored data',
+				value: 'A person approves · 2 people',
+				other: 'A person approves · 1 person',
+			},
+			{ key: 'secrets', label: 'Secrets', value: 'No approval', other: 'A person approves', pending: 'Today it applies at once.' },
+			{ key: 'requestTtlHours', label: 'Hours a request waits for a decision', value: '48 h', other: '24 h' },
+		])
+	})
+
+	test('the nearest preset is the one with fewer differences, Strict on a tie', () => {
+		expect(nearestPreset(strict).preset.name).toBe('strict')
+		expect(nearestPreset({ policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }).preset.name).toBe('permissive')
+		const nearPermissive = nearestPreset({ policy: { ...PERMISSIVE_POLICY, secrets: 'person' }, settings: PERMISSIVE_SETTINGS })
+		expect([nearPermissive.preset.name, nearPermissive.differences.length]).toEqual(['permissive', 1])
+		// Nine rules as Permissive says and one as neither does: ten differences from each.
+		const fromPermissive: readonly PolicyCategory[] = [
+			'anyone-calls',
+			'get-mutation',
+			'people',
+			'adoption',
+			'terminal',
+			'deletes-data',
+			'role-external',
+			'public',
+			'csp',
+		]
+		const halfway: PolicyChoice = {
+			policy: fromPermissive.reduce((policy, category) => ({ ...policy, [category]: PERMISSIVE_POLICY[category] }), {
+				...STRICT_POLICY,
+				'off-road': 'person',
+			}),
+			settings: STRICT_SETTINGS,
+		}
+		const permissive: PolicyChoice = { policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }
+		expect([policyDifferences(halfway, strictChoice).length, policyDifferences(halfway, permissive).length]).toEqual([10, 10])
+		expect(nearestPreset(halfway).preset.name).toBe('strict')
+	})
+
+	test('the summary leads with the preset and lists only what differs; every rule is one disclosure', () => {
+		const html = renderToStaticMarkup(
+			createElement(PolicySummary, { env: { env: 'prod', approvalPolicy: { ...STRICT_POLICY, secrets: 'off' }, approvalSettings: STRICT_SETTINGS } }),
+		)
+		expect(html).toContain('<strong>Strict</strong><span class="muted">, 1 change</span>')
+		// A rule no request routes yet says so where it differs, not only in the editor.
+		expect(html).toContain(
+			'<dt>Secrets</dt><dd>No approval <span class="muted">(Strict: A person approves)</span> <span class="chip">not enforced yet</span> <span class="muted">Today it applies at once.</span></dd>',
+		)
+		expect(html).toContain('<details class="disclosure"><summary><span class="disclosure-title">Every rule on prod</span>')
+		// Rules Strict asks a person for but no request routes yet are named, not left to read as protection.
+		expect(html).toContain(
+			'<span class="chip">not enforced yet</span> <span class="muted">Variables, Data operations, Where a deploy points: stored, but no request routes them yet; the editor says what applies today.</span>',
+		)
+		expect(
+			renderToStaticMarkup(createElement(PolicySummary, { env: { env: 'prod', approvalPolicy: STRICT_POLICY, approvalSettings: STRICT_SETTINGS } })),
+		)
+			.toContain(', as the preset says')
 	})
 })

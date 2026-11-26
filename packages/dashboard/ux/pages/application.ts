@@ -112,7 +112,27 @@ export const applicationApprovals: PageSpec = {
 			audience: 'role',
 			placement: 'primary',
 		},
-		{ id: 'policy', label: 'Access approvals', kind: 'section', usedBy: ['t06-approvals'], consequence: 2, audience: 'role', placement: 'primary' },
+		{
+			id: 'policy',
+			label: 'What lets a change through',
+			kind: 'section',
+			usedBy: ['t06-approvals'],
+			consequence: 2,
+			audience: 'role',
+			placement: 'primary',
+		},
+	],
+}
+
+// The rules editor of one environment: no main task edits the rules, so its elements serve none; the page still takes the gates.
+export const applicationApprovalsEdit: PageSpec = {
+	id: 'application-approvals-edit',
+	path: '/apps/notes/approvals/prod/edit',
+	elements: [
+		...frame,
+		{ id: 'rules', label: 'What lets a change through on prod', kind: 'section', usedBy: [], consequence: 1, audience: 'role', placement: 'primary' },
+		{ id: 'presets', label: 'Start from a preset', kind: 'region', usedBy: [], consequence: 1, audience: 'role', placement: 'primary' },
+		{ id: 'save', label: 'Save approvals', kind: 'action', usedBy: [], consequence: 1, audience: 'role', placement: 'primary' },
 	],
 }
 
