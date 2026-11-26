@@ -257,6 +257,7 @@ for (const backend of backends) {
 			const stepUp = iamPasskeyStepUp(w.iam.gateway, request)
 			return {
 				repositories: w.db,
+				reservedHosts: [],
 				provider: fakeControlProvider,
 				auth: auth(w, who),
 				admission: { request },
@@ -584,7 +585,12 @@ for (const backend of backends) {
 					const kind = w.kinds.get('test.notes.put')
 					if (kind === undefined) throw new Error('no test kind')
 					const admission = { request: new Request(`${ORIGIN}/api/rpc`, { method: 'POST' }) }
-					await executeApprovedRequest({ repositories: w.db, provider: fakeControlProvider, auth: auth(w, ADA), admission }, kind, await row(w, id), lease)
+					await executeApprovedRequest(
+						{ repositories: w.db, provider: fakeControlProvider, auth: auth(w, ADA), admission, reservedHosts: [] },
+						kind,
+						await row(w, id),
+						lease,
+					)
 				} finally {
 					await lease.release()
 				}

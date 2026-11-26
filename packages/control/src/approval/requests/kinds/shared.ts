@@ -51,6 +51,7 @@ export function registryContext(c: RequestExecutionContext, execution: RequestEx
 		auth: c.auth,
 		admission: c.admission,
 		signal: execution.signal,
+		reservedHosts: c.reservedHosts,
 		...(c.catalogChanged === undefined ? {} : { catalogChanged: c.catalogChanged }),
 		...(c.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: c.namespaceProxyChanged }),
 		...(c.grantApproval === undefined ? {} : { grantApproval: c.grantApproval }),

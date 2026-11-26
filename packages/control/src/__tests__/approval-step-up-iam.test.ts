@@ -145,7 +145,7 @@ async function setup() {
 
 	async function context(principalId: string): Promise<ApprovalRequestContext> {
 		const { request, ...call } = await consoleCall(principalId)
-		return { repositories: db, provider: fakeControlProvider, admission: { request }, lock: locks, ...call }
+		return { repositories: db, provider: fakeControlProvider, admission: { request }, lock: locks, reservedHosts: [], ...call }
 	}
 
 	/** The same console call, as `apps.environments.protect` and its challenge read it. */

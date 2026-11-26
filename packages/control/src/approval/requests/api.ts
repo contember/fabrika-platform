@@ -401,6 +401,7 @@ function executionContext(c: ApprovalRequestContext): RequestExecutionContext {
 		provider: c.provider,
 		auth: c.auth,
 		admission: c.admission,
+		reservedHosts: c.reservedHosts,
 		...(c.vault === undefined ? {} : { vault: c.vault }),
 		...(c.catalogChanged === undefined ? {} : { catalogChanged: c.catalogChanged }),
 		...(c.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: c.namespaceProxyChanged }),

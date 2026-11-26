@@ -696,6 +696,7 @@ describe('the step-up on a parked run (ADR-0050 §5)', () => {
 		const stepUp = iamPasskeyStepUp(w.iam.gateway, console)
 		return {
 			repositories: w.db,
+			reservedHosts: [],
 			provider: provider(w),
 			auth: ada(),
 			admission: { request: console },

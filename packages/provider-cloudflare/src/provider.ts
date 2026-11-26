@@ -62,6 +62,7 @@ import {
 	servesOps,
 	servesRawSql,
 } from './contract-support'
+import { assertCustomDomainsOwned } from './custom-domains'
 import { deployOrder } from './deploy-order'
 import { localWorkloadKeyVariables } from './local-workload-keys'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
@@ -70,6 +71,7 @@ import { CLOSED_ENVIRONMENT_FLAGS, createCloudflareProxyWorker, IamApplicationRe
 import { CHECKOUT_INSTALL_ARGS, type RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
 import { type AssetMount, assetMounts, SPA_ASSETS, SPA_ASSETS_DIRECTORY, stageSpaAssets } from './spa-assets'
+import { proxyScriptName } from './worker-secrets'
 
 const CANCELLED = 'deploy cancelled'
 
@@ -671,6 +673,23 @@ const wranglerDeploy = async (env: StepEnv, cwd: string, secrets: Readonly<Recor
 	})
 }
 
+/**
+ * Refuse the environment's domain when another Worker or a DNS record holds it, which wrangler would take over. Only the
+ * proxy Worker is routed, and only on the run's domain (`assertGeneratedConfigs`).
+ */
+const assertOwnedDomain = async (env: StepEnv): Promise<void> => {
+	const { run } = env
+	if (run.domain === undefined || run.domain === '') return
+	const hostname = run.domain.toLowerCase()
+	if (run.dryRun) {
+		run.log(`  [dry-run] would check that no other Worker or DNS record holds ${hostname}`)
+		return
+	}
+	assertRunning(run.signal)
+	const api = { accountId: env.credentials.accountId, apiToken: env.credentials.apiToken, fetch: env.cf.cloudflareApi, signal: run.signal }
+	await assertCustomDomainsOwned(api, proxyScriptName(run.appId, run.env), [hostname])
+}
+
 /** Delete the framework secrets the application Worker holds that this deploy no longer writes, as Zerops removes them. */
 const deleteStaleSecrets = async (env: StepEnv, cwd: string): Promise<void> => {
 	const { run, credentials, cf } = env
@@ -753,6 +772,8 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			return
 		}
 		case 'provision-resources': {
+			// Before any resource or migration: an application takes no hostname another Worker or a DNS record holds.
+			if (env.platformResources === 'refuse') await assertOwnedDomain(env)
 			assertRunning(signal)
 			const result = await cf.provision({
 				definition: worker,

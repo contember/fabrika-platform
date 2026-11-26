@@ -193,6 +193,7 @@ for (const backend of backends) {
 			const stepUp = iamPasskeyStepUp(w.iam.gateway, request)
 			return {
 				repositories: w.db,
+				reservedHosts: [],
 				provider: w.provider,
 				vault: () => Promise.resolve(w.vault),
 				auth: auth(w, who),

@@ -76,6 +76,7 @@ export { ControlRegistryRepository, isUnconfirmedNamespaceUpdate } from './db/re
 export {
 	AppEnvChangedError,
 	appEnvCrossOrigins,
+	AppEnvDomainConflictError,
 	type AppEnvExpectation,
 	type AppEnvInput,
 	type AppEnvRow,

@@ -11,6 +11,8 @@ import {
 } from './coordinate-lock'
 import {
 	AppEnvChangedError,
+	AppEnvDomainConflictError,
+	type AppEnvDomainRow,
 	type AppEnvExpectation,
 	type AppEnvInput,
 	type AppEnvRow,
@@ -713,6 +715,16 @@ export class ControlRegistryRepository {
 			.first<AppEnvRow>()
 	}
 
+	/** The domain of every environment other than `except` that has one, lowercase, with its kind. */
+	async listOtherAppEnvDomains(except: { readonly appId: string; readonly env: string }): Promise<AppEnvDomainRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT kind, lower(domain) AS domain FROM app_envs
+				WHERE domain IS NOT NULL AND domain <> '' AND NOT (app_id = ? AND env = ?)`)
+			.bind(except.appId, except.env)
+			.all<AppEnvDomainRow>()
+		return results
+	}
+
 	/**
 	 * Every env of an app that has a trigger_ref (exact or glob). The webhook fetches these and matches
 	 * the pushed ref against each via `refMatches` (glob-aware) — the set per app is tiny, so matching in
@@ -783,7 +795,7 @@ export class ControlRegistryRepository {
 			? null
 			: { namespaceId: input.namespaceId, ownerAppId: input.appId, ownerEnv: input.env, resourceKeys }
 		const statements = [...lock, ...write.statements, ...(owner === null ? [] : this.namespaceResourceClaimStatements(owner))]
-		const run = () => this.withTriggerRefConflict(input, () => this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>(statements))
+		const run = () => this.withUniqueConflict(input, () => this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>(statements))
 		const claimed = owner === null ? run : () => this.withNamespaceResourceClaimConflict(owner, run)
 		const results = expected === undefined ? await claimed() : await this.expectedWrite(input, expected, claimed)
 		const envResult = results[lock.length + write.envAt]
@@ -794,8 +806,11 @@ export class ControlRegistryRepository {
 		return { appEnv, resourceClaims: claimRows(results.slice(lock.length + write.statements.length)) }
 	}
 
-	/** A failed write is a trigger-ref conflict when another environment of the app holds the ref (`idx_app_envs_trigger`). */
-	private async withTriggerRefConflict<T>(input: AppEnvInput, write: () => Promise<T>): Promise<T> {
+	/**
+	 * A failed write is a trigger-ref conflict when another environment of the app holds the ref (`idx_app_envs_trigger`),
+	 * and a domain conflict when another environment of the installation holds the domain (`idx_app_envs_domain`).
+	 */
+	private async withUniqueConflict<T>(input: AppEnvInput, write: () => Promise<T>): Promise<T> {
 		try {
 			return await write()
 		} catch (cause) {
@@ -804,8 +819,22 @@ export class ControlRegistryRepository {
 			if (triggerRef !== null && holder !== null && holder.env !== input.env) {
 				throw new AppEnvTriggerRefConflictError(input.appId, input.env, triggerRef, holder.env)
 			}
+			const domain = input.domain ?? ''
+			if (domain !== '' && input.kind !== 'dev' && await this.holdsIndexedDomain(domain, input)) {
+				throw new AppEnvDomainConflictError(input.appId, input.env, domain)
+			}
 			throw cause
 		}
+	}
+
+	/** Whether an environment other than `except` holds `domain` under `idx_app_envs_domain`'s own condition. */
+	private async holdsIndexedDomain(domain: string, except: { readonly appId: string; readonly env: string }): Promise<boolean> {
+		const row = await this.d1
+			.prepare(`SELECT 1 AS held FROM app_envs
+				WHERE lower(domain) = ? AND domain <> '' AND kind <> 'dev' AND NOT (app_id = ? AND env = ?)`)
+			.bind(domain.toLowerCase(), except.appId, except.env)
+			.first<{ held: number }>()
+		return row !== null
 	}
 
 	/** A failed conditional write is a conflict when the environment is no longer what the caller read. */
@@ -846,13 +875,17 @@ export class ControlRegistryRepository {
 			resourceKeys,
 		}
 		const lock = coordinateLockStatements(this.d1, environmentInput.appId, environmentInput.env)
-		const results = await this.withNamespaceResourceClaimConflict(owner, () =>
-			this.d1.batch<AppRow | AppEnvRow | NamespaceResourceClaimRow>([
-				this.appInsertStatement(appInput),
-				...lock,
-				this.appEnvUpsertStatement(environmentInput),
-				...this.namespaceResourceClaimStatements(owner),
-			]))
+		const results = await this.withNamespaceResourceClaimConflict(
+			owner,
+			() =>
+				this.withUniqueConflict(environmentInput, () =>
+					this.d1.batch<AppRow | AppEnvRow | NamespaceResourceClaimRow>([
+						this.appInsertStatement(appInput),
+						...lock,
+						this.appEnvUpsertStatement(environmentInput),
+						...this.namespaceResourceClaimStatements(owner),
+					])),
+		)
 		const envAt = 1 + lock.length
 		const app = results[0]?.results[0]
 		const appEnv = results[envAt]?.results[0]

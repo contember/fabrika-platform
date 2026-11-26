@@ -36,6 +36,7 @@ import { FakeIam } from '../../../proxy-core/src/__tests__/helpers'
 import { createCloudflareDeployer, defineApp, generateWranglerConfigs } from '..'
 import { createCloudflareProxyWorker, proxyManifestJson } from '../proxy'
 import { createCloudflareProxyHandler } from '../proxy-worker'
+import { fakeCloudflareApi } from './helpers/cloudflare-api'
 
 const HOST = 'notes.example.com'
 const artifact = compileContract(contract, { notes: NOTE_TABLE })
@@ -77,6 +78,7 @@ async function deployedProxy(): Promise<Worker> {
 				return { wranglerConfigs: [...configs], wranglerConfig: configs[0]?.config ?? {} }
 			},
 			writeOutcome: async () => {},
+			cloudflareApi: fakeCloudflareApi(),
 		},
 	})({
 		appId: deployment.app,

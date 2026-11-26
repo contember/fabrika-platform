@@ -16,8 +16,13 @@ export function rpcRequest(method: string, input: unknown = null, signal?: Abort
 /**
  * Exercise the real RPC parser and ACL, then expose its domain result for persistence assertions. `consoleOrigin` is the
  * console's public origin, which an approval request's link needs; a write routed to a request answers 503 without it.
+ * `iamIssuer` and `operationsOrigin` are the installation's; with `consoleOrigin` they name the hosts no environment may take.
  */
-export async function rpcResult(request: Request, deps: ControlRpcDeps, options: { readonly consoleOrigin?: string } = {}): Promise<Response> {
+export async function rpcResult(
+	request: Request,
+	deps: ControlRpcDeps,
+	options: { readonly consoleOrigin?: string; readonly iamIssuer?: string; readonly operationsOrigin?: string } = {},
+): Promise<Response> {
 	const env: Env = {
 		DB: {
 			prepare: () => {
@@ -36,6 +41,8 @@ export async function rpcResult(request: Request, deps: ControlRpcDeps, options:
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
 		...(options.consoleOrigin === undefined ? {} : { FABRIKA_CONTROL_DOMAIN: options.consoleOrigin }),
+		...(options.iamIssuer === undefined ? {} : { FABRIKA_IAM_ISSUER: options.iamIssuer }),
+		...(options.operationsOrigin === undefined ? {} : { OPERATIONS_ARTIFACT_ORIGIN: options.operationsOrigin }),
 	}
 	const response = await dispatchRpcRequest({
 		router: createControlRpcRouter(() => deps),

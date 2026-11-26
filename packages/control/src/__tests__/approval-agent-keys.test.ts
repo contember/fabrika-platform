@@ -239,6 +239,7 @@ for (const backend of backends) {
 				const stepUp = iamPasskeyStepUp(transport, request)
 				return {
 					repositories: db,
+					reservedHosts: [],
 					provider: fakeControlProvider,
 					auth,
 					admission: { request },
@@ -262,6 +263,7 @@ for (const backend of backends) {
 				const request = new Request(`${CONSOLE}/api/rpc`, { method: 'POST', headers: { Authorization: 'Bearer mcp-token' } })
 				return {
 					repositories: db,
+					reservedHosts: [],
 					provider: fakeControlProvider,
 					auth: {
 						ok: true,

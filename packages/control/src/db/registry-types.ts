@@ -176,6 +176,20 @@ export class AppEnvTriggerRefConflictError extends Error {
 	}
 }
 
+/** One environment's domain, lowercase, and its kind: what the domain ownership check reads of another environment. */
+export interface AppEnvDomainRow {
+	readonly kind: AppEnvKind
+	readonly domain: string
+}
+
+/** Another application environment holds the domain (`idx_app_envs_domain`), which names one environment of the installation. */
+export class AppEnvDomainConflictError extends Error {
+	constructor(readonly appId: string, readonly env: string, readonly domain: string) {
+		super(`domain ${domain} is already held by another application environment; a domain serves one environment of the installation`)
+		this.name = 'AppEnvDomainConflictError'
+	}
+}
+
 export class NamespaceResourceClaimConflictError extends Error {
 	constructor(readonly namespaceId: string, readonly resourceKey: string) {
 		super(`namespace resource claim owner is immutable: ${namespaceId}/${resourceKey}`)
