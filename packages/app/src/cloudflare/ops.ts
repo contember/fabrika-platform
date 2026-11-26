@@ -244,7 +244,8 @@ async function migrateAnswer(target: OpsTarget, barrier: MaintenanceBarrier, gen
 	const migrated = result.value
 	if (migrated.kind !== 'booted') {
 		if (migrated.migration !== null) {
-			const failure = parseOpsMigrationFailure(migrated.migration)
+			// The answering version tells Control which version recovered once a rollback deploy follows (ADR-0069 §3).
+			const failure = parseOpsMigrationFailure({ ...migrated.migration, version: target.version })
 			if (failure === null) {
 				throw new Error("the object's migration failure does not parse as the wire's answer")
 			}
@@ -253,7 +254,7 @@ async function migrateAnswer(target: OpsTarget, barrier: MaintenanceBarrier, gen
 		return new Response(null, { status: migrated.kind === 'failed' ? 500 : 503 })
 	}
 	const migrations = tableNames(target.storage).includes(MIGRATION_LEDGER) ? migrationLedger(target.storage) : []
-	const ack = parseOpsMigrateAck({ generation, migrations, record: migrated.record })
+	const ack = parseOpsMigrateAck({ generation, migrations, record: migrated.record, version: target.version })
 	if (ack === null) {
 		throw new Error("the object's migration ledger does not parse as the wire's acknowledgement")
 	}

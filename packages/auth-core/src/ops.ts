@@ -185,12 +185,14 @@ export interface OpsMigration {
 
 /**
  * Sent once the migrations ran and the application booted, with the new ledger. `record` is the object's migration
- * record, `null` when it has none; a release before the migrating boot omits it.
+ * record, `null` when it has none; a release before the migrating boot omits it. `version` is the id of the Worker
+ * version that answers, `null` without the version metadata binding; a release before it omits it.
  */
 export interface OpsMigrateAck {
 	readonly generation: number
 	readonly migrations: readonly OpsMigration[]
 	readonly record?: OpsMigrationRecord | null
+	readonly version?: string | null
 }
 
 /** A file a migration record names: the ledger row's identity and checksum. */
@@ -238,11 +240,15 @@ export type OpsMigrationFailureReason = (typeof OPS_MIGRATION_FAILURES)[number]
 /** The status of a failed migrating boot, answered only by the release that holds the record. */
 export const OPS_MIGRATION_FAILED_STATUS = 422
 
-/** The body of a failed migrating boot: the record as it stands, or as the boot tried to write it. */
+/**
+ * The body of a failed migrating boot: the record as it stands, or as the boot tried to write it. `version` is the id of
+ * the Worker version that answers, as in `OpsMigrateAck`; a release before it omits it.
+ */
 export interface OpsMigrationFailure {
 	readonly refused: 'migration_failed'
 	readonly reason: OpsMigrationFailureReason
 	readonly record: OpsMigrationRecord
+	readonly version?: string | null
 }
 
 export interface OpsMaintenance {
@@ -364,14 +370,15 @@ export function parseOpsStaleRefusal(body: unknown): OpsStaleRefusal | null {
 }
 
 export function parseOpsMigrateAck(body: unknown): OpsMigrateAck | null {
-	const withRecord = exactKeys(body, ['generation', 'migrations', 'record'])
-	if (!withRecord && !exactKeys(body, ['generation', 'migrations'])) return null
+	const withRecord = hasKey(body, 'record')
+	const withVersion = hasKey(body, 'version')
+	if (!exactKeys(body, ['generation', 'migrations', ...(withRecord ? ['record'] : []), ...(withVersion ? ['version'] : [])])) return null
 	const generation = readGeneration(prop(body, 'generation'))
 	const migrations = readList(prop(body, 'migrations'), readMigration)
-	if (generation === null || migrations === null) return null
-	if (!withRecord) return { generation, migrations }
-	const record = readNullable(prop(body, 'record'), parseOpsMigrationRecord)
-	return record === undefined ? null : { generation, migrations, record }
+	const record = withRecord ? readNullable(prop(body, 'record'), parseOpsMigrationRecord) : null
+	const version = withVersion ? readResponderVersion(prop(body, 'version')) : null
+	if (generation === null || migrations === null || record === undefined || version === undefined) return null
+	return { generation, migrations, ...(withRecord ? { record } : {}), ...(withVersion ? { version } : {}) }
 }
 
 /** A stored or answered migration record, parsed strictly: its fields must also agree with each other. */
@@ -400,16 +407,25 @@ export function parseOpsMigrationRecord(body: unknown): OpsMigrationRecord | nul
 
 /** A failed migrating boot's answer; its reason must be what its record says. */
 export function parseOpsMigrationFailure(body: unknown): OpsMigrationFailure | null {
-	if (!exactKeys(body, ['refused', 'reason', 'record']) || prop(body, 'refused') !== 'migration_failed') return null
+	const withVersion = hasKey(body, 'version')
+	const keys = ['refused', 'reason', 'record', ...(withVersion ? ['version'] : [])]
+	if (!exactKeys(body, keys) || prop(body, 'refused') !== 'migration_failed') return null
 	const reason = readEnum(prop(body, 'reason'), OPS_MIGRATION_FAILURES)
 	const record = parseOpsMigrationRecord(prop(body, 'record'))
-	if (reason === null || record === null) return null
+	const version = withVersion ? readResponderVersion(prop(body, 'version')) : null
+	if (reason === null || record === null || version === undefined) return null
 	const agrees = reason === 'record_unwritable'
 		? record.outcome === null
 		: reason === 'committed'
 		? record.outcome === 'committed' && record.booted === null
 		: record.outcome === reason
-	return agrees ? { refused: 'migration_failed', reason, record } : null
+	if (!agrees) return null
+	return withVersion ? { refused: 'migration_failed', reason, record, version } : { refused: 'migration_failed', reason, record }
+}
+
+/** The answering Worker version's id, `null` without the binding; `undefined` when it does not parse. */
+function readResponderVersion(value: unknown): string | null | undefined {
+	return readNullable(value, (raw) => readMatch(raw, WORKER_VERSION_ID))
 }
 
 export function parseOpsView(body: unknown): OpsView | null {
@@ -1491,6 +1507,10 @@ function readBootFailureContent(value: unknown): OpsBootFailureContent | undefin
 }
 
 /** Whether `value` is a plain object holding exactly `keys`: no key missing, none unknown. */
+function hasKey(value: unknown, key: string): boolean {
+	return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.hasOwn(value, key)
+}
+
 function exactKeys(value: unknown, keys: readonly string[]): boolean {
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
 	const own = Object.keys(value)
