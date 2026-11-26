@@ -1,4 +1,5 @@
 import {
+	accessTokenPayload,
 	type AppSchema,
 	type AppScopeDef,
 	buildAccessClaims,
@@ -141,7 +142,7 @@ describe('creates: IAM mints the value and grants the caller the creator role', 
 		await f.repositories.grants.createGrant({ principalId: service.id, app: APP, roleKey: 'starter' })
 		const robot: Person = {
 			id: service.id,
-			token: () => getSigner(TEST_SIGNING_ENV).then((signer) => signer.sign(serviceClaims(service.id))),
+			token: () => getSigner(TEST_SIGNING_ENV).then((signer) => signer.sign(accessTokenPayload(serviceClaims(service.id), 'entries'))),
 		}
 		expect(await requestDelegation(f.services, CALLER_ENV, f.ctx, { ...(await caller(robot)), endpoint: CREATE_ENDPOINT })).toEqual({
 			ok: false,

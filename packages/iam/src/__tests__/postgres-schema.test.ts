@@ -11,7 +11,7 @@
 //
 // Skips cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — see helpers/postgres.ts.
 
-import { buildAccessClaims } from '@fabrika/auth-core'
+import { accessTokenPayload, buildAccessClaims } from '@fabrika/auth-core'
 import { createBackgroundTasks, type PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -1062,16 +1062,19 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		const issuedAt = Math.floor(Date.now() / 1000)
 		// The same env as `runtime()`, so this is the process's own ephemeral signer.
 		const signer = await getSigner({ FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' })
-		const credential = await signer.sign(buildAccessClaims({
-			iss: BASE,
-			app: 'opice',
-			subject: principal.id,
-			type: 'user',
-			label: 'rpc@x.cz',
-			permissions: [],
-			issuedAt,
-			expiresAt: issuedAt + 300,
-		}))
+		const credential = await signer.sign(accessTokenPayload(
+			buildAccessClaims({
+				iss: BASE,
+				app: 'opice',
+				subject: principal.id,
+				type: 'user',
+				label: 'rpc@x.cz',
+				permissions: [],
+				issuedAt,
+				expiresAt: issuedAt + 300,
+			}),
+			'entries',
+		))
 
 		const res = await handler(
 			new Request(`${BASE}/rpc/audit`, {

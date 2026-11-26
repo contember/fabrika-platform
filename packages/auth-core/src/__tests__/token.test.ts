@@ -416,7 +416,7 @@ describe('the compact layout of global grants', () => {
 	test('the entries layout carries no gperms, nor does a compact one without a global grant', () => {
 		expect('gperms' in accessTokenPayload(claims, 'entries')).toBe(false)
 		const scopedOnly = principalClaims({ perms: [{ action: 'order.read', scope: { type: 'shop', value: 's-1' }, source: 'grant' }] })
-		expect(accessTokenPayload(scopedOnly, 'compact')).toEqual(scopedOnly)
+		expect(accessTokenPayload(scopedOnly, 'compact')).toEqual(accessTokenPayload(scopedOnly, 'entries'))
 	})
 
 	test.each([
@@ -445,6 +445,6 @@ describe('the compact layout of global grants', () => {
 			return Promise.resolve(JSON.stringify(payload))
 		}
 		await signAccessClaims(scopedOnly, 1, sign)
-		expect(signed).toEqual([scopedOnly])
+		expect(signed).toEqual([accessTokenPayload(scopedOnly, 'entries')])
 	})
 })

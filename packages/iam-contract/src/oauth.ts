@@ -1,4 +1,4 @@
-import { BUILTIN_ROLE_KEYS, isCimdClientId, isOAuthClientId, isOAuthResourceUri, parseOAuthScopes } from '@fabrika/auth-core'
+import { BUILTIN_ROLE_KEYS, isCimdClientId, isOAuthClientId, isOAuthResourceUri, isScopeParameterText, parseOAuthScopes } from '@fabrika/auth-core'
 import type { KeyGrant } from '@fabrika/auth-core'
 
 /**
@@ -415,11 +415,6 @@ function parseResourcePermissions(value: unknown): KeyGrant[] | null {
 
 /** Separates a parameterized scope from its value: `deploy:alpha`. */
 export const SCOPE_PARAMETER_SEPARATOR = ':'
-
-/** A scope dimension type, or a value of one, as a scope token may carry it. */
-function isScopeParameterText(value: unknown): value is string {
-	return typeof value === 'string' && value.length <= 100 && /^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(value)
-}
 
 /**
  * The resource's grant a requested scope token selects and the narrowed permissions it holds, or null when the token

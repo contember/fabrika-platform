@@ -1,4 +1,4 @@
-import { buildAccessClaims, isWorkloadKind, TOKEN_ALG } from '@fabrika/auth-core'
+import { accessTokenPayload, buildAccessClaims, isWorkloadKind, TOKEN_ALG } from '@fabrika/auth-core'
 import type { EmailSender } from '@fabrika/email'
 import { PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
 import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
@@ -261,17 +261,20 @@ export async function adminTokenFor(repositories: IamRepositories, principalId: 
 	}
 	const issuedAt = Math.floor(Date.now() / 1000)
 	const signer = await getSigner(TEST_SIGNING_ENV)
-	return signer.sign(buildAccessClaims({
-		iss: options.issuer ?? DEFAULT_ISSUER,
-		app: options.app ?? CONSOLE_APP,
-		subject: principal.id,
-		type: principal.type,
-		label: principal.label,
-		...(options.session === false || isWorkloadKind(principal.type) ? {} : { session: true }),
-		permissions: [],
-		issuedAt,
-		expiresAt: issuedAt + 300,
-	}))
+	return signer.sign(accessTokenPayload(
+		buildAccessClaims({
+			iss: options.issuer ?? DEFAULT_ISSUER,
+			app: options.app ?? CONSOLE_APP,
+			subject: principal.id,
+			type: principal.type,
+			label: principal.label,
+			...(options.session === false || isWorkloadKind(principal.type) ? {} : { session: true }),
+			permissions: [],
+			issuedAt,
+			expiresAt: issuedAt + 300,
+		}),
+		'entries',
+	))
 }
 
 /** A harness over a fresh in-memory database with `schema` applied: every shipped migration by default. */

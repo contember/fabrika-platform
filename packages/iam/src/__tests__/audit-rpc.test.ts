@@ -4,7 +4,7 @@
  * app whose token it does not hold.
  */
 
-import { type AuditInput, buildAccessClaims, buildResourceAccessClaims } from '@fabrika/auth-core'
+import { accessTokenPayload, type AuditInput, buildAccessClaims, buildResourceAccessClaims } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { exportJWK, generateKeyPair } from 'jose'
@@ -59,15 +59,18 @@ interface TokenOptions {
 
 function appToken(app: string, options: TokenOptions = {}): Promise<string> {
 	const expiresAt = options.expiresAt ?? now + 300
-	return (options.by ?? signer).sign(buildAccessClaims({
-		iss: options.iss ?? ISSUER,
-		app,
-		subject: 'cred-1',
-		label: 'share link',
-		permissions: [],
-		issuedAt: expiresAt - 300,
-		expiresAt,
-	}))
+	return (options.by ?? signer).sign(accessTokenPayload(
+		buildAccessClaims({
+			iss: options.iss ?? ISSUER,
+			app,
+			subject: 'cred-1',
+			label: 'share link',
+			permissions: [],
+			issuedAt: expiresAt - 300,
+			expiresAt,
+		}),
+		'entries',
+	))
 }
 
 function resourceToken(app: string, options: TokenOptions = {}): Promise<string> {

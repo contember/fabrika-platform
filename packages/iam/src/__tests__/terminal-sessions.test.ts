@@ -1,7 +1,7 @@
 // A person's session on a terminal (ADR-0067 §4): it mints `(person ∩ ceiling) ∪ terminal`, only for the application
 // that asserted it, and only while the terminal is enrolled and still lists that application.
 
-import { type AccessTokenClaims, buildAccessClaims, parseAccessClaims, type Scope } from '@fabrika/auth-core'
+import { type AccessTokenClaims, accessTokenPayload, buildAccessClaims, parseAccessClaims, type Scope } from '@fabrika/auth-core'
 import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -361,12 +361,12 @@ describe("IAM's administration refuses a terminal session's token", () => {
 			expiresAt: issuedAt + 300,
 		}
 		const personal = await resolveAdmin(services, { ...TEST_SIGNING_ENV, FABRIKA_IAM_PROVISIONING_KEY: '' }, {
-			bearer: await signer.sign(buildAccessClaims(claims)),
+			bearer: await signer.sign(accessTokenPayload(buildAccessClaims(claims), 'entries')),
 			requestId: 'r',
 		})
 		expect(personal.ok).toBe(true)
 		const onTerminal = await resolveAdmin(services, { ...TEST_SIGNING_ENV, FABRIKA_IAM_PROVISIONING_KEY: '' }, {
-			bearer: await signer.sign(buildAccessClaims({ ...claims, terminal: { id: 'terminal-1', label: 'Entrance' } })),
+			bearer: await signer.sign(accessTokenPayload(buildAccessClaims({ ...claims, terminal: { id: 'terminal-1', label: 'Entrance' } }), 'entries')),
 			requestId: 'r',
 		})
 		expect(onTerminal).toEqual({ ok: false, status: 403, reason: 'not_allowed' })
