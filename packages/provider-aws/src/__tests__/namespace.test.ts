@@ -429,11 +429,27 @@ describe('awsNamespaceCapabilities', () => {
 		const token = '0f1e2d3c-4b5a-4968-8776-655443322110'
 		const building = {
 			...NAMESPACE,
-			target: target({ proxyBuildToken: token, proxyBuildManifestSha256: 'f'.repeat(64), proxyBuildId: `fabrika_ns_shared_prod:${token}` }),
+			target: target({
+				proxyBuildToken: token,
+				proxyBuildManifestSha256: 'f'.repeat(64),
+				proxyBuildId: `fabrika_ns_shared_prod:${token}`,
+				proxyBuildTrustedProxies: '10.0.0.0/16',
+			}),
 		}
 		const fake = new Fake()
 		expect(await fake.capabilities.provision(mutation(building))).toEqual(building)
 		expect(await fake.capabilities.reconcile(mutation(building))).toEqual(building)
+		// The image's trusted range too.
+		const built = {
+			...NAMESPACE,
+			target: target({
+				proxyImageDigest: `sha256:${'a'.repeat(64)}`,
+				proxyImageManifestSha256: 'f'.repeat(64),
+				proxyImageTrustedProxies: '10.0.0.0/16',
+			}),
+		}
+		expect(await fake.capabilities.reconcile(mutation(built))).toEqual(built)
+		expect(() => fake.capabilities.normalize(built)).toThrow('never submitted')
 	})
 
 	test('provision creates the stack when absent; reconcile of a current stack changes nothing', async () => {

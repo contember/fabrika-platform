@@ -39,7 +39,9 @@ import type { AwsInstallationNetwork } from './environment-stack'
 import { type AwsInstallationBalancer, type AwsProxySource, checkNamespaceTarget, namespaceFailure, readNamespaceOutputs } from './namespace'
 import {
 	type AwsProxyBuildClients,
+	awsProxyBuildCurrent,
 	type AwsProxyBuildFollowClients,
+	awsProxyImageCurrent,
 	awsProxyManifestFile,
 	type AwsProxySourceUpload,
 	followAwsProxyBuild,
@@ -114,6 +116,8 @@ export async function republishAwsProxy(
 	const now = runtime.now ?? Date.now
 	const giveUpAt = now() + (input.wait === 'active' ? (runtime.waitMs ?? AWS_PROXY_WAIT_MS) : 0)
 	const manifestSha256 = await sha256Hex(awsProxyManifestFile(input.namespace.id, input.members))
+	// Behind the balancer, the client is the address it forwards: Caddy trusts the header from the VPC's range alone.
+	const trustedProxies = context.balancer.vpcCidr
 	const common = { installation, proxySource, events: input.events, signal: input.signal }
 	// The hosts' certificates first: their DNS validation is the operator's, and the longer they have the better. Nothing
 	// here waits for one.
@@ -131,7 +135,7 @@ export async function republishAwsProxy(
 	})
 	for (;;) {
 		const target = checkNamespaceTarget(namespace, installation, proxySource)
-		if (target.proxyBuildToken === undefined && target.proxyImageManifestSha256 === manifestSha256) {
+		if (awsProxyImageCurrent(target, manifestSha256, trustedProxies)) {
 			const outputs = await readNamespaceOutputs(runtime.clients.cloudFormation, namespace, installation, proxySource, input.signal)
 			namespace = await ensureAwsProxyService({
 				...common,
@@ -150,7 +154,7 @@ export async function republishAwsProxy(
 			await runtime.sleep(runtime.pollIntervalMs ?? AWS_PROXY_POLL_MS, input.signal)
 			continue
 		}
-		if (target.proxyBuildId !== undefined && target.proxyBuildManifestSha256 === manifestSha256) {
+		if (target.proxyBuildId !== undefined && awsProxyBuildCurrent(target, manifestSha256, trustedProxies)) {
 			const followed = await followAwsProxyBuild({ ...common, namespace, clients: runtime.clients })
 			namespace = followed.namespace
 			if (followed.state === 'built') continue
@@ -162,6 +166,7 @@ export async function republishAwsProxy(
 			...common,
 			namespace,
 			members: input.members,
+			trustedProxies,
 			clients: { ...runtime.clients, credentials: runtime.credentials() },
 			source: runtime.source,
 		})

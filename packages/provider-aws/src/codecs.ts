@@ -9,6 +9,9 @@ import { type JsonValue, MAX_PROVIDER_STATE_BYTES, type ProviderCodec } from '@f
 import { z } from 'zod'
 import { CERTIFICATE_ARN, CERTIFICATE_HOST, CERTIFICATE_STATUS_ENUM, type CertificateStatus, RECORD_NAME as VALIDATION_RECORD } from './aws/acm'
 
+/** An IPv4 CIDR block: the VPC range a proxy behind the balancer trusts forwarding headers from. */
+const IPV4_CIDR = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:[0-9]|[12]\d|3[0-2])$/
+
 /** The provider id an envelope and an authored config carry. */
 export const AWS_PROVIDER = 'aws'
 
@@ -88,6 +91,9 @@ export type AwsNamespaceSizing = 'cheap' | 'full'
  *   token; `proxyBuildId` once CodeBuild answered.
  * - The proxy's image, once a build succeeded: `proxyImageDigest` (the pushed image's, read from ECR by the attempt's
  *   tag) and `proxyImageManifestSha256` (the manifest it was built with), recorded together as the attempt is cleared.
+ * - The ranges Caddy trusts forwarding headers from, baked into the image at its build (the VPC's, behind the balancer):
+ *   `proxyBuildTrustedProxies` with the attempt, `proxyImageTrustedProxies` with the image. An image of other ranges, or
+ *   of none recorded, is built again.
  */
 export interface AwsNamespaceTarget {
 	readonly accountId: string
@@ -99,8 +105,10 @@ export interface AwsNamespaceTarget {
 	readonly proxyBuildToken?: string
 	readonly proxyBuildManifestSha256?: string
 	readonly proxyBuildId?: string
+	readonly proxyBuildTrustedProxies?: string
 	readonly proxyImageDigest?: string
 	readonly proxyImageManifestSha256?: string
+	readonly proxyImageTrustedProxies?: string
 	/**
 	 * The proxy's service (ADR-0044): `proxyServiceTaskDefinitionArn` and `proxyServiceFingerprint` (the revision
 	 * registered, and the sha256 of all its tasks depend on: the image, the IAM issuer, the secrets' names and values)
@@ -200,6 +208,8 @@ const namespaceTargetSchema = z.object({
 	proxyBuildToken: z.string().regex(TOKEN).optional(),
 	proxyBuildManifestSha256: z.string().regex(SHA256_HEX).optional(),
 	proxyBuildId: z.string().regex(BUILD_ID).optional(),
+	proxyBuildTrustedProxies: z.string().regex(IPV4_CIDR).optional(),
+	proxyImageTrustedProxies: z.string().regex(IPV4_CIDR).optional(),
 	proxyImageDigest: z.string().regex(CONTRACT_DIGEST).optional(),
 	proxyImageManifestSha256: z.string().regex(SHA256_HEX).optional(),
 	proxyServiceTaskDefinitionArn: z.string().regex(TASK_DEFINITION_ARN).optional(),
@@ -253,6 +263,12 @@ const namespaceTargetSchema = z.object({
 ).refine((target) => (target.proxyBuildToken === undefined) === (target.proxyBuildManifestSha256 === undefined), {
 	message: "a proxy build's token is recorded with its manifest's digest",
 	path: ['proxyBuildManifestSha256'],
+}).refine((target) => target.proxyBuildTrustedProxies === undefined || target.proxyBuildToken !== undefined, {
+	message: "a proxy build's trusted ranges are recorded with its token",
+	path: ['proxyBuildTrustedProxies'],
+}).refine((target) => target.proxyImageTrustedProxies === undefined || target.proxyImageDigest !== undefined, {
+	message: "the proxy image's trusted ranges are recorded with its digest",
+	path: ['proxyImageTrustedProxies'],
 })
 
 const runCheckpointSchema = z.object({

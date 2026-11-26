@@ -20,6 +20,7 @@ const input: AwsProxyBuildInput = {
 	buildToken: TOKEN,
 	sourceUrlParameter: SOURCE_URL_PARAMETER,
 	repositoryUri: `${REGISTRY}/fabrika/namespaces/shared/prod/proxy`,
+	trustedProxies: '10.0.0.0/16',
 }
 
 const buildspecSchema = z.object({
@@ -44,7 +45,8 @@ describe('the proxy build', () => {
 		expect(AWS_PROXY_MANIFEST_PATH).toBe('proxy.manifest.json')
 		expect(spec.phases.build.commands).toEqual([
 			'set -euo pipefail',
-			`DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --file /tmp/fabrika-source/${AWS_PROXY_DOCKERFILE} --tag "$FABRIKA_IMAGE" /tmp/fabrika-source`,
+			// The trusted range reaches the recipe from the build's own variable, never written into the buildspec.
+			`DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --build-arg FABRIKA_PROXY_TRUSTED_PROXIES --file /tmp/fabrika-source/${AWS_PROXY_DOCKERFILE} --tag "$FABRIKA_IMAGE" /tmp/fabrika-source`,
 			'docker push "$FABRIKA_IMAGE"',
 		])
 		expect(AWS_PROXY_DOCKERFILE).toBe('packages/proxy/Dockerfile')
@@ -62,6 +64,7 @@ describe('the proxy build', () => {
 				[BUILD_VARIABLES.image]: { value: `${REGISTRY}/fabrika/namespaces/shared/prod/proxy:run-${TOKEN}` },
 				[BUILD_VARIABLES.registry]: { value: REGISTRY },
 				[BUILD_VARIABLES.registryRegion]: { value: 'eu-central-1' },
+				FABRIKA_PROXY_TRUSTED_PROXIES: { value: '10.0.0.0/16' },
 			},
 			timeoutMinutes: AWS_BUILD_TIMEOUT_MINUTES,
 			queuedTimeoutMinutes: AWS_BUILD_QUEUED_TIMEOUT_MINUTES,

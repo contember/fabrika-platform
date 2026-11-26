@@ -559,6 +559,8 @@ function targetOf(
 		...(stored?.proxyBuildToken === undefined ? {} : { proxyBuildToken: stored.proxyBuildToken }),
 		...(stored?.proxyBuildManifestSha256 === undefined ? {} : { proxyBuildManifestSha256: stored.proxyBuildManifestSha256 }),
 		...(stored?.proxyBuildId === undefined ? {} : { proxyBuildId: stored.proxyBuildId }),
+		...(stored?.proxyBuildTrustedProxies === undefined ? {} : { proxyBuildTrustedProxies: stored.proxyBuildTrustedProxies }),
+		...(stored?.proxyImageTrustedProxies === undefined ? {} : { proxyImageTrustedProxies: stored.proxyImageTrustedProxies }),
 		...(stored?.proxyImageDigest === undefined ? {} : { proxyImageDigest: stored.proxyImageDigest }),
 		...(stored?.proxyImageManifestSha256 === undefined ? {} : { proxyImageManifestSha256: stored.proxyImageManifestSha256 }),
 		...(stored?.proxyServiceTaskDefinitionArn === undefined ? {} : { proxyServiceTaskDefinitionArn: stored.proxyServiceTaskDefinitionArn }),
@@ -680,6 +682,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				|| submitted.proxyServiceTaskDefinitionArn !== undefined || submitted.proxyServiceFingerprint !== undefined
 				|| submitted.proxyServiceUpdated !== undefined || submitted.proxyServiceRolledOut !== undefined
 				|| submitted.proxyCertificates !== undefined || submitted.proxyHostsFailure !== undefined
+				|| submitted.proxyBuildTrustedProxies !== undefined || submitted.proxyImageTrustedProxies !== undefined
 			) {
 				throw new Error("aws: a namespace's proxy build, image and certificates are recorded by its provider, never submitted")
 			}

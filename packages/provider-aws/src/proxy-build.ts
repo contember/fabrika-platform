@@ -28,6 +28,13 @@ import { AWS_BUILD_QUEUED_TIMEOUT_MINUTES, AWS_BUILD_TIMEOUT_MINUTES } from './r
 export const AWS_PROXY_DOCKERFILE = 'packages/proxy/Dockerfile'
 /** The archive's one data file: the manifest the proxy is built with, at a path the commit does not hold (ADR-0045). */
 export const AWS_PROXY_MANIFEST_PATH = 'proxy.manifest.json'
+/**
+ * The build variable, and the recipe's build argument of the same name, that carries the ranges Caddy trusts forwarding
+ * headers from (`packages/proxy/Dockerfile`). Docker reads a `--build-arg` without a value from the environment.
+ */
+export const AWS_PROXY_TRUSTED_PROXIES = 'FABRIKA_PROXY_TRUSTED_PROXIES'
+/** An IPv4 CIDR block, as the trusted range is passed: no list, no space, nothing a shell would read. */
+const TRUSTED_RANGE = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:[0-9]|[12]\d|3[0-2])$/
 /** The proxy's builder: Amazon Linux on x86, because the proxy's binary is an x64 one. */
 export const AWS_PROXY_BUILD_IMAGE = 'aws/codebuild/amazonlinux-x86_64-standard:5.0'
 
@@ -44,7 +51,9 @@ export const AWS_PROXY_BUILDSPEC = [
 	'  build:',
 	'    commands:',
 	'      - set -euo pipefail',
-	`      - DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --file /tmp/fabrika-source/${AWS_PROXY_DOCKERFILE} --tag "$${BUILD_VARIABLES.image}" /tmp/fabrika-source`,
+	// The trusted ranges reach the recipe as a build argument (`generate-config.ts` bakes them into `caddy.json`); a
+	// commit whose recipe takes no such argument builds as before, with a warning.
+	`      - DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --build-arg ${AWS_PROXY_TRUSTED_PROXIES} --file /tmp/fabrika-source/${AWS_PROXY_DOCKERFILE} --tag "$${BUILD_VARIABLES.image}" /tmp/fabrika-source`,
 	`      - docker push "$${BUILD_VARIABLES.image}"`,
 	'',
 ].join('\n')
@@ -58,6 +67,8 @@ export interface AwsProxyBuildInput {
 	readonly sourceUrlParameter: string
 	/** The namespace's proxy repository (`<account>.dkr.ecr.<region>.amazonaws.com/<name>`). */
 	readonly repositoryUri: string
+	/** The range Caddy trusts forwarding headers from: the VPC's, behind the balancer. */
+	readonly trustedProxies: string
 }
 
 /** The start of one proxy build, as `codeBuildClient(…).startBuild` takes it. */
@@ -65,6 +76,7 @@ export function awsProxyBuildStart(input: AwsProxyBuildInput): CodeBuildStart {
 	const [, account, region] = REPOSITORY_URI.exec(input.repositoryUri) ?? []
 	if (account === undefined || region === undefined) throw new Error('AWS proxy build: the repository is not one this provider builds with')
 	if (!PARAMETER_NAME.test(input.sourceUrlParameter)) throw new Error('AWS proxy build: the source URL parameter is not one this provider builds with')
+	if (!TRUSTED_RANGE.test(input.trustedProxies)) throw new Error('AWS proxy build: the trusted range is not one IPv4 block')
 	return {
 		project: input.project,
 		token: input.buildToken,
@@ -74,6 +86,7 @@ export function awsProxyBuildStart(input: AwsProxyBuildInput): CodeBuildStart {
 			[BUILD_VARIABLES.image]: { value: `${input.repositoryUri}:${awsImageTag(input.buildToken)}` },
 			[BUILD_VARIABLES.registry]: { value: `${account}.dkr.ecr.${region}.amazonaws.com` },
 			[BUILD_VARIABLES.registryRegion]: { value: region },
+			[AWS_PROXY_TRUSTED_PROXIES]: { value: input.trustedProxies },
 		},
 		timeoutMinutes: AWS_BUILD_TIMEOUT_MINUTES,
 		queuedTimeoutMinutes: AWS_BUILD_QUEUED_TIMEOUT_MINUTES,

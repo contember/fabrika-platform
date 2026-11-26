@@ -293,7 +293,7 @@ describe('republishAwsProxy', () => {
 
 	test('an image of the current manifest is set at once, with no build', async () => {
 		const fake = new Fake()
-		const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST })
+		const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyImageTrustedProxies: BALANCER.vpcCidr })
 		const result = await republishAwsProxy(fake.context, {
 			namespace: built,
 			members: MEMBERS,
@@ -321,7 +321,7 @@ describe('republishAwsProxy', () => {
 })
 
 describe("the proxy service's rollout", () => {
-	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST })
+	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyImageTrustedProxies: BALANCER.vpcCidr })
 	const ENV = '/fabrika/namespaces/shared/prod/env'
 
 	test('settles once the deployment of the revision completed, and only then deletes the secrets it no longer names', async () => {
@@ -464,7 +464,7 @@ describe("the proxy service's rollout", () => {
 })
 
 describe("the hosts on the installation's listener", () => {
-	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST })
+	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyImageTrustedProxies: BALANCER.vpcCidr })
 	/** The hosts stack's rules as `<host>@<priority>`, from the template it was last sent. */
 	const served = (template: string | null): readonly string[] => {
 		const parsed: unknown = JSON.parse(template === null || template === '' ? '{}' : template)
@@ -530,6 +530,7 @@ describe("the hosts on the installation's listener", () => {
 			...PINNED,
 			proxyImageDigest: DIGEST,
 			proxyImageManifestSha256: MANIFEST,
+			proxyImageTrustedProxies: BALANCER.vpcCidr,
 			proxyCertificates: [{ host: 'notes.example.com', arn, status: 'ISSUED', priority: '7' }],
 		})
 		fake.rules = [otherRule(7, 'other.example.com', [THEIRS])]
@@ -546,6 +547,7 @@ describe("the hosts on the installation's listener", () => {
 			...PINNED,
 			proxyImageDigest: DIGEST,
 			proxyImageManifestSha256: MANIFEST,
+			proxyImageTrustedProxies: BALANCER.vpcCidr,
 			proxyCertificates: [{ host, arn, status: 'ISSUED' }],
 		})
 	}
@@ -660,7 +662,7 @@ describe('withAwsProxyRepublish', () => {
 	test('a reconcile of a converged namespace reads the stack and makes no proxy call', async () => {
 		const fake = new Fake()
 		const set = await republishAwsProxy(fake.context, {
-			namespace: namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST }),
+			namespace: namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyImageTrustedProxies: BALANCER.vpcCidr }),
 			members: MEMBERS,
 			events: fake.events,
 			signal: fake.signal,

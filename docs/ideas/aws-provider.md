@@ -475,8 +475,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the installation balancer's group, on :8080 and :8081, and its egress is TCP 443 anywhere (IAM, ECR, logs) and the
     applications' port in the VPC's range. Control reads the balancer's group and the range from
     `FABRIKA_AWS_BALANCER_SECURITY_GROUP` and `FABRIKA_AWS_VPC_CIDR` (the VPC's primary block, its network address; a
-    secondary block is not covered), which the installation's stack will give. Not yet: Caddy's `trusted_proxies` set
-    to the VPC's range, so a request's client address is the caller's, not the balancer's.
+    secondary block is not covered), which the installation's stack will give. Caddy trusts the forwarding headers
+    from the VPC's range alone, so a request's client address is the caller's, not the balancer's: the range is a
+    build argument of the proxy's image (`FABRIKA_PROXY_TRUSTED_PROXIES`, baked into `caddy.json`), recorded with the
+    attempt and the image (`proxyBuildTrustedProxies`, `proxyImageTrustedProxies`), so an image of another range, or
+    one built before this, is built again.
     **The certificates** (built, `src/proxy-certificates.ts`, `src/aws/acm.ts`): every republish and reconcile first
     requests a public ACM certificate, validated by DNS, for each routed host that has none, and records it in the
     namespace target as ACM answers (its idempotency token derived from the namespace, the host and the certificate it

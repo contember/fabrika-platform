@@ -26,6 +26,8 @@ const installation: AwsAppTarget = {
 }
 const PROXY_SOURCE = { repository: { owner: 'contember', name: 'fabrika-platform' }, commitSha: '0123456789abcdef0123456789abcdef01234567' }
 const TOKEN = '0f1e2d3c-4b5a-4968-8776-655443322110'
+/** The VPC's range, which the proxy behind the balancer trusts forwarding headers from. */
+const TRUSTED = '10.0.0.0/16'
 const SECOND_TOKEN = '1a2b3c4d-5e6f-4a5b-8c7d-9e8f7a6b5c4d'
 const BUILD_ID = `fabrika_ns_shared_prod:${TOKEN}`
 const PARAMETER = `/fabrika/namespaces/shared/prod/builds/${TOKEN}/source-url`
@@ -125,6 +127,7 @@ class Fake {
 			signal: new AbortController().signal,
 			now: () => new Date('2026-11-26T08:00:00Z'),
 			newToken: () => this.tokens.shift() ?? 'no-token-left',
+			trustedProxies: TRUSTED,
 		}
 	}
 }
@@ -144,13 +147,14 @@ describe('startAwsProxyBuild', () => {
 			'checkpoint',
 		])
 		expect(fake.checkpoints).toEqual([
-			{ ...PINNED, proxyBuildToken: TOKEN, proxyBuildManifestSha256: manifestSha256 },
-			{ ...PINNED, proxyBuildToken: TOKEN, proxyBuildManifestSha256: manifestSha256, proxyBuildId: BUILD_ID },
+			{ ...PINNED, proxyBuildToken: TOKEN, proxyBuildManifestSha256: manifestSha256, proxyBuildTrustedProxies: TRUSTED },
+			{ ...PINNED, proxyBuildToken: TOKEN, proxyBuildManifestSha256: manifestSha256, proxyBuildTrustedProxies: TRUSTED, proxyBuildId: BUILD_ID },
 		])
 		expect(awsNamespaceTargetCodec.decode(started.target.payload)).toEqual({
 			...PINNED,
 			proxyBuildToken: TOKEN,
 			proxyBuildManifestSha256: manifestSha256,
+			proxyBuildTrustedProxies: TRUSTED,
 			proxyBuildId: BUILD_ID,
 		})
 		// The manifest is the members' compile; the start is the proxy's, the presigned read by its parameter only.
@@ -167,20 +171,32 @@ describe('startAwsProxyBuild', () => {
 	test('a namespace whose build of this manifest started is answered as it is, with no call', async () => {
 		const fake = new Fake()
 		const manifestSha256 = await sha256Hex(awsProxyManifestFile('shared', MEMBERS))
-		const started = namespaceOf({ ...PINNED, proxyBuildToken: TOKEN, proxyBuildManifestSha256: manifestSha256, proxyBuildId: BUILD_ID })
+		const started = namespaceOf({
+			...PINNED,
+			proxyBuildToken: TOKEN,
+			proxyBuildManifestSha256: manifestSha256,
+			proxyBuildTrustedProxies: TRUSTED,
+			proxyBuildId: BUILD_ID,
+		})
 		expect(await startAwsProxyBuild(fake.input(started))).toEqual(started)
 		expect(fake.calls).toEqual([])
 	})
 
 	test('a recorded attempt without a build id is found by its token first, and sent again under it only when none carries it', async () => {
 		const manifestSha256 = await sha256Hex(awsProxyManifestFile('shared', MEMBERS))
-		const recorded = namespaceOf({ ...PINNED, proxyBuildToken: TOKEN, proxyBuildManifestSha256: manifestSha256 })
+		const recorded = namespaceOf({ ...PINNED, proxyBuildToken: TOKEN, proxyBuildManifestSha256: manifestSha256, proxyBuildTrustedProxies: TRUSTED })
 
 		const found = new Fake()
 		found.found = build(BUILD_ID)
 		await startAwsProxyBuild(found.input(recorded))
 		expect(found.calls).toEqual([`findBuild fabrika_ns_shared_prod ${TOKEN}`, 'checkpoint'])
-		expect(found.checkpoints).toEqual([{ ...PINNED, proxyBuildToken: TOKEN, proxyBuildManifestSha256: manifestSha256, proxyBuildId: BUILD_ID }])
+		expect(found.checkpoints).toEqual([{
+			...PINNED,
+			proxyBuildToken: TOKEN,
+			proxyBuildManifestSha256: manifestSha256,
+			proxyBuildTrustedProxies: TRUSTED,
+			proxyBuildId: BUILD_ID,
+		}])
 
 		const lost = new Fake()
 		await startAwsProxyBuild(lost.input(recorded))
@@ -214,6 +230,7 @@ describe('startAwsProxyBuild', () => {
 			proxyCommitSha: older,
 			proxyBuildToken: SECOND_TOKEN,
 			proxyBuildManifestSha256: await sha256Hex(awsProxyManifestFile('shared', MEMBERS)),
+			proxyBuildTrustedProxies: TRUSTED,
 		})
 		// The namespace's own pin, an older commit than the installation's default, is what is uploaded.
 		expect(fake.calls).toContain(`upload contember/fabrika-platform@${older} proxy.manifest.json`)
@@ -228,6 +245,7 @@ describe('startAwsProxyBuild', () => {
 			...PINNED,
 			proxyImageDigest: `sha256:${'a'.repeat(64)}`,
 			proxyImageManifestSha256: await sha256Hex(awsProxyManifestFile('shared', MEMBERS)),
+			proxyImageTrustedProxies: TRUSTED,
 		})
 		expect(await startAwsProxyBuild(fake.input(built))).toEqual(built)
 		expect(fake.calls).toEqual([])
@@ -255,6 +273,7 @@ describe('startAwsProxyBuild', () => {
 			...PINNED,
 			proxyBuildToken: TOKEN,
 			proxyBuildManifestSha256: await sha256Hex(awsProxyManifestFile('shared', MEMBERS)),
+			proxyBuildTrustedProxies: TRUSTED,
 		}])
 	})
 
@@ -391,6 +410,7 @@ describe('followAwsProxyBuild', () => {
 			proxyImageManifestSha256: manifestSha256,
 			proxyBuildToken: TOKEN,
 			proxyBuildManifestSha256: manifestSha256,
+			proxyBuildTrustedProxies: TRUSTED,
 			proxyBuildId: BUILD_ID,
 		}
 		expect(withProxyPin(target, older)).toEqual(target)
