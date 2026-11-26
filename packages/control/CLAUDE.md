@@ -554,8 +554,11 @@ other environment, before the provider prepares anything, and the write maps a r
   `openGate`, in `publish` before every `open` of the serving object by any operation, first fences `inspect` (the object
   acknowledges no transition in the session that served an `arm`, which holds the barrier's turn until its reset, while
   `verify` takes no turn), then verifies: `present` spends the arm, `absent` records `rewound`, and no usable answer
-  refuses the open (`rewind_unresolved`). A rewound object opens only once a deploy succeeded after its migration
-  (`rewound_before_rollback`), so a recovery resumes the migration instead of opening.
+  refuses the open (`rewind_unresolved`). `rewoundMayOpen` alone decides whether a rewound object may open: its
+  rollback deploy succeeded and `check` waited in `inspect` to its recorded deadline (or moved past it); otherwise
+  `rewound_before_rollback`, and a recovery resumes the migration instead. A migration that failed `rewind_failed` and
+  whose rewind a later `verify` confirmed is `resumableRewound`: a resume recovery runs it again from `revert`
+  (`resumeRewound`), with no further `arm`.
   A refusal before any `arm` records `refused` and `rewind_refusal` and takes the branch below for a record it cannot
   rewind. `rolled_back`, `record_unwritable`, a rewound migration, and a `committed` one not rewound without
   `data_loss`, go to `revert`, the rollback deploy of `getLatestDeployedRun` (a succeeded run that recorded its

@@ -460,7 +460,8 @@ the undo bookmark brings the rewound writes back. So a rewind that fails once an
 `inspect` too: a refusal before the first `arm` alone rewound nothing for certain. Nothing opens the object while an
 `arm` is outstanding. Control first publishes a transition, which the object acknowledges only after the `arm`'s reset,
 since the `arm` holds the barrier's turn until it and `verify` takes none; then it `verify`s. A present sentinel spends
-the `arm`; an absent one is a rewound object, which opens only after a deploy succeeded since its migration; no usable
+the `arm`; an absent one is a rewound object, which opens, by any path, only once its rollback deploy succeeded and the
+wait after it passed, as the automatic path requires; a recovery resumes a stopped rewind to that rollback. No usable
 answer keeps it shut.
 
 **Not built: an in-place restore of an object that served, and a whole-environment rollback.** Rewinding an object

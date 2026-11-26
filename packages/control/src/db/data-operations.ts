@@ -383,6 +383,21 @@ export class DataOperationRepository {
 		)
 	}
 
+	/**
+	 * Runs again a bookmark migration that failed at `rewind` and whose rewind a later `verify` confirmed, from its
+	 * rollback deploy, with the object `inspect`. `false` for any other operation, or off the lease.
+	 */
+	async resumeRewound(id: string, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET state = 'running', error_code = NULL, finished_at = NULL, step = 'revert', target_mode = 'inspect',
+				updated_at = ?
+				WHERE id = ? AND state = 'failed' AND kind = 'migrate' AND records_bookmark = 1 AND step = 'rewind' AND rewind_outcome = 'rewound'`,
+			[this.now(), id],
+			fence,
+		)
+	}
+
 	/** The environment's newest bookmark migration, in any state; `null` without one. */
 	async latestBookmarkMigration(appId: string, env: string): Promise<DataOperationRow | null> {
 		return await this.d1

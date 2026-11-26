@@ -866,6 +866,74 @@ for (const backend of backends) {
 			})
 		}
 
+		test('a rewind_failed whose rewind a later verify confirms: a recovery resumes it through the rollback deploy, check and the open', async () => {
+			const { b, fake, state, deps, deployFirst, candidateRun, operations, dataDeps, timeline, clock } = await open()
+			await deployFirst()
+			state.failure = 'committed'
+			fake.resets = false
+			const second = await candidateRun([FIRST, SECOND])
+			expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
+			const [failed] = await operations()
+			expect(failed).toMatchObject({ state: 'failed', error_code: REWIND_FAILED_CODE, step: 'rewind' })
+			// The last arm restored at the reset after all: an operator's open finds the sentinel gone and is refused.
+			fake.rewinds.get('application')?.sentinels.delete(failed?.id ?? '')
+			const refused = await startMaintenance(dataDeps(), { ...TARGET, mode: 'open', actor: 'user:ada' })
+			expect(refused).toMatchObject({ kind: 'driven', operation: { state: 'failed', error_code: REWOUND_BEFORE_ROLLBACK_CODE } })
+			// Opening past it is refused for good; resuming it is what moves it on.
+			const openPast = await startRecovery(dataDeps(), { ...TARGET, operationId: failed?.id ?? '', resolution: 'open', actor: 'user:ops' })
+			expect(openPast).toMatchObject({ kind: 'driven', operation: { state: 'failed', error_code: REWOUND_BEFORE_ROLLBACK_CODE } })
+			fake.sent.length = 0
+			state.deploys.length = 0
+			const before = clock()
+			const resumed = await startRecovery(dataDeps(), { ...TARGET, operationId: failed?.id ?? '', resolution: 'resume', actor: 'user:ops' })
+			if (resumed.kind !== 'driven') throw new Error(`recovery not driven: ${resumed.kind}`)
+			expect(clock() - before).toBeGreaterThanOrEqual(NEW_VERSION_DEADLINE_S * 1000 - 1000)
+			expect(fake.requests().filter((request) => request.startsWith('restore'))).toEqual([])
+			expect(state.deploys.map((deploy) => deploy.rollback)).toEqual([true])
+			// The recovery's fence, then the migration's own inspect fence, rollback deploy, wait in inspect, and the open.
+			expect(timeline()).toEqual([
+				'inspect',
+				'state application closed @7',
+				'state application inspect @8',
+				'rollback deploy',
+				'state application open @9',
+				'migrate @9',
+			])
+			expect(await b.repositories.dataOperations.get(failed?.id ?? '')).toMatchObject({
+				state: 'failed',
+				error_code: MIGRATION_REVERTED_CODE,
+				step: 'check',
+				target_mode: 'open',
+				rewind_outcome: 'rewound',
+			})
+			expect(fake.published.get(`${APP}/${ENV}/application`)).toEqual({ generation: 9, mode: 'open' })
+		})
+
+		test('a recovery open while the rewound object waits out check is refused before the deadline and allowed after it', async () => {
+			const { b, fake, state, deps, deployFirst, candidateRun, operations, dataDeps, stopInNextWait, advance } = await open()
+			await deployFirst()
+			fake.rewoundLedger = [...fake.ledger]
+			state.failure = 'committed'
+			// Control stops in the wait that follows the rollback deploy's success.
+			state.onRollback = () => {
+				stopInNextWait()
+				return Promise.resolve()
+			}
+			const second = await candidateRun([FIRST, SECOND])
+			await executeDeploy(deps(), { runId: second })
+			const [stuck] = await operations()
+			expect(stuck).toMatchObject({ state: 'running', step: 'check', target_mode: 'inspect', rewind_outcome: 'rewound' })
+			expect((await b.repositories.runs.getRun(stuck?.revert_run_id ?? ''))?.status).toBe('succeeded')
+			const early = await startRecovery(dataDeps(), { ...TARGET, operationId: stuck?.id ?? '', resolution: 'open', actor: 'user:ops' })
+			expect(early).toMatchObject({ kind: 'driven', operation: { state: 'failed', error_code: REWOUND_BEFORE_ROLLBACK_CODE } })
+			expect(fake.requests().filter((request) => request.includes(' open @')).slice(1)).toEqual([])
+			advance(NEW_VERSION_DEADLINE_S * 1000)
+			const late = await startRecovery(dataDeps(), { ...TARGET, operationId: stuck?.id ?? '', resolution: 'open', actor: 'user:ops' })
+			expect(late).toMatchObject({ kind: 'driven', operation: { state: 'succeeded' } })
+			expect(fake.published.get(`${APP}/${ENV}/application`)).toMatchObject({ mode: 'open' })
+			expect(await b.repositories.dataOperations.get(stuck?.id ?? '')).toMatchObject({ state: 'failed', error_code: 'recovered_open' })
+		})
+
 		test('the rewind is never asked for again once the rollback deploy started: a successor settles the rollback in inspect', async () => {
 			const { b, fake, state, deps, locks, deployFirst, candidateRun, timeline, operations, steal, pass } = await open()
 			await deployFirst()

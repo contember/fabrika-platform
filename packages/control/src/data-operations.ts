@@ -275,8 +275,8 @@ export const MIGRATION_REVERTED_CODE = 'migration_reverted'
 
 /**
  * The codes an open of the environment is refused with after an in-place rewind (ADR-0070 §9): an outstanding `arm`
- * whose `verify` gave no usable answer, or an object that was rewound while the failed version is still the deployed
- * one, whose boot would migrate again; the interrupted migration resumes to its rollback deploy instead.
+ * whose `verify` gave no usable answer, or a rewound object whose rollback has not settled (`rewoundMayOpen`), since the
+ * failed version's boot would migrate again; the migration resumes through its rollback deploy instead.
  */
 export const REWIND_UNRESOLVED_CODE = 'rewind_unresolved'
 export const REWOUND_BEFORE_ROLLBACK_CODE = 'rewound_before_rollback'
@@ -564,9 +564,10 @@ export interface StartRecoveryInput {
 export async function startRecovery(deps: DataOperationDeps, input: StartRecoveryInput): Promise<DataOperationOutcome> {
 	return await underLease(deps, input, async (driver) => {
 		const interrupted = await driver.read(input.operationId)
-		// Only a running operation can resume; a failed one can still be opened past.
+		// Only a running operation can resume, or a migration stopped at a rewind confirmed later; a failed one can still be opened past.
 		const recoverable = interrupted !== null && interrupted.app_id === input.appId && interrupted.env === input.env
-			&& (interrupted.state === 'running' || (interrupted.state === 'failed' && input.resolution === 'open'))
+			&& (interrupted.state === 'running' || (interrupted.state === 'failed' && input.resolution === 'open')
+				|| (resumableRewound(interrupted) && input.resolution === 'resume'))
 		if (!recoverable) return { kind: 'refused', reason: 'not_recoverable' }
 		const latest = await latestOperation(deps, input)
 		if (latest !== null && latest.id !== interrupted.id && latest.state === 'running') return { kind: 'refused', reason: 'operation_running' }
@@ -932,6 +933,9 @@ class OperationDriver {
 				return { kind: 'done', result: 'succeeded' }
 			}
 			case 'resume': {
+				// A rewind a later `verify` confirmed goes on from its rollback deploy; no `arm` is sent again.
+				const stopped = await this.require(interruptedId)
+				if (resumableRewound(stopped)) this.lease.assertWritten(await this.records.resumeRewound(stopped.id, this.lease.fence()))
 				const resumed = await this.drive(interruptedId, true)
 				if (resumed === 'interrupted' || resumed === 'paused') return { kind: 'done', result: resumed }
 				if (resumed === 'failed') return await this.failed(row, 'resume_failed')
@@ -2121,17 +2125,12 @@ class OperationDriver {
 			// The open goes out at a generation above the fence's.
 			row = await this.advance(row, { step: row.step, generation: await this.allocate() })
 		}
-		if (migration.rewind_outcome === 'rewound' && !(await this.deployedSince(migration))) return { kind: 'refused', code: REWOUND_BEFORE_ROLLBACK_CODE }
+		if (migration.rewind_outcome === 'rewound') {
+			const rollback = migration.revert_run_id === null ? null : await this.deps.repositories.runs.getRun(migration.revert_run_id)
+			this.lease.assertHeld()
+			if (!rewoundMayOpen(migration, rollback?.status === 'succeeded', this.now())) return { kind: 'refused', code: REWOUND_BEFORE_ROLLBACK_CODE }
+		}
 		return { kind: 'acked', row }
-	}
-
-	/** Whether a deploy succeeded after `migration` started: its rollback deploy, or any later one. */
-	private async deployedSince(migration: DataOperationRow): Promise<boolean> {
-		const runs = this.deps.repositories.runs
-		const rollback = migration.revert_run_id === null ? null : await runs.getRun(migration.revert_run_id)
-		const latest = await runs.getLatestDeployedRun(this.target)
-		this.lease.assertHeld()
-		return rollback?.status === 'succeeded' || (latest !== null && latest.id > migration.id)
 	}
 
 	/**
@@ -2205,6 +2204,22 @@ class OperationDriver {
 		await this.fail(row, code, checkpoint)
 		return { kind: 'done', result: 'failed' }
 	}
+}
+
+/**
+ * Whether a rewound object may open, by any path: only once its rollback settled as the automatic `check` requires. The
+ * rollback deploy succeeded, and `check` waited in `inspect` to its recorded deadline, after which the failed version's
+ * instance is gone, and moved on (to `open`, or to `restrict`). A successful deploy alone is not enough.
+ */
+export function rewoundMayOpen(migration: DataOperationRow, rollbackSucceeded: boolean, nowMs: number): boolean {
+	if (!rollbackSucceeded) return false
+	if (migration.step === 'restrict') return true
+	return migration.step === 'check' && (migration.target_mode === 'open' || (migration.deadline_at !== null && nowMs >= migration.deadline_at * 1000))
+}
+
+/** A migration that stopped at `rewind` and whose rewind a later `verify` confirmed: a recovery resumes it to its rollback. */
+export function resumableRewound(row: DataOperationRow): boolean {
+	return row.kind === 'migrate' && row.records_bookmark === 1 && row.state === 'failed' && row.step === 'rewind' && row.rewind_outcome === 'rewound'
 }
 
 /** An in-place `arm` was counted, and no `verify` after a proven reset answered for it. */
