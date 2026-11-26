@@ -103,6 +103,14 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		triggerRef: null,
 		approvalSettings: { ...PERMISSIVE_SETTINGS, requestTtlHours: 48, credentialCeiling: 'requester' },
 	}])
+	// A Control older than a step-up category keeps every other setting it sends, and that category takes its default.
+	const { 'agent-write': ___________, ...olderStepUp } = PERMISSIVE_SETTINGS.stepUp
+	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, approvalSettings: { ...PERMISSIVE_SETTINGS, stepUp: olderStepUp } }] }))
+		.toEqual([{
+			...environment,
+			triggerRef: null,
+			approvalSettings: { ...PERMISSIVE_SETTINGS, stepUp: { ...PERMISSIVE_SETTINGS.stepUp, 'agent-write': STRICT_SETTINGS.stepUp['agent-write'] } },
+		}])
 	expect(() => parseEnvironments({ items: [{ ...environment, triggerRef: null, target: { ...envelope, payload: { secret: Infinity } } }] }))
 		.toThrow('Invalid stored or upstream data')
 	const run: ReturnType<typeof parseRun> = { id: 'run', appId: 'app', env: 'dev', ref: 'sha', commitSha: null, status: 'running' }

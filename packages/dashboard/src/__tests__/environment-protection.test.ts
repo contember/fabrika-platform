@@ -267,7 +267,7 @@ describe('approval modes', () => {
 		const markup = editor(environment('prod', true))
 		expect(markup).toContain('aria-label="Actions a key an agent asks for may hold"')
 		expect(markup).toContain('The agent&#x27;s own (default)')
-		expect(settingsSummary({ ...STRICT_SETTINGS, credentialCeiling: 'approver' })).toContain(
+		expect(settingsSummary({ ...STRICT_SETTINGS, credentialCeiling: 'approver' }, STRICT_POLICY)).toContain(
 			'A key an agent asks for may hold any action its approver holds.',
 		)
 	})
@@ -322,15 +322,20 @@ describe('approval modes', () => {
 		expect(waitingSummary({ ...PERMISSIVE_POLICY, 'deletes-data': 'person', registry: 'refuse' })).toBe(
 			'Waits for a person: Migrations that may change stored data; refused to an agent: Where a deploy points.',
 		)
-		expect(settingsSummary(STRICT_SETTINGS)).toBe(
+		expect(settingsSummary(STRICT_SETTINGS, STRICT_POLICY)).toBe(
 			'An agent asks to deploy merged commits only. A request waits 24 h for a decision. A key an agent asks for holds only actions the agent holds. '
-				+ `A passkey confirms deciding: ${categoryLabel('credentials')}. A passkey confirms letting an agent write as a person.`,
+				+ `A passkey confirms deciding: ${categoryLabel('credentials')}. `
+				+ "An agent writing as a person takes a passkey; until IAM's approval page asks for one, agents only read here.",
 		)
-		expect(settingsSummary(PERMISSIVE_SETTINGS)).not.toContain('passkey')
-		expect(settingsSummary({ ...PERMISSIVE_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } })).toContain(
+		// A refused agent-write is in what waits, not in the settings.
+		expect(settingsSummary(STRICT_SETTINGS, { ...STRICT_POLICY, 'agent-write': 'refuse' })).not.toContain('agent writing')
+		expect(settingsSummary(PERMISSIVE_SETTINGS, STRICT_POLICY)).not.toContain('passkey')
+		expect(settingsSummary({ ...PERMISSIVE_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } }, STRICT_POLICY)).toContain(
 			'An agent may ask to deploy any commit.',
 		)
-		expect(settingsSummary({ ...STRICT_SETTINGS, requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, 'deploy-request': false } }))
+		expect(
+			settingsSummary({ ...STRICT_SETTINGS, requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, 'deploy-request': false } }, STRICT_POLICY),
+		)
 			.toContain("Someone other than the requester's person decides: A deploy started by an agent or a key.")
 	})
 

@@ -424,6 +424,18 @@ for (const backend of backends) {
 			expect((await w.putEnv('blog', 'prod')).env).toBe('prod')
 		})
 
+		test('IAM holding a looser `agent-write` gate at a later revision: an environment that starts protected is not created (503)', async () => {
+			const w = await world()
+			// `credentials` as strict as `prod` starts, but agents may write there without a passkey.
+			await w.grantApproval.set('shop@prod', { grants: false, credentials: 'person', agentWrite: 'open' }, 99)
+			await expect(w.register('shop', 'prod')).rejects.toMatchObject({ httpStatus: 503, message: expect.stringContaining('`agent-write`') })
+			expect(await w.db.registry.getApp('shop')).toBeNull()
+			// A gate IAM holds none of reads `refuse`, the strictest: nothing to compare.
+			await w.grantApproval.set('shop@prod', { grants: false, credentials: 'person', agentWrite: 'refuse' }, 100)
+			await w.register('shop', 'prod')
+			expect(await w.db.registry.getApp('shop')).not.toBeNull()
+		})
+
 		test('an older IAM, which answers no mode, does not fail a new environment that starts at `refuse`', async () => {
 			const w = await world()
 			// A deleted environment leaves its protection, so one created again at its coordinates starts at `refuse`.

@@ -400,7 +400,7 @@ async function setIamGates(port: GrantApprovalPort, app: string, gates: IamGates
 			502,
 			step === 'tighten'
 				? 'IAM did not take the change, so nothing changed; try again'
-				: 'approvals are saved, but IAM may still hold the stricter setting for console grants or keys; save again to release it',
+				: 'approvals are saved, but IAM may still hold the stricter setting for console grants, keys or agent writes; save again to release it',
 		)
 	}
 }

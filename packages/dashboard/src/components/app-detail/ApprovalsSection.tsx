@@ -153,7 +153,7 @@ export function ProtectionRow({ appId, env, onDone, credentials = browserCredent
 					)}
 					{env.protected && (approver
 						? <PolicyEditor appId={appId} env={env} onDone={onDone} credentials={credentials} />
-						: <span className="muted small">{waitingSummary(env.approvalPolicy)} {settingsSummary(env.approvalSettings)}</span>)}
+						: <span className="muted small">{waitingSummary(env.approvalPolicy)} {settingsSummary(env.approvalSettings, env.approvalPolicy)}</span>)}
 				</div>
 				{confirming && (
 					<ConfirmDialog

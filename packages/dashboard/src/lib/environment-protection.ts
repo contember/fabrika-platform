@@ -267,7 +267,7 @@ export function requestTtl(text: string): number | null {
 }
 
 /** The settings in the console's words, for a reader who cannot change them. */
-export function settingsSummary(settings: ApprovalSettings): string {
+export function settingsSummary(settings: ApprovalSettings, policy: ApprovalPolicy): string {
 	const two = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] === 2).map(categoryLabel)
 	const others = APPROVER_CATEGORIES.filter((category) => !settings.requesterMayApprove[category]).map(categoryLabel)
 	const passkey = APPROVER_CATEGORIES.filter((category) => settings.stepUp[category] === 'webauthn').map(categoryLabel)
@@ -280,7 +280,9 @@ export function settingsSummary(settings: ApprovalSettings): string {
 		...(two.length === 0 ? [] : [`Two people decide: ${two.join(', ')}.`]),
 		...(others.length === 0 ? [] : [`Someone other than the requester's person decides: ${others.join(', ')}.`]),
 		...(passkey.length === 0 ? [] : [`A passkey confirms deciding: ${passkey.join(', ')}.`]),
-		...(settings.stepUp['agent-write'] === 'webauthn' ? ['A passkey confirms letting an agent write as a person.'] : []),
+		...(policy['agent-write'] === 'off' && settings.stepUp['agent-write'] === 'webauthn'
+			? ["An agent writing as a person takes a passkey; until IAM's approval page asks for one, agents only read here."]
+			: []),
 	].join(' ')
 }
 
