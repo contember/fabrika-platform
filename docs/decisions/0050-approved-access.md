@@ -640,6 +640,12 @@ workload can hold completes an approval.
 A rollback deploys an older commit as a new run. Control classifies it like any other run, against the
 environment's active snapshot. Publishing an older run's snapshot again is not a rollback path.
 
+One narrow exception: the automatic rollback deploy of a failed migration (ADR-0069 §3). Only the run the migrate
+operation recorded as its rollback, under its lease, for the same application and environment, redeploys the last
+succeeded run's stored commit SHA; when its snapshot's digest equals that run's, it is published without a new
+approval, because it returns to access that was already approved and deployed. The run log names the exception. Any
+other snapshot, or any other run, is classified as above.
+
 An older run therefore never deploys after a newer run of the same environment and lane succeeded. A run has no lane,
 except a `dev` bootstrap, whose lane is its workspace (`runs.lane`), so one workspace's bootstrap never supersedes
 another's. Before it starts, under the
@@ -757,7 +763,8 @@ never from the words of a line:
   manual run parks and the person approves it from one link; under the permissive preset (ADR-0083) it deploys at once.
   A person's own `px_` key no longer passes as a person, and a parked run no longer waits forever.
 - A rollback that restores removed access is classified like any other change: it waits when it restores a step off
-  the road.
+  the road. The automatic rollback deploy of a failed migration is the one exception, when it returns to the exact
+  approved snapshot it redeploys (section 6).
 - Approval exists only on protected environments. Staging is unprotected by default, so it must hold
   no production data.
 - Control needs the static reader on both runtimes, and the dashboard needs an approval page.
