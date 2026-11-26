@@ -663,9 +663,25 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          (`ecs:namespace`, by its ARN, which the access stack takes from this stack's outputs, or its name).
        - **Two private, TLS-only buckets**: Control's run logs (granted to Control's role) and Operations' blobs.
 
-       Then the services themselves, their task definitions pinning each image by the digest it was pushed under, not
-       by its tag, which the lifecycle policy can free again. The platform proxy routes the three hosts on one port, by
-       host, as a namespace proxy does: the platform balancer has one target group.
+       Then the services themselves (built, `installation/services.ts`, the stack `fabrika-platform-services`, applied
+       last):
+       - **No value in the template.** Every variable a task reads is a SecureString under its own path, which the
+         operator's command writes from `installation-init`'s `installationServiceEnvironment` and
+         `deployedServiceEnvironment` and the AWS provider's own (the same names on every cloud), and which the task
+         definition names as a secret. The template sets only fixed addresses: `PORT`, `http://iam:3000` and the like.
+       - **Images by digest**, never a tag, which the lifecycle policy can free again.
+       - **IAM, Control and Operations** each run their migrations, then their server, in one container, in the
+         platform's cluster and task subnets, under their own group and the database's client group. They publish
+         `iam`, `control` and `operations` in the platform's Service Connect namespace.
+       - **Their scheduled jobs** run in a second container of the same task, once the server is healthy: IAM's prune
+         daily, Control's maintenance every five minutes, Operations' every minute, as Zerops' crontab runs them. The
+         jobs hold their own claims and locks, so a rolling deploy's two tasks are safe. An EventBridge schedule
+         starting a task per run was the alternative, at about $9 a month for Operations' every minute.
+       - **The platform proxy** is a Service Connect client behind the platform balancer's one target group. It routes
+         the three hosts on one port, by host, as a namespace proxy does.
+       - **The database setup** is a task definition and no service. The operator's command runs it in the platform's
+         network, on install and on every upgrade before the services, with the master's password and the services'
+         (`database-setup-main.ts`).
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
        GitHub OIDC role.
 

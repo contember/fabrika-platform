@@ -50,8 +50,10 @@ const HTTPS_PORT = 443
 /** A task of the platform's: the three services, their proxy, and the database setup. */
 export type AwsPlatformTask = 'iam' | 'control' | 'operations' | 'proxy' | 'setup'
 export const AWS_PLATFORM_TASKS: readonly AwsPlatformTask[] = ['iam', 'control', 'operations', 'proxy', 'setup']
-type AwsPlatformServiceTask = 'iam' | 'control' | 'operations'
-const SERVICE_TASKS: readonly AwsPlatformServiceTask[] = ['iam', 'control', 'operations']
+/** The three services: each a long-running ECS service with a database of its own. */
+export type AwsPlatformServiceTask = 'iam' | 'control' | 'operations'
+export const AWS_PLATFORM_SERVICE_TASKS: readonly AwsPlatformServiceTask[] = ['iam', 'control', 'operations']
+const SERVICE_TASKS = AWS_PLATFORM_SERVICE_TASKS
 
 /** A task's family: under the prefix Control is denied every task definition action on. */
 export function awsPlatformTaskFamily(task: AwsPlatformTask): string {
