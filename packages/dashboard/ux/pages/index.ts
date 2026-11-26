@@ -8,8 +8,10 @@ import {
 	applicationSecrets,
 	applicationSettings,
 } from './application'
+import { applicationList } from './applications'
 
 export const pages: readonly PageSpec[] = [
+	applicationList,
 	applicationOverview,
 	applicationData,
 	applicationApprovals,
