@@ -46,12 +46,14 @@ export {
 } from './environment-stack'
 export {
 	AWS_CHEAP_PRESET,
+	type AwsInstallationBalancer,
 	awsNamespaceCapabilities,
 	type AwsNamespaceOutputs,
 	type AwsNamespaceResources,
 	awsNamespaceResources,
 	awsNamespaceStack,
 	type AwsProxySource,
+	checkInstallationBalancer,
 } from './namespace'
 export {
 	AWS_PROXY_BUILD_FAILED,

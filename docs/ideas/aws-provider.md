@@ -381,8 +381,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 
     **The namespace** (built, its stack; `src/namespace.ts`): every environment is placed in a namespace (Control
     requires one of a provider with namespaces). Its stack, `fabrika-ns-<length of id>-<id>-<env>`, holds the proxy's
-    security group in the installation's VPC (outbound; no ingress until the balancer's group is admitted with the proxy
-    service) and a Service Connect HTTP namespace of the same name, and names both as outputs. Control creates it on
+    security group in the installation's VPC (admitting only the balancer's group; see "Behind the balancer" below) and a
+    Service Connect HTTP namespace of the same name, and names both as outputs. Control creates it on
     `provision` and brings it to the template on `reconcile`, through the same apply as an environment's stack (a stack still moving when the wait ends is a retryable `awsStackPending`, which leaves the namespace provisioning for a later reconcile)
     (`src/stack.ts`). Every deploy reads the namespace stack's outputs first (a namespace without a serving stack is
     refused, naming the reconcile) and renders the environment's stack with one ingress rule: the proxy's group, TCP on
@@ -467,9 +467,17 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     published name) in the installation's subnets behind the proxy's group, and records the update. A service of this
     fingerprint already updated is answered with no call; a draining one is refused, retryably. The service lives
     outside the stack and holds its group, roles and log group, so removing a namespace deletes the service first,
-    then its `env/` parameters and task definition family, then the stack; the namespace's instructions say so. The
-    proxy's group still allows all egress; it is scoped with the balancer's rules (TCP 443 to AWS and IAM, the
-    applications' port).
+    then its `env/` parameters and task definition family, then the stack; the namespace's instructions say so.
+    **Behind the balancer** (built): the namespace stack holds the proxy's target group (by IP, HTTP on :8080, healthy
+    when :8081 answers `/healthz`, 30 s to drain), named by CloudFormation, as an output; the service is sent it with
+    its create and every update to a new revision (a service already updated to its fingerprint gets no call, so a
+    replaced group, which only a changed VPC causes, reaches it with the next revision). The proxy's group admits only
+    the installation balancer's group, on :8080 and :8081, and its egress is TCP 443 anywhere (IAM, ECR, logs) and the
+    applications' port in the VPC's range. Control reads the balancer's group and the range from
+    `FABRIKA_AWS_BALANCER_SECURITY_GROUP` and `FABRIKA_AWS_VPC_CIDR` (the VPC's primary block, its network address; a
+    secondary block is not covered), which the installation's stack will give. Not yet: the listener's host rules and
+    the certificates, and Caddy's `trusted_proxies` set to the VPC's range, so a request's client address is the
+    caller's, not the balancer's.
     **Republish** (built, `src/proxy-republish.ts`): the namespace capability's `republish` drives the proxy to the
     members, one resumable step per pass from what the target records: an image of the current manifest sets the
     service (settled); a build of it in flight is followed; otherwise a build of it starts, replacing an older
@@ -534,7 +542,17 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         Following the rollout adds `ecs:DescribeServiceDeployments` and `ecs:DescribeServiceRevisions`, which the
         application runs already need. The proxy's service adds `iam:PassRole` on
         `role/fabrika/namespaces/*` with `iam:PassedToService = ecs-tasks.amazonaws.com` (its task definition names its two
-        roles); its ECS calls are on `service/<cluster>/*` already;
+        roles); its ECS calls are on `service/<cluster>/*` already. Its target group adds, for CloudFormation, on
+        `targetgroup/*` (CloudFormation names the group, so no prefix scopes it): `elasticloadbalancing:CreateTargetGroup`
+        only with the request tag `fabrika:namespace` (`Null` on `aws:RequestTag/fabrika:namespace` = `false`); `AddTags`
+        only with `StringEquals` on `elasticloadbalancing:CreateAction` = `CreateTargetGroup` (never an `IfExists` form,
+        which a call without the key would pass), so a tag is written only with a group Control creates and Control can
+        never tag another group (one the installation's stack holds) into its reach, and no other statement of the role
+        grants `AddTags` on `targetgroup/*`; `ModifyTargetGroup`, `ModifyTargetGroupAttributes` and `DeleteTargetGroup`
+        only with the resource tag (`Null` on `aws:ResourceTag/fabrika:namespace` = `false`), as these calls carry no
+        request tags; no `RemoveTags`, since a namespace's tags never change; and the `Describe*` reads, which take no
+        resource. UNVERIFIED: that CloudFormation sends a new target group's tags inside `CreateTargetGroup` rather than
+        with a later `AddTags`; a later one would be denied, and the stack would fail closed;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;

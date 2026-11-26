@@ -38,10 +38,11 @@ import {
 } from '@fabrika/provider-contract'
 import type { CloudFormationClient } from './aws/cloudformation'
 import { ecrLifecyclePolicy } from './aws/ecr'
-import { type EcsClient, SERVICE_CONNECT_ARN } from './aws/ecs'
+import { type EcsClient, SERVICE_CONNECT_ARN, TARGET_GROUP_ARN } from './aws/ecs'
 import type { SsmClient } from './aws/ssm'
 import { AwsError } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
+import { AWS_APPLICATION_PORT } from './ecs-task'
 import { allow, AWS_LOG_RETENTION_DAYS, awsAppsPermissionsBoundary, type AwsInstallationNetwork, policy, trust } from './environment-stack'
 import { AWS_PROXY_BUILD_IMAGE, AWS_PROXY_BUILDSPEC } from './proxy-build'
 import { awsNamespaceMemberHosts } from './proxy-manifest'
@@ -66,7 +67,12 @@ const IAM_PATH = '/fabrika/namespaces/'
 /** The outputs of a namespace's stack, and their forms. */
 const PROXY_SECURITY_GROUP_OUTPUT = 'ProxySecurityGroupId'
 const SERVICE_CONNECT_OUTPUT = 'ServiceConnectNamespaceArn'
+const PROXY_TARGET_GROUP_OUTPUT = 'ProxyTargetGroupArn'
 const SECURITY_GROUP_ID = /^sg-[0-9a-f]{8,17}$/
+/** The proxy's public listener and its health listener with its path (`packages/proxy/src/caddy.ts`'s defaults). */
+export const AWS_PROXY_PORT = 8080
+export const AWS_PROXY_HEALTH_PORT = 8081
+export const AWS_PROXY_HEALTH_PATH = '/healthz'
 /** The one preset this version offers. */
 export const AWS_CHEAP_PRESET = 'cheap'
 
@@ -139,6 +145,8 @@ export function awsNamespaceResources(id: string, env: string): AwsNamespaceReso
 export interface AwsNamespaceOutputs {
 	readonly proxySecurityGroupId: string
 	readonly serviceConnectNamespaceArn: string
+	/** The balancer's target group of the namespace's proxy. */
+	readonly proxyTargetGroupArn: string
 }
 
 /** The stack of one namespace of `installation`, in the installation's VPC. */
@@ -146,6 +154,7 @@ export function awsNamespaceStack(
 	namespace: Pick<ProviderDeploymentNamespace, 'id' | 'env'>,
 	installation: Pick<AwsAppTarget, 'accountId' | 'region'>,
 	network: Pick<AwsInstallationNetwork, 'vpcId'>,
+	balancer: AwsInstallationBalancer,
 ): AwsStack {
 	const resources = awsNamespaceResources(namespace.id, namespace.env)
 	const { accountId, region } = installation
@@ -163,9 +172,48 @@ export function awsNamespaceStack(
 				Properties: {
 					GroupDescription: `fabrika: the proxy of ${namespace.id}/${namespace.env}`,
 					VpcId: network.vpcId,
-					// No ingress rule yet: the balancer's group is admitted with the proxy service. The proxy reaches out to its
-					// applications (each admits this group on its port), to IAM and to the image registry.
-					SecurityGroupEgress: [{ IpProtocol: '-1', CidrIp: '0.0.0.0/0', Description: 'outbound' }],
+					// Only the balancer reaches the proxy: its requests on the public port, its health checks on the health one.
+					SecurityGroupIngress: [
+						{
+							IpProtocol: 'tcp',
+							FromPort: AWS_PROXY_PORT,
+							ToPort: AWS_PROXY_PORT,
+							SourceSecurityGroupId: balancer.securityGroupId,
+							Description: 'the balancer',
+						},
+						{
+							IpProtocol: 'tcp',
+							FromPort: AWS_PROXY_HEALTH_PORT,
+							ToPort: AWS_PROXY_HEALTH_PORT,
+							SourceSecurityGroupId: balancer.securityGroupId,
+							Description: "the balancer's health checks",
+						},
+					],
+					// The proxy dials its applications in the VPC (each admits this group on its port), and IAM, the image
+					// registry and the log service over HTTPS. The VPC's resolver answers outside any security group's rules.
+					SecurityGroupEgress: [
+						{ IpProtocol: 'tcp', FromPort: AWS_APPLICATION_PORT, ToPort: AWS_APPLICATION_PORT, CidrIp: balancer.vpcCidr, Description: 'the applications' },
+						{ IpProtocol: 'tcp', FromPort: 443, ToPort: 443, CidrIp: '0.0.0.0/0', Description: 'HTTPS: IAM, the image registry, logs' },
+					],
+					Tags: tags,
+				},
+			},
+			// The balancer's target group of this namespace's proxy: its tasks by address on the public port, healthy when the
+			// health listener answers. The installation's listener routes each member's host here (its rules come with the
+			// certificates). Named by CloudFormation: a target group's name holds at most 32 characters.
+			ProxyTargetGroup: {
+				Type: 'AWS::ElasticLoadBalancingV2::TargetGroup',
+				Properties: {
+					TargetType: 'ip',
+					Protocol: 'HTTP',
+					Port: AWS_PROXY_PORT,
+					VpcId: network.vpcId,
+					HealthCheckProtocol: 'HTTP',
+					HealthCheckPort: String(AWS_PROXY_HEALTH_PORT),
+					HealthCheckPath: AWS_PROXY_HEALTH_PATH,
+					Matcher: { HttpCode: '200' },
+					// A task being replaced finishes its requests for this long; the default is five minutes.
+					TargetGroupAttributes: [{ Key: 'deregistration_delay.timeout_seconds', Value: '30' }],
 					Tags: tags,
 				},
 			},
@@ -278,6 +326,8 @@ export function awsNamespaceStack(
 		Outputs: {
 			[PROXY_SECURITY_GROUP_OUTPUT]: { Value: { 'Fn::GetAtt': ['ProxySecurityGroup', 'GroupId'] } },
 			[SERVICE_CONNECT_OUTPUT]: { Value: { 'Fn::GetAtt': ['ServiceConnect', 'Arn'] } },
+			// A target group's `Ref` is its ARN.
+			[PROXY_TARGET_GROUP_OUTPUT]: { Value: { Ref: 'ProxyTargetGroup' } },
 		},
 	}
 	return { stackName: resources.stackName, template, tags: { 'fabrika:namespace': namespace.id, 'fabrika:env': namespace.env } }
@@ -287,10 +337,46 @@ export function awsNamespaceStack(
 export function namespaceOutputsOf(name: string, outputs: Readonly<Record<string, string>>): AwsNamespaceOutputs {
 	const proxySecurityGroupId = outputs[PROXY_SECURITY_GROUP_OUTPUT] ?? ''
 	const serviceConnectNamespaceArn = outputs[SERVICE_CONNECT_OUTPUT] ?? ''
-	if (!SECURITY_GROUP_ID.test(proxySecurityGroupId) || !SERVICE_CONNECT_ARN.test(serviceConnectNamespaceArn)) {
-		throw new Error(`aws: the stack ${name} names no proxy security group or Service Connect namespace of the form AWS gives one`)
+	const proxyTargetGroupArn = outputs[PROXY_TARGET_GROUP_OUTPUT] ?? ''
+	if (
+		!SECURITY_GROUP_ID.test(proxySecurityGroupId) || !SERVICE_CONNECT_ARN.test(serviceConnectNamespaceArn)
+		|| !TARGET_GROUP_ARN.test(proxyTargetGroupArn)
+	) {
+		throw new Error(`aws: the stack ${name} names no proxy security group, Service Connect namespace or target group of the form AWS gives one`)
 	}
-	return { proxySecurityGroupId, serviceConnectNamespaceArn }
+	return { proxySecurityGroupId, serviceConnectNamespaceArn, proxyTargetGroupArn }
+}
+
+/**
+ * The installation's balancer as a namespace's stack needs it: its security group, which each proxy's group admits on
+ * the proxy's public and health ports, and the VPC's IPv4 range, which the proxy's egress to its applications is
+ * scoped to. Control's configuration, never a registrant's.
+ */
+export interface AwsInstallationBalancer {
+	readonly securityGroupId: string
+	readonly vpcCidr: string
+}
+
+/** An IPv4 CIDR block of a VPC's size (a /16 to a /28). */
+const VPC_CIDR = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:1[6-9]|2[0-8])$/
+
+/** Whether `cidr` (of the `VPC_CIDR` form) names its network address: no bit is set past its prefix, as a VPC's block. */
+function isNetworkAddress(cidr: string): boolean {
+	const [address = '', prefix = ''] = cidr.split('/')
+	const value = address.split('.').reduce((sum, octet) => sum * 256 + Number(octet), 0)
+	return value % 2 ** (32 - Number(prefix)) === 0
+}
+
+/**
+ * `balancer` as given, or an error naming the field of another form (never a value). The range is the VPC's primary
+ * block as AWS names it; an application in a subnet of a secondary block is not covered by the proxy's egress.
+ */
+export function checkInstallationBalancer(balancer: AwsInstallationBalancer): AwsInstallationBalancer {
+	if (!SECURITY_GROUP_ID.test(balancer.securityGroupId)) throw new Error("aws: the installation's balancer names a security group id of another form")
+	if (!VPC_CIDR.test(balancer.vpcCidr) || !isNetworkAddress(balancer.vpcCidr)) {
+		throw new Error("aws: the installation's VPC range is not an IPv4 block of a VPC's size named by its network address")
+	}
+	return balancer
 }
 
 /** The calls the namespace lifecycle makes. */
@@ -313,6 +399,7 @@ export interface AwsNamespaceOptions {
 	/** The installation's coordinates and network: Control's configuration, which every namespace is checked against. */
 	readonly installation: AwsAppTarget
 	readonly network: AwsInstallationNetwork
+	readonly balancer: AwsInstallationBalancer
 	/** The installation's proxy source: a planned namespace's pin, and the only repository any pin may name. */
 	readonly proxySource: AwsProxySource
 	readonly clients: AwsNamespaceClients
@@ -401,7 +488,7 @@ export function namespaceFailure(error: unknown): ProviderNamespaceError {
 
 /** The namespace capabilities over this installation's account. */
 export function awsNamespaceCapabilities(options: AwsNamespaceOptions): ProviderNamespaceCapabilities {
-	const { installation, network, clients, proxySource } = options
+	const { installation, network, balancer, clients, proxySource } = options
 
 	const present = (namespace: ProviderDeploymentNamespace): ProviderNamespacePresentation => {
 		const resources = awsNamespaceResources(namespace.id, namespace.env)
@@ -439,7 +526,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 		try {
 			await ensureStack({
 				cloudFormation: clients.cloudFormation,
-				stack: awsNamespaceStack(input.namespace, installation, network),
+				stack: awsNamespaceStack(input.namespace, installation, network, balancer),
 				signal: input.signal,
 				sleep: options.sleep,
 				...(options.now === undefined ? {} : { now: options.now }),

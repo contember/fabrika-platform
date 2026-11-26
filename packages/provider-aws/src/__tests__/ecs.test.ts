@@ -195,6 +195,34 @@ describe('ecsClient', () => {
 		)
 	})
 
+	test('a client with a balancer target registers its tasks in the target group on create and on every update; one of another form is refused unsent', async () => {
+		const targetGroupArn = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/fabri-Proxy-1A2B3C4D/0123456789abcdef'
+		const client = { namespaceArn: connect.namespaceArn, balancer: { targetGroupArn, container: 'proxy', port: 8080 } }
+		const balanced = { loadBalancers: [{ targetGroupArn, containerName: 'proxy', containerPort: 8080 }], healthCheckGracePeriodSeconds: 60 }
+		const created = fakeAws(ECS, { CreateService: () => ({ service }) })
+		await ecsClient(created.options).createService({ ...create, serviceConnect: client })
+		expect(created.calls[0]?.body).toMatchObject(balanced)
+		const updated = fakeAws(ECS, { UpdateService: () => ({ service }) })
+		await ecsClient(updated.options).updateService(address, TASK_DEFINITION, serviceNetwork, client)
+		expect(updated.calls[0]?.body).toMatchObject(balanced)
+		// A service with no balancer target is sent none, so an update never drops one set out of band.
+		await ecsClient(updated.options).updateService(address, TASK_DEFINITION, serviceNetwork, { namespaceArn: connect.namespaceArn })
+		expect(updated.calls[1]?.body).not.toHaveProperty('loadBalancers')
+
+		const refused = fakeAws(ECS, {})
+		for (
+			const [balancer, field] of [
+				[{ targetGroupArn: 'arn:aws:s3:::bucket', container: 'proxy', port: 8080 }, 'the target group'],
+				[{ targetGroupArn, container: 'a proxy', port: 8080 }, 'the balanced container'],
+				[{ targetGroupArn, container: 'proxy', port: 0 }, 'the balanced port'],
+			] satisfies [{ targetGroupArn: string; container: string; port: number }, string][]
+		) {
+			await expect(ecsClient(refused.options).createService({ ...create, serviceConnect: { namespaceArn: connect.namespaceArn, balancer } })).rejects
+				.toThrow(field)
+		}
+		expect(refused.calls).toEqual([])
+	})
+
 	test('updates the service to the revision in the network with the circuit breaker on and ECS Exec off, and reads the service it answers', async () => {
 		const { options, calls } = fakeAws(ECS, { UpdateService: () => ({ service }) })
 		expect(await ecsClient(options).updateService(address, TASK_DEFINITION, serviceNetwork, connect)).toEqual(read)

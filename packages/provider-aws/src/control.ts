@@ -55,7 +55,14 @@ import { AWS_PROVIDER, type AwsAppArtifact, awsAppArtifactCodec, type AwsAppTarg
 import { awsDeploy, type AwsDeployClients, awsSourceUrlParameter } from './deploy'
 import { AWS_APPLICATION_PORT } from './ecs-task'
 import { awsEnvironmentStack, type AwsInstallationNetwork, checkInstallationNetwork, ensureEnvironmentStack } from './environment-stack'
-import { awsNamespaceCapabilities, type AwsProxySource, checkNamespaceTarget, readNamespaceOutputs } from './namespace'
+import {
+	type AwsInstallationBalancer,
+	awsNamespaceCapabilities,
+	type AwsProxySource,
+	checkInstallationBalancer,
+	checkNamespaceTarget,
+	readNamespaceOutputs,
+} from './namespace'
 import { withAwsProxyRepublish } from './proxy-republish'
 import type { AwsProxyIam } from './proxy-service'
 import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './resources'
@@ -143,6 +150,11 @@ export interface AwsControlProviderOptions {
 	 * Control's own configuration too, read by every deploy and stored by no environment.
 	 */
 	readonly network: AwsInstallationNetwork
+	/**
+	 * The installation's balancer: its security group, which each namespace proxy admits, and the VPC's range, which a
+	 * proxy's egress to its applications is scoped to. Control's configuration, from the installation's stack.
+	 */
+	readonly balancer: AwsInstallationBalancer
 	/**
 	 * The installation's proxy source: its public platform repository and the commit of its release. A namespace being
 	 * planned is pinned to it, and no namespace's pin may name another repository (ADR-0045).
@@ -329,6 +341,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 	const installation = awsAppTargetCodec.decode(installationPayload)
 	const installationTarget = { provider: AWS_PROVIDER, version: awsAppTargetCodec.version, payload: installationPayload }
 	const network = checkInstallationNetwork(options.network)
+	const balancer = checkInstallationBalancer(options.balancer)
 	const proxySource = checkProxySource(options.proxySource)
 	const proxyIam = checkProxyIam(options.proxyIam)
 	const targetOf = (environment: ProviderEnvironment): AwsAppTarget => {
@@ -410,7 +423,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 		id: AWS_PROVIDER,
 		// Every environment is placed in a namespace: its stack holds the proxy's group, which alone reaches an application.
 		namespaces: withAwsProxyRepublish(
-			awsNamespaceCapabilities({ installation, network, proxySource, clients: clientsOf(installation), sleep: options.sleep ?? pause }),
+			awsNamespaceCapabilities({ installation, network, balancer, proxySource, clients: clientsOf(installation), sleep: options.sleep ?? pause }),
 			{
 				installation,
 				proxySource,
