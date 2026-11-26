@@ -57,6 +57,7 @@ describe("the platform's images", () => {
 				region: 'eu-central-1',
 				appsListenerArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210',
 				vpcId: 'vpc-0123456789abcdef0',
+				taskSubnetIds: ['subnet-0123456789abcdef0'],
 				installationHosts: ['iam.example.com'],
 			}).flatMap((managed) => managed.statements.filter((statement) => JSON.stringify(statement).includes('"Allow"'))),
 		)

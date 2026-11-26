@@ -5,7 +5,8 @@
 // - **The services' image** (`packages/provider-aws/platform.Dockerfile`): IAM, Control with the console, Operations,
 //   each started by its task definition's own command. Tagged by the commit.
 // - **The platform proxy's image** (`packages/proxy/Dockerfile`): the commit with the platform's proxy manifest beside
-//   it, trusting forwarding headers from the balancers' subnets alone, as a namespace proxy does. Tagged by the commit
+//   it, trusting forwarding headers from the platform VPC's balancer subnets alone, as a namespace proxy trusts the
+//   applications' VPC's. Tagged by the commit
 //   and the manifest's digest, so new hosts build a new image and an old one is never overwritten.
 //
 // The source is the public repository fetched by the commit's full id inside the build, and checked to be that commit
@@ -186,7 +187,7 @@ export type AwsPlatformImage =
 		readonly kind: 'proxy'
 		/** The SHA-256 of the manifest object, in hex: part of the image's tag. */
 		readonly manifestSha256: string
-		/** The balancers' subnets, sorted and comma-joined (`awsTrustedProxies`). */
+		/** The platform VPC's balancer subnets, sorted and comma-joined (`awsTrustedProxies`). */
 		readonly trustedProxies: string
 	}
 
