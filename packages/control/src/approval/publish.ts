@@ -443,7 +443,7 @@ function assertRelationGrants(candidate: AccessSnapshot, log: (line: string) => 
 }
 
 /** The stored snapshot of the environment's last succeeded run that stored one, as `readableSnapshot` reads it. */
-async function runningSnapshot(runs: ControlRepositories['runs'], run: RunRow): Promise<AccessSnapshot | null> {
+export async function runningSnapshot(runs: ControlRepositories['runs'], run: RunRow): Promise<AccessSnapshot | null> {
 	const running = await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env })
 	return running === null || running.snapshot_json === null ? null : readableSnapshot(await runs.document(running.snapshot_json))
 }
