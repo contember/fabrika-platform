@@ -205,7 +205,18 @@ describe('republishAwsProxy', () => {
 			wait: 'active',
 		})
 		expect(result.settled).toBe(true)
-		expect(fake.calls).toEqual(['upload', 'startBuild', 'getBuild', 'getBuild', 'getBuild', 'findImage', 'registerTaskDefinition', 'createService'])
+		// The build's own URL parameter goes once it ended, before the service is set.
+		expect(fake.calls.map((call) => call.replace(/builds\/[0-9a-f-]{36}\//, 'builds/<token>/'))).toEqual([
+			'upload',
+			'startBuild',
+			'getBuild',
+			'getBuild',
+			'getBuild',
+			'findImage',
+			'deleteSecret /fabrika/namespaces/shared/prod/builds/<token>/source-url',
+			'registerTaskDefinition',
+			'createService',
+		])
 		expect(fake.sleeps).toBe(2)
 		expect(decoded(result.namespace)).toMatchObject({ proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyServiceUpdated: true })
 		expect(decoded(result.namespace).proxyBuildToken).toBeUndefined()
@@ -351,7 +362,15 @@ describe('withAwsProxyRepublish', () => {
 			proxyServiceUpdated: true,
 		})
 		const reconciled = await withAwsProxyRepublish(base([]), fake.context).reconcile(mutation(older, fake))
-		expect(fake.calls).toEqual(['upload', 'startBuild', 'getBuild', 'findImage', 'registerTaskDefinition', 'createService'])
+		expect(fake.calls.map((call) => call.replace(/builds\/[0-9a-f-]{36}\//, 'builds/<token>/'))).toEqual([
+			'upload',
+			'startBuild',
+			'getBuild',
+			'findImage',
+			'deleteSecret /fabrika/namespaces/shared/prod/builds/<token>/source-url',
+			'registerTaskDefinition',
+			'createService',
+		])
 		expect(decoded(reconciled)).toMatchObject({ proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyServiceUpdated: true })
 
 		// The last member's removal converges too: a recorded image and no member builds the proxy of none.
