@@ -158,17 +158,21 @@ describe('the deployer', () => {
 		}
 		let outputs: Record<string, string> = { RoleArn: awsDeployerRoleArn(A) }
 		let status: StackStatus | null = null
+		let body = ''
 		const cloudFormation = {
 			findStack: async () => (status === null ? null : { stackId: 'stack-1', status }),
 			describeStack: async () => ({ stackId: 'stack-1', status: status ?? 'CREATE_COMPLETE', outputs }),
-			getTemplate: async () => '',
-			createStack: async ({ name }: { name: string }) => {
+			getTemplate: async () => body,
+			createStack: async ({ name, templateBody }: { name: string; templateBody: string }) => {
 				calls.push(`create ${name}`)
 				status = 'CREATE_COMPLETE'
+				body = templateBody
 				return 'stack-1'
 			},
-			updateStack: async ({ name }: { name: string }) => {
+			updateStack: async ({ name, templateBody }: { name: string; templateBody: string }) => {
 				calls.push(`update ${name}`)
+				status = 'UPDATE_COMPLETE'
+				body = templateBody
 				return 'stack-1'
 			},
 		}
@@ -184,6 +188,9 @@ describe('the deployer', () => {
 		expect(await applyAwsDeployer(run)).toBe(awsDeployerRoleArn(A))
 		expect(calls).toEqual([`provider ${A}`, `create ${AWS_DEPLOYER_STACK}`])
 		expect(lines).toContain(`aws: the deployer role ${awsDeployerRoleArn(A)} trusts repo:acme/fabrika-aws-production:environment:production alone`)
+		// Run again: the template it holds is the one rendered, so nothing is updated.
+		expect(await applyAwsDeployer(run)).toBe(awsDeployerRoleArn(A))
+		expect(calls).toEqual([`provider ${A}`, `create ${AWS_DEPLOYER_STACK}`, `provider ${A}`])
 		// A stack answering another role is never handed to a workflow.
 		outputs = { RoleArn: `arn:aws:iam::${A}:role/other` }
 		await expect(applyAwsDeployer(run)).rejects.toThrow(`answers arn:aws:iam::${A}:role/other`)
