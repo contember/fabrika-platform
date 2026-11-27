@@ -1,4 +1,5 @@
 import { createPage, Link } from '@buzola/router'
+import { ApprovalPlansSection } from '../../components/ApprovalPlansSection'
 import { GrantRequests } from '../../components/GrantRequests'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
@@ -9,23 +10,25 @@ import { quietIamClient } from '../../lib/iam'
 import { consoleSession } from '../../lib/session'
 import { requestCategoryLabel, requestEnvLabel, RequestSummary } from './requests/detail'
 
-// Approvals: deploy runs whose access change waits for a person on a protected environment (ADR-0050), requests an
-// agent or a key made for a change it cannot make itself, and console grants that wait for another administrator
-// (ADR-0083). Only runs and requests at coordinates where the viewer holds `access.approve` are listed, and only grant
-// requests at applications the viewer administers in IAM, or the viewer's own; a viewer IAM does not answer sees no
-// grant section.
+// Approvals: deploy runs whose access change waits for a person on a protected environment (ADR-0050), plans approved
+// ahead of a deploy (ADR-0050 §5), requests an agent or a key made for a change it cannot make itself, and console
+// grants that wait for another administrator (ADR-0083). Only runs, plans and requests at coordinates where the viewer
+// holds `access.approve` are listed, and only grant requests at applications the viewer administers in IAM, or the
+// viewer's own; a viewer IAM does not answer sees no grant section.
 
 export default createPage()
 	.loader(async () => {
-		const [approvals, requests, grantRequests, session] = await Promise.all([
+		const [approvals, requests, plans, grantRequests, session] = await Promise.all([
 			api.approvals.list().then((list) => list.items),
 			api.approvals.requests.list(),
+			api.approvals.plans.list().then((list) => list.items),
 			quietIamClient(fetch).grantRequests.list({}).then((list) => list.items, () => null),
 			consoleSession(),
 		])
 		return {
 			approvals,
 			requests: requests.items,
+			plans,
 			requestsIamUnreachable: requests.iamUnreachable === true,
 			grantRequests,
 			me: session.principal?.id ?? null,
@@ -37,8 +40,8 @@ export default createPage()
 			<div className="page-head">
 				<h1>Approvals</h1>
 				<p className="hint">
-					Deploys to a protected environment with a change of a kind it approves, and console grants that wait for another administrator. Each waits until
-					a person reads the change and decides.
+					Deploys to a protected environment with a change of a kind it approves, plans of such a change approved ahead of its deploy, and console grants
+					that wait for another administrator. Each waits until a person reads the change and decides.
 				</p>
 			</div>
 
@@ -84,6 +87,8 @@ export default createPage()
 					</tr>
 				))}
 			</Table>
+
+			{data.plans.length > 0 && <ApprovalPlansSection plans={data.plans} />}
 
 			{data.requests.length > 0 && <PendingRequests requests={data.requests} />}
 			{data.requestsIamUnreachable && (

@@ -15,6 +15,7 @@ import {
 } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { api, type AppEnvDto, type ApprovalDto } from '../../lib/api'
+import { planBindingLabel, planTtl } from '../../lib/approval-plans'
 import { mayDo } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import type { DecisionFailure, PasskeyCheck, StartedDecision } from '../../lib/decision-step-up'
@@ -50,6 +51,8 @@ import { Icon } from '../Icon'
 import { PasskeyCheckPrompt } from '../PasskeyCheckPrompt'
 import { Chip, Status } from '../Status'
 import { Table } from '../Table'
+import { PlanSettings } from './PlanSettings'
+import { PresetValue } from './PresetValue'
 
 /**
  * Whether a change waits for a person on each environment (ADR-0050 §4, ADR-0083): its preset and only the rules that
@@ -271,6 +274,14 @@ function AllRules({ choice }: { choice: PolicyChoice }) {
 				<dt>Hours a request waits for a decision</dt>
 				<dd>{choice.settings.requestTtlHours} h</dd>
 			</div>
+			<div>
+				<dt>What an approved plan binds to</dt>
+				<dd>{planBindingLabel(choice.settings.planBinding)}</dd>
+			</div>
+			<div>
+				<dt>Days an approved plan covers a deploy</dt>
+				<dd>{choice.settings.planTtlDays} d</dd>
+			</div>
 		</dl>
 	)
 }
@@ -287,6 +298,7 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 	const [chosen, setChosen] = useState<ApprovalPolicy>(env.approvalPolicy)
 	const [settings, setSettings] = useState<ApprovalSettings>(env.approvalSettings)
 	const [ttlText, setTtlText] = useState(String(env.approvalSettings.requestTtlHours))
+	const [daysText, setDaysText] = useState(String(env.approvalSettings.planTtlDays))
 	const [base, setBase] = useState<PresetName>(() => nearestPreset(saved).preset.name)
 	const [deciding, setDeciding] = useState<PolicyCategory | null>(null)
 	const [busy, setBusy] = useState(false)
@@ -296,6 +308,7 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 	// The check is bound to the choice it was issued for, so the choice stays fixed while it waits.
 	const locked = busy || check !== null
 	const ttl = requestTtl(ttlText)
+	const days = planTtl(daysText)
 	const after: PolicyChoice = { policy: chosen, settings }
 	const changes = policyDifferences(after, saved).length
 	const preset = PRESETS.find((option) => option.name === base) ?? PRESETS[0]
@@ -318,11 +331,18 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 		if (hours !== null) setSettings({ ...settings, requestTtlHours: hours })
 	}
 
+	function chooseDays(text: string) {
+		setDaysText(text)
+		const parsed = planTtl(text)
+		if (parsed !== null) setSettings({ ...settings, planTtlDays: parsed })
+	}
+
 	function startFrom(option: (typeof PRESETS)[number]) {
 		setBase(option.name)
 		setChosen(option.policy)
 		setSettings(option.settings)
 		setTtlText(String(option.settings.requestTtlHours))
+		setDaysText(String(option.settings.planTtlDays))
 	}
 
 	function discard() {
@@ -330,6 +350,7 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 		setChosen(saved.policy)
 		setSettings(saved.settings)
 		setTtlText(String(saved.settings.requestTtlHours))
+		setDaysText(String(saved.settings.planTtlDays))
 		setError(null)
 	}
 
@@ -418,6 +439,15 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 				onSettings={setSettings}
 				onTtl={chooseTtl}
 			/>
+			<PlanSettings
+				settings={settings}
+				daysText={daysText}
+				daysValid={days !== null}
+				preset={preset}
+				locked={locked}
+				onSettings={setSettings}
+				onDays={chooseDays}
+			/>
 			{/* The passkey check stays beside Save, in view while the rules scroll. */}
 			<div className="save-dock">
 				{check !== null && (
@@ -445,7 +475,7 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 					<button
 						type="button"
 						className={check === null ? 'primary' : undefined}
-						disabled={changes === 0 || ttl === null || locked}
+						disabled={changes === 0 || ttl === null || days === null || locked}
 						onClick={() => void apply()}
 					>
 						Save approvals
@@ -762,27 +792,6 @@ function RequestSettings(
 				</div>
 			</div>
 		</details>
-	)
-}
-
-/** A request setting that differs from the preset: what the preset says, and a way back to it. */
-function PresetValue({ preset, text, label, locked, onReset }: {
-	preset: (typeof PRESETS)[number]
-	text: string
-	label: string
-	locked: boolean
-	onReset: () => void
-}) {
-	return (
-		<div className="small">
-			<span className="muted">
-				{preset.label}: {text}
-			</span>{' '}
-			<button type="button" className="ghost small" disabled={locked} onClick={onReset}>
-				Reset to {preset.label}
-				<span className="sr-only">{`: ${label}`}</span>
-			</button>
-		</div>
 	)
 }
 
