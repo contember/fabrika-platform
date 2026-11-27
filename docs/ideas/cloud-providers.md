@@ -134,7 +134,8 @@ topology, the console schema and the upgrade path are still Zerops' (`packages/p
 `provider-zerops/src/installation/`). A cloud whose infrastructure is a template needs the installation as data first:
 the four services with image, port, health path, environment (literal or secret reference) and order; the databases and
 buckets; the public hosts. Each provider renders that model into CloudFormation, Bicep or Terraform, and `platform deploy`
-and `upgrade` apply it (ADR-0027).
+and `upgrade` apply it (ADR-0027). Decided in [ADR-0092](../decisions/0092-the-installation-is-a-model-each-provider-renders.md),
+including how infrastructure an operator manages in their own Terraform hands fabrika its coordinates.
 
 ### N10. The console's registration form (S, all three)
 

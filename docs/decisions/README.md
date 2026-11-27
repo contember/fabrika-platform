@@ -112,3 +112,4 @@ a commit message suffices.
 | [0088](0088-a-push-says-only-that-something-happened.md)                                | A push says only that something happened; the text is read under the session (proposed)                   |
 | [0089](0089-oauth-clients-are-registered-in-iam-at-runtime.md)                          | OAuth clients and external applications are registered in IAM at runtime                                  |
 | [0090](0090-a-device-grant-reaches-an-application-as-the-person.md)                     | A device grant reaches an application as the person, narrowed to one scope value                          |
+| [0092](0092-the-installation-is-a-model-each-provider-renders.md)                       | The platform installation is a model each provider renders and applies (proposed)                         |
