@@ -1315,7 +1315,7 @@ function limitOf(limit: unknown): number {
 }
 
 function rowState(table: string, conditions: readonly (Compare | Contains)[], order: readonly OrderColumn[], limit: number | undefined): SelectState {
-	return { origin: freeze({}), table, columns: undefined, conditions, orderBy: order, limit, offset: undefined, joins: [] }
+	return { origin: freeze({}), table, columns: undefined, conditions, orderBy: order, limit, offset: undefined, joins: [], matchesNone: false }
 }
 
 /** The list a cursor belongs to, as its signature covers it: its table and its whole order, the tiebreak included. */

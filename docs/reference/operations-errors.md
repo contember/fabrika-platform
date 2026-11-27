@@ -99,7 +99,7 @@ Exit 3 means the key is missing, expired, revoked, or lacks `operations.read`; m
 
 Every producer writes the durable notification outbox. It never sends inline. The outbox dedup key prevents duplicate rows when ingest or maintenance retries. Each maintenance pass claims up to 50 rows: health and security alerts (`failed_check`, `recovery`, `unhealthy_telemetry`, `security`) first, then the rest oldest first, so such an alert is claimed ahead of every older row in the next pass. Delivery claims use leases, make at most six attempts, and pass the stable dedup key as the webhook `Idempotency-Key`. Webhooks are HTTPS-only, time-bounded, and reject redirects.
 
-Alert settings expose only redacted channel destinations. Operators can inspect source-scoped delivery state and individual attempt timestamps/error codes; payloads and full targets never enter the response.
+Alert settings expose only redacted channel destinations. Operators can inspect source-scoped delivery state and individual attempt timestamps/error codes; payloads and full targets never enter the response. Every notification stays in that history and names its channel, so a channel that has one cannot be deleted: the delete answers 409 and the operator disables the channel instead, which stops new notifications.
 
 ### Security alerts on the installation source
 

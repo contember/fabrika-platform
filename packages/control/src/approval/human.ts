@@ -1,4 +1,4 @@
-// The human rule of ADR-0050 §4–5, shared by approving, changing `protected`, deleting a protected environment,
+// The human rule of ADR-0050 §4–5, shared by approving, changing `protected`, deleting or resuming a protected environment,
 // deploying to one by hand and redirecting what it deploys. These checks are authorization; the proxy's session
 // admission keeps another site's page out (ADR-0022).
 
@@ -70,6 +70,33 @@ export function requireHumanForProtectedDelete(auth: AuthContext, admission: Con
 			fail(403, `environment \`${row.env}\` is protected; deleting it takes \`access.approve\``)
 		}
 	}
+}
+
+/**
+ * Resuming a protected environment puts back online what a person may have taken offline in an incident, so it takes a
+ * person in the console, as deleting one does, whatever its `data` mode; an approved request executes as its approver.
+ */
+export function requirePersonToResume(auth: AuthContext, admission: ConsoleAdmission | undefined, row: AppEnvRow): void {
+	if (row.protected !== 1 || isConsolePerson(auth, admission)) return
+	fail(403, `environment \`${row.env}\` is protected: only a person in the console resumes it; an agent, a builder key or a service key cannot`)
+}
+
+/**
+ * A data operation of a suspended protected environment's object could open it again behind the suspension's back, so
+ * only a person in the console starts one, but maintenance `closed`, which keeps it offline (`requirePersonToResume`).
+ */
+export function requirePersonWhileSuspended(
+	auth: AuthContext,
+	admission: ConsoleAdmission | undefined,
+	row: AppEnvRow,
+	keepsOffline: boolean,
+): void {
+	if (row.protected !== 1 || row.suspended_at === null || keepsOffline || isConsolePerson(auth, admission)) return
+	fail(
+		403,
+		`environment \`${row.env}\` is protected and suspended: only a person in the console starts a data operation that may bring it back `
+			+ 'online, or resumes it; an agent, a builder key or a service key cannot',
+	)
 }
 
 /**

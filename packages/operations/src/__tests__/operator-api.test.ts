@@ -483,6 +483,46 @@ describe('Operations operator use cases', () => {
 		await expect(operations(input).alerts('source-a')).rejects.toMatchObject({ httpStatus: 404 })
 	})
 
+	test('a channel with notifications is refused with 409 and kept; one without is deleted; an unknown one is 404', async () => {
+		const audits: DomainEvent[] = []
+		const input = options(auth({ apps: ['app-a'], audits }))
+		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
+		for (const id of ['channel-notified', 'channel-quiet']) {
+			await input.repositories.alerts.upsertChannel({
+				id,
+				sourceId: 'source-a',
+				scope: 'new_issue',
+				type: 'webhook',
+				target: 'https://hooks.example.test/hook',
+				enabled: true,
+			})
+		}
+		expect(
+			await input.repositories.alerts.enqueueNotification({
+				dedupKey: 'new:source-a:fingerprint-a',
+				sourceId: 'source-a',
+				channelId: 'channel-notified',
+				kind: 'new_issue',
+				payload: { fingerprint: 'fingerprint-a' },
+			}),
+		).toBe(true)
+
+		await expect(operations(input).deleteAlertChannel('source-a', 'channel-notified')).rejects.toMatchObject({
+			httpStatus: 409,
+			type: 'conflict',
+			message: expect.stringContaining('disable it instead'),
+		})
+		expect((await input.repositories.alerts.listChannels('source-a')).map((channel) => channel.id)).toEqual(['channel-notified', 'channel-quiet'])
+		expect(await input.repositories.operator.listNotificationDeliveries('source-a')).toMatchObject([{ channel_id: 'channel-notified' }])
+		expect(audits).toEqual([])
+
+		expect(await operations(input).deleteAlertChannel('source-a', 'channel-quiet')).toBeNull()
+		expect((await input.repositories.alerts.listChannels('source-a')).map((channel) => channel.id)).toEqual(['channel-notified'])
+		expect(audits.map((event) => [event.action, event.resourceId])).toEqual([['operations.alert_channel.delete', 'channel-quiet']])
+
+		await expect(operations(input).deleteAlertChannel('source-a', 'channel-quiet')).rejects.toMatchObject({ httpStatus: 404 })
+	})
+
 	test('rejects unsafe webhook targets and preserves a valid HTTPS path and query', async () => {
 		const input = options(auth({ apps: ['app-a'] }))
 		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)

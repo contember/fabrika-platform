@@ -440,7 +440,9 @@ export abstract class HealthRepository {
 				.prepare(`INSERT INTO notification_outbox
 					(id, dedup_key, source_id, channel_id, kind, payload, created_at, attempts, max_attempts, visible_at,
 						claimed_until, claim_token, delivered_at, abandoned_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, 0, 6, ?, NULL, NULL, NULL, NULL)
+					SELECT ?, ?, ?, ?, ?, ?, ?, 0, 6, ?, NULL, NULL, NULL, NULL
+					FROM notification_channels
+					WHERE id = ? AND source_id = ? AND enabled = 1
 					ON CONFLICT (dedup_key) DO NOTHING`)
 				.bind(
 					uuidv7(this.now()),
@@ -459,6 +461,8 @@ export abstract class HealthRepository {
 					}),
 					this.now(),
 					this.now(),
+					channel.id,
+					transition.sourceId,
 				)
 				.run()
 			enqueued += result.meta.changes
