@@ -199,7 +199,8 @@ describe('checkProviderVariables refuses what the model refuses of its own', () 
 		)
 		expect(() => checkProviderVariables(model, 'iam', [{ kind: 'data', prefix: 'FABRIKA_X', bucket: 'runLogs' }])).toThrow('which it does not own')
 		expect(() => checkProviderVariables(model, 'iam', [{ kind: 'derived', name: 'fabrika_x', sensitive: false }])).toThrow("not a variable's name")
-		expect(() => checkProviderVariables(model, 'iam', [{ kind: 'bring-up', family: 'email', when: 'email' }])).toThrow('no family')
+		// On a service that reads no mail itself, so the family is refused as one, not as a second `email`.
+		expect(() => checkProviderVariables(model, 'operations', [{ kind: 'bring-up', family: 'email', when: 'email' }])).toThrow('no family')
 	})
 
 	test('a generated credential the provider makes for itself, with no installation secret', () => {
