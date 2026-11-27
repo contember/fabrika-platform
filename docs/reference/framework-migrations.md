@@ -158,7 +158,14 @@ prerelease published before `0.9.0-dev.5` (`dev.0`–`dev.4`, `cloudflare.1`–`
 gets no daily backup, migration phase or side restore: its object answers only `inspect` on the ops channel. From `0.9.0-dev.49` the application Worker also binds its version metadata as `FABRIKA_VERSION`, and a deploy that
 brings a pending migration runs without a read-only window or a backup: the object records a bookmark before it
 migrates, and Control recovers a failed migration with a rollback deploy of the last succeeded commit
-([ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md) §3). An earlier pin keeps the
+([ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md) §3). A migration that committed
+and whose version never booted is first rewound in place to that bookmark, with the environment in `inspect` until the
+rolled-back version serves ([ADR-0070](../decisions/0070-data-protection-of-an-application-environment-on-cloudflare.md)
+§9); one the object refuses to rewind gets the rollback deploy alone, or, with a `dataLoss` line, is closed for an
+operator, who opens it with a recovery and deploys a fix. A failed migration whose data holds nothing of it (rewound,
+rolled back, or never deployed) is left by a recovery that rolls back and opens (`fabrika env recover … rollback`, or
+the console's **Roll back and open**): a fresh deploy of the last succeeded commit, the same wait in `inspect`, then the
+open. An earlier pin keeps the
 read-only migration phase. An application that stays on 0.8 keeps its stateless Worker: Control
 names the release it read the application with, and the deployer gives that Worker no object, bucket, tick or proxy
 secret, and refuses its jobs, webhooks, public procedures, installation mail and token purposes as before.

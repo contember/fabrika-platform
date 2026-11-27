@@ -11,7 +11,13 @@ import {
 	parseOpsContentView,
 	parseOpsView,
 } from '@fabrika/auth-core'
-import { type DataBackupDto, type DataBackupScheduleDto, type DataOperationDto, startDataOperationInputSchema } from '@fabrika/control-contract'
+import {
+	DATA_OPERATION_RESOLUTIONS,
+	type DataBackupDto,
+	type DataBackupScheduleDto,
+	type DataOperationDto,
+	startDataOperationInputSchema,
+} from '@fabrika/control-contract'
 import { z } from 'zod'
 import { ApprovalPendingError, connectControl, type ControlClient, directWrite, withoutControlKey } from './control.js'
 
@@ -21,7 +27,7 @@ Usage:
   fabrika env inspect <app> <env> [--content] [--json]
   fabrika env maintenance <app> <env> <open|read-only|closed> [--wait] [--json]
   fabrika env operations <app> <env> [--json]
-  fabrika env recover <app> <env> <operationId> <resume|open> [--wait] [--json]
+  fabrika env recover <app> <env> <operationId> <resume|open|rollback> [--wait] [--json]
   fabrika env backups <app> <env> [--json]
   fabrika env backups schedule <app> <env> [on|off] [--wait] [--json]
   fabrika env restore <app> <env> --at=<time> [--wait] [--json]
@@ -39,8 +45,10 @@ and needs \`data.content.read\` granted globally.
 <id> <kind> <state> <step> <target mode> <generation> <error code> <created at>.
 
 \`recover\` fences an environment whose operation is stuck in \`closed\` at a fresh generation, then \`resume\`s that
-operation from its recorded step, or \`open\`s the environment. A failed operation can only be opened past. It needs
-\`data.manage\`.
+operation from its recorded step, or \`open\`s the environment. A failed operation can only be opened past, or, for a
+failed migration whose data holds nothing of it (\`rollbackAndOpen\` in \`--json\`), rolled back: \`rollback\` fences
+it in \`inspect\`, deploys the last succeeded commit again as a new run, waits until the failed version is gone and
+opens it. It needs \`data.manage\`.
 
 \`backups\` lists the environment's consistent backups, newest first, one row each:
 <id> <object> <state> <created at> <size bytes> <parts> <tables> <rehearsal> <rehearsal code> <error code> <expired>
@@ -94,7 +102,7 @@ const COMMAND_FORMS: Readonly<Record<string, string>> = {
 	inspect: '<app> <env> [--content] [--json]',
 	maintenance: '<app> <env> <open|read-only|closed> [--wait] [--json]',
 	operations: '<app> <env> [--json]',
-	recover: '<app> <env> <operationId> <resume|open> [--wait] [--json]',
+	recover: '<app> <env> <operationId> <resume|open|rollback> [--wait] [--json]',
 	backups: '<app> <env> [--json]',
 	'backups schedule': '<app> <env> [on|off] [--wait] [--json]',
 	restore: '<app> <env> --at=<time> [--wait] [--json]',
@@ -167,7 +175,7 @@ const dataOperationSchema: z.ZodType<DataOperationDto, z.ZodTypeDef, unknown> = 
 	updatedAt: z.number().int().nonnegative(),
 	finishedAt: z.number().int().nonnegative().nullable(),
 	recoversOperationId: z.string().uuid().nullable(),
-	resolution: z.enum(['resume', 'open']).nullable(),
+	resolution: z.enum(DATA_OPERATION_RESOLUTIONS).nullable(),
 	// Absent from a Control before the migration phase.
 	runId: z.string().uuid().nullable().default(null),
 	// Absent from a Control before the migrating deploy without a read-only window.
@@ -175,6 +183,11 @@ const dataOperationSchema: z.ZodType<DataOperationDto, z.ZodTypeDef, unknown> = 
 	migrationFailure: z.enum(OPS_MIGRATION_FAILURES).nullable().default(null),
 	revertRunId: z.string().uuid().nullable().default(null),
 	candidateRecovered: z.boolean().default(false),
+	// Absent from a Control before the in-place rewind.
+	rewound: z.boolean().default(false),
+	rewindRefusal: z.string().regex(ERROR_CODE).nullable().default(null),
+	// Absent from a Control before the roll back and open recovery.
+	rollbackAndOpen: z.boolean().default(false),
 })
 
 interface Target {
@@ -247,7 +260,6 @@ const parseSchedule = (value: unknown, target: Target): DataBackupScheduleDto =>
 }
 
 const MAINTENANCE_MODES = ['open', 'read-only', 'closed'] as const
-const RESOLUTIONS = ['resume', 'open'] as const
 const SCHEDULE_SWITCHES = ['on', 'off'] as const
 
 const oneOf = <T extends string>(value: string, allowed: readonly T[]): T | undefined => allowed.find((candidate) => candidate === value)
@@ -366,8 +378,8 @@ const runOperations = async (args: EnvArgs, env: Environment): Promise<void> => 
 
 const runRecover = async (args: EnvArgs, env: Environment): Promise<void> => {
 	const [appId = '', environment = '', operationId = '', requested = ''] = words('recover', args, 4)
-	const resolution = oneOf(requested, RESOLUTIONS)
-	if (resolution === undefined) throw new Error(`The resolution is resume or open, not "${requested}"`)
+	const resolution = oneOf(requested, DATA_OPERATION_RESOLUTIONS)
+	if (resolution === undefined) throw new Error(`The resolution is resume, open or rollback, not "${requested}"`)
 	const client = controlClient(args, env)
 	const result = await directWrite(client, args, () => client.data.recover({ appId, env: environment, operationId, resolution }))
 	if (result === null) return

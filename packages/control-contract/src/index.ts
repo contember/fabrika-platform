@@ -925,4 +925,10 @@ export type {
 	SetDataBackupScheduleInput,
 	StartDataOperationInput,
 } from './rpc.js'
-export { DATA_OPERATION_MAX_PAGE_SIZE, dataOperationListInputSchema, recoverDataOperationInputSchema, startDataOperationInputSchema } from './rpc.js'
+export {
+	DATA_OPERATION_MAX_PAGE_SIZE,
+	DATA_OPERATION_RESOLUTIONS,
+	dataOperationListInputSchema,
+	recoverDataOperationInputSchema,
+	startDataOperationInputSchema,
+} from './rpc.js'

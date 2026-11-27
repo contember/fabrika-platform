@@ -385,8 +385,14 @@ export type DataOperationStep =
 
 export type DataOperationState = 'running' | 'succeeded' | 'failed'
 
-/** What a recovery does after its closed fence: resume the interrupted operation, or open the object. */
-export type DataOperationResolution = 'resume' | 'open'
+/**
+ * What a recovery does after its fence: resume the interrupted operation, open the object, or roll back and open (a
+ * fresh rollback deploy of a failed bookmark migration whose object nothing migrated stays in, the wait after it in
+ * `inspect`, then the open).
+ */
+export const DATA_OPERATION_RESOLUTIONS = ['resume', 'open', 'rollback'] as const
+
+export type DataOperationResolution = (typeof DATA_OPERATION_RESOLUTIONS)[number]
 
 /**
  * One operation as `data.read` shows it: an allowlisted projection of Control's record, with identifiers, states,
@@ -412,7 +418,7 @@ export interface DataOperationDto {
 	readonly finishedAt: number | null
 	/** A recovery's interrupted operation, of the same environment; `null` for every other kind. */
 	readonly recoversOperationId: string | null
-	/** A recovery's choice after its closed fence; `null` for every other kind. */
+	/** A recovery's choice after its fence; `null` for every other kind. */
 	readonly resolution: DataOperationResolution | null
 	/** A `migrate` operation's deploy run; `null` for every other kind. */
 	readonly runId: string | null
@@ -427,6 +433,15 @@ export interface DataOperationDto {
 	readonly revertRunId: string | null
 	/** The failed version of a bookmark migration answered `ok` while its rollback deployed, so the operation closed. */
 	readonly candidateRecovered: boolean
+	/** A bookmark migration's committed, never-booted migration was rewound in place before the rollback (ADR-0070 §9). */
+	readonly rewound: boolean
+	/** Why the object refused that rewind, a refusal code; `null` when it was not refused or not asked for. */
+	readonly rewindRefusal: string | null
+	/**
+	 * A failed bookmark migration a recovery may roll back and open: rewound, never migrated, or with an outstanding
+	 * in-place `arm` the recovery settles first. `false` for every other operation.
+	 */
+	readonly rollbackAndOpen: boolean
 }
 
 export const DATA_OPERATION_MAX_PAGE_SIZE = 100
@@ -457,14 +472,15 @@ export const startDataOperationInputSchema = z.discriminatedUnion('kind', [
 export type StartDataOperationInput = z.infer<typeof startDataOperationInputSchema>
 
 /**
- * Recover an environment whose operation `operationId` is stuck: fence it with a fresh generation in `closed`, then
- * resume that operation from its recorded step, or open the object at a new generation.
+ * Recover an environment whose operation `operationId` is stuck: fence it with a fresh generation, then resume that
+ * operation from its recorded step, open the object at a new generation, or roll the failed bookmark migration back and
+ * open it.
  */
 export const recoverDataOperationInputSchema = z.object({
 	appId: nonEmpty,
 	env: nonEmpty,
 	operationId: nonEmpty,
-	resolution: z.enum(['resume', 'open']),
+	resolution: z.enum(DATA_OPERATION_RESOLUTIONS),
 }).strict()
 
 export type RecoverDataOperationInput = z.infer<typeof recoverDataOperationInputSchema>

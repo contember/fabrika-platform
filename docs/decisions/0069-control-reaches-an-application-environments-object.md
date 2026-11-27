@@ -289,17 +289,23 @@ deadline and does the same. The run's status is the migration's: it succeeds onl
   boots over the schema it knows.
 - **`committed`, never `booted`.** Control publishes the object `inspect` and rewinds it in place to the record's
   bookmark (ADR-0070 §9), so the old code meets exactly its own schema. It then redeploys the last succeeded run's
-  commit and opens the object at a new generation. The rewind is a step before the redeploy, and an operation never
+  commit, keeps the object `inspect` to the deadline counted from that deploy, since the failed version's instance
+  would migrate again on its next boot, and opens the object at a new generation. The rewind is a step before the redeploy, and an operation never
   returns to it once the redeploy has started. Control asks for it only within the operation whose `migrate` answered
   the record; the object's guards decide whether it may.
-- **A record it cannot rewind.** The object refuses the rewind (another version runs, or the record has no version),
-  or the rewind is not built. A `committed`, never-`booted` migration without a `dataLoss` line then gets the redeploy
+- **A record it cannot rewind.** The object refuses the rewind before anything is armed (another version runs, or the
+  record has no version), or the record names no version or bookmark, so Control does not ask. A `committed`, never-`booted` migration without a `dataLoss` line then gets the redeploy
   alone: the runner tolerates a ledger ahead of the code. With a `dataLoss` line, or when the redeployed commit does
   not answer `ok` by the deadline, Control publishes the object `closed`, and the run fails as `migration_failed` for
   an operator to fix forward. Nothing is rewound, so no write is lost.
 - **`committed` and `booted` before any recovery started.** There is nothing to recover: the run succeeded. A version
   that boots only once a rollback deploy started is the failed version recovering, which `check` closes for an operator
   (above). A migration found wrong later is undone by a side restore to the record's bookmark (ADR-0070 §9).
+
+An operation that stops before it opened the object, at a rewind left unconfirmed, a rollback deploy that failed or a
+rollback that did not answer, leaves it `inspect` or `closed` for an operator. Every such state has a way out through a
+recovery (below): roll back and open when the data holds nothing of the migration, otherwise open, after which a deploy
+fixes forward.
 
 **The read-only migration phase.** A candidate whose release serves the barrier but does not record the bookmark keeps
 the earlier phase: `read-only`, a consistent backup and its rehearsal, the operation's own deploy, `migrate` under that
@@ -318,7 +324,20 @@ that arrives later carries a lower generation and is refused.
 **Recovery.** An operator with `data.manage` starts a recovery operation for an environment whose operation is stuck.
 It takes a fresh lease, reads the record and the object's published state, publishes a fresh generation in `closed`,
 and then, as the operator chooses, resumes the interrupted operation from its recorded step or opens the object at a
-new generation.
+new generation. Only a running operation resumes; a failed one is opened past.
+
+**Roll back and open** is the third choice, and the one way out of a failed bookmark migration whose data holds
+nothing of it: the object is rewound, its migration rolled back in its own transaction or never wrote its record, or
+its run never deployed; and never once the failed version answered `ok` after all, since it then migrated. It recovers the migration under any recoveries that stopped on it, and only the environment's
+newest one. The recovery publishes `inspect` at its fresh generation instead of `closed`. An `arm` still outstanding is
+settled there first, as before any open (ADR-0070 §9); when `verify` finds the sentinel, the object still holds the
+migration, and the recovery fails for an `open` recovery instead. It then makes a fresh rollback deploy of the last
+succeeded run, never resuming one that failed, under the same deploy-request and approval exception as the
+operation's own rollback; keeps the object `inspect` to the deadline counted from that deploy's success; and opens it
+at a new generation. It never sends an `arm`. Its settled rollback lets a rewound object open, by any path, as the
+operation's own does. A committed migration that is not rewound, and a failed version that answered `ok` after all, have no such recovery:
+the object stays `closed` until an operator opens it with a recovery and deploys a fix, which the open environment then
+accepts.
 
 **The fault matrix.** What each fault must lead to:
 

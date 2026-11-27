@@ -14,7 +14,8 @@ export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery
  * first `reconcile`s the record with the object's published state, and `resume` hands back to the interrupted operation.
  * A restore also `list`s its clone, `import`s into it, `promote`s it, `point`s ordinary traffic at it, waits for it to
  * `serve`, `rewind`s the original and `check`s its schema; `revert` points traffic back at the original. A bookmark
- * migration's `revert` is its rollback deploy, `check` waits for its `ok`, and `restrict` publishes `closed`.
+ * migration `rewind`s a committed, never-booted migration in place, `revert` is its rollback deploy, `check` waits for
+ * its `ok`, and `restrict` publishes `closed`.
  */
 export type DataOperationStep =
 	| 'reconcile'
@@ -34,10 +35,24 @@ export type DataOperationStep =
 	| 'check'
 	| 'revert'
 
-export type DataOperationState = 'running' | 'succeeded' | 'failed'
+export const DATA_OPERATION_STATES = ['running', 'succeeded', 'failed'] as const
 
-/** What a recovery does after its closed fence: resume the interrupted operation, or open the object. */
-export type DataOperationResolution = 'resume' | 'open'
+export type DataOperationState = (typeof DATA_OPERATION_STATES)[number]
+
+/**
+ * What a recovery does after its fence: resume the interrupted operation, open the object, or roll back and open (a
+ * fresh rollback deploy of a failed bookmark migration, the wait after it, then the open). The column holds `resume` or
+ * `open`; a roll back and open is `open` with `recovery_rollback` = 1.
+ */
+export type DataOperationResolution = 'resume' | 'open' | 'rollback'
+
+/** What the `resolution` column holds: SQLite cannot widen its CHECK without rebuilding the table. */
+export type StoredResolution = Exclude<DataOperationResolution, 'rollback'>
+
+/** The outcomes of an in-place rewind (ADR-0070 §9). */
+export const REWIND_OUTCOMES = ['rewound', 'refused'] as const
+
+export type RewindOutcome = (typeof REWIND_OUTCOMES)[number]
 
 export interface DataOperationRow {
 	id: string
@@ -59,8 +74,8 @@ export interface DataOperationRow {
 	finished_at: number | null
 	/** A recovery's interrupted operation, of the same environment; `null` for every other kind. */
 	recovers_operation_id: string | null
-	/** A recovery's choice after its closed fence; `null` for every other kind. */
-	resolution: DataOperationResolution | null
+	/** A recovery's choice after its fence; `null` for every other kind. */
+	resolution: StoredResolution | null
 	/** The run a `migrate` operation deploys, of the same environment; `null` for every other kind. */
 	run_id: string | null
 	/** 1 for a `migrate` operation whose candidate records the migration bookmark: it restricts nothing (ADR-0069 §3). */
@@ -79,6 +94,26 @@ export interface DataOperationRow {
 	candidate_version: string | null
 	/** 1 when that version answered `ok` while the rollback deployed, so the operation closed for an operator. */
 	candidate_recovered: number
+	/** The migration record an in-place rewind names (ADR-0070 §9): the one the new version's `committed` 422 answered. */
+	rewind_record: string | null
+	/** `prepare`'s bookmarks, recorded before anything is armed. */
+	rewind_current: string | null
+	rewind_target: string | null
+	/** Each `arm`, counted before it is sent. */
+	rewind_arms: number
+	/** The undo bookmark an answered `arm` returned; `null` while none answered. */
+	rewind_undo: string | null
+	/**
+	 * How many arms a `verify` answered `present` after a transition proved their reset; an arm counted beyond it is
+	 * outstanding while the outcome is unknown.
+	 */
+	rewind_verified: number
+	/** `rewound` once `verify` found the sentinel gone; `refused` when the object refused the rewind. */
+	rewind_outcome: RewindOutcome | null
+	/** The object's reason for a refused rewind. */
+	rewind_refusal: string | null
+	/** 1 for a recovery that rolls back and opens; 0 for every other operation. */
+	recovery_rollback: number
 }
 
 export interface DataOperationFields {
@@ -119,9 +154,22 @@ export interface DataOperationAdvance {
 	candidateVersion?: string
 	/** The failed version answered `ok` while the rollback deployed. */
 	candidateRecovered?: true
+	/** The migration record the in-place rewind names. */
+	rewindRecord?: string
+	/** The rewind's outcome, with the object's reason when it refused. */
+	rewind?: { readonly outcome: 'rewound' } | { readonly outcome: 'refused'; readonly refusal: string }
 }
 
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,63}$/
+
+function storedResolution(resolution: DataOperationResolution): StoredResolution {
+	return resolution === 'rollback' ? 'open' : resolution
+}
+
+/** A recovery's resolution as its record holds it. */
+export function recoveryResolution(row: Pick<DataOperationRow, 'resolution' | 'recovery_rollback'>): DataOperationResolution | null {
+	return row.recovery_rollback === 1 ? 'rollback' : row.resolution
+}
 
 /** The lease row an operation's writes hold, derived from the row they write. */
 const operationLease = `EXISTS (SELECT 1 FROM deploy_locks
@@ -161,8 +209,8 @@ export class DataOperationRepository {
 			this.d1
 				.prepare(`INSERT INTO app_env_data_operations
 					(id, app_id, env, kind, step, target_mode, generation, state, error_code, actor, created_at, updated_at, finished_at,
-						recovers_operation_id, resolution, run_id, records_bookmark, data_loss)
-				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?
+						recovers_operation_id, resolution, run_id, records_bookmark, data_loss, recovery_rollback)
+				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?
 				WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 				RETURNING *`)
 				.bind(
@@ -177,10 +225,11 @@ export class DataOperationRepository {
 					now,
 					now,
 					input.kind === 'recovery' ? input.recovers.operationId : null,
-					input.kind === 'recovery' ? input.recovers.resolution : null,
+					input.kind === 'recovery' ? storedResolution(input.recovers.resolution) : null,
 					input.kind === 'migrate' ? input.runId : null,
 					input.kind === 'migrate' && input.recordsBookmark ? 1 : 0,
 					input.kind === 'migrate' && input.dataLoss ? 1 : 0,
+					input.kind === 'recovery' && input.recovers.resolution === 'rollback' ? 1 : 0,
 					key,
 					fence.holder,
 					fence.nowMs,
@@ -255,6 +304,18 @@ export class DataOperationRepository {
 			setValues.push(change.candidateVersion)
 		}
 		if (change.candidateRecovered === true) sets.push('candidate_recovered = 1')
+		if (change.rewindRecord !== undefined) {
+			sets.push('rewind_record = ?')
+			setValues.push(change.rewindRecord)
+		}
+		if (change.rewind !== undefined) {
+			sets.push('rewind_outcome = ?')
+			setValues.push(change.rewind.outcome)
+			if (change.rewind.outcome === 'refused') {
+				sets.push('rewind_refusal = ?')
+				setValues.push(change.rewind.refusal)
+			}
+		}
 		if (change.generation !== undefined) {
 			sets.push('generation = ?')
 			setValues.push(change.generation)
@@ -288,6 +349,81 @@ export class DataOperationRepository {
 			[runId, this.now(), id],
 			fence,
 		)
+	}
+
+	/** Records the in-place rewind's `prepare` bookmarks, once, before anything is armed. */
+	async rewindPrepared(id: string, bookmarks: { current: string; target: string }, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_current = ?, rewind_target = ?, updated_at = ?
+				WHERE id = ? AND state = 'running' AND rewind_record IS NOT NULL AND rewind_target IS NULL`,
+			[bookmarks.current, bookmarks.target, this.now(), id],
+			fence,
+		)
+	}
+
+	/** Counts an in-place `arm` before it is sent, so a successor never takes an unanswered one for an unsent one. */
+	async rewindArming(id: string, arms: number, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_arms = ?, updated_at = ?
+				WHERE id = ? AND state = 'running' AND rewind_arms = ? AND rewind_target IS NOT NULL`,
+			[arms + 1, this.now(), id, arms],
+			fence,
+		)
+	}
+
+	/** Records the undo bookmark an answered in-place `arm` returned. */
+	async rewindArmed(id: string, undo: string, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_undo = ?, updated_at = ? WHERE id = ? AND state = 'running' AND rewind_arms > 0`,
+			[undo, this.now(), id],
+			fence,
+		)
+	}
+
+	/**
+	 * A `verify` after a proven reset found the sentinel of `arms` arms present: none of them restores any more. Written on
+	 * a finished operation too, by whoever holds the lease, since an open of the environment depends on it.
+	 */
+	async rewindVerified(id: string, arms: number, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_verified = ?, updated_at = ? WHERE id = ? AND rewind_arms = ? AND rewind_outcome IS NULL`,
+			[arms, this.now(), id, arms],
+			fence,
+		)
+	}
+
+	/** A `verify` found the sentinel of `arms` arms gone: the object was rewound. Written on a finished operation too. */
+	async rewindObserved(id: string, arms: number, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_outcome = 'rewound', rewind_verified = ?, updated_at = ?
+				WHERE id = ? AND rewind_arms = ? AND rewind_outcome IS NULL`,
+			[arms, this.now(), id, arms],
+			fence,
+		)
+	}
+
+	/** The recoveries that roll `operationId` back and open, newest first. */
+	async rollbacksOf(operationId: string): Promise<DataOperationRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_env_data_operations WHERE recovers_operation_id = ? AND kind = 'recovery' AND recovery_rollback = 1
+				ORDER BY id DESC`)
+			.bind(operationId)
+			.all<DataOperationRow>()
+		return results
+	}
+
+	/** The environment's newest bookmark migration, in any state; `null` without one. */
+	async latestBookmarkMigration(appId: string, env: string): Promise<DataOperationRow | null> {
+		return await this.d1
+			.prepare(`SELECT * FROM app_env_data_operations WHERE app_id = ? AND env = ? AND kind = 'migrate' AND records_bookmark = 1
+				ORDER BY id DESC LIMIT 1`)
+			.bind(appId, env)
+			.first<DataOperationRow>()
 	}
 
 	/** The provider deployed a running bookmark migration's run. `false` once it finished, or off the lease. */

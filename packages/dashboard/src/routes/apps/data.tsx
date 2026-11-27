@@ -97,8 +97,9 @@ const MIGRATE_STEPS: readonly { readonly step: DataOperationStep; readonly effec
 	{ step: 'migrate', effect: 'Control waits until the new version answers that it migrated.' },
 ]
 
-/** The way back after the new version's migration failed. */
+/** The way back after the new version's migration failed; `rewind` only for a committed migration it rewinds. */
 const MIGRATE_BACK_STEPS: readonly { readonly step: DataOperationStep; readonly effect: string }[] = [
+	{ step: 'rewind', effect: 'The object is set to inspect and its data rewound to just before the migration.' },
 	{ step: 'revert', effect: 'A rollback deploy of the last succeeded commit.' },
 	{ step: 'check', effect: 'Control waits until the rolled-back version answers.' },
 	{ step: 'restrict', effect: 'The environment is closed for an operator.' },
@@ -284,18 +285,40 @@ export async function readBootFailure(client: ControlClient, appId: string, env:
 	return content.kind === 'ok' ? { kind: 'ok', value: content.value.bootFailure } : content
 }
 
+/** The stuck operation a recovery acts on, its ways out, and the newest operation when that is another one it stopped on. */
+export interface RecoveryChoice {
+	readonly operation: DataOperationDto
+	readonly resolutions: readonly DataOperationResolution[]
+	readonly stoppedBy: DataOperationDto | null
+}
+
+/** The codes an open is refused with because of a rewound migration under it (ADR-0070 §9). */
+const REWIND_GATE_CODES: readonly string[] = ['rewind_unresolved', 'rewound_before_rollback']
+
 /**
- * The environment's stuck operation is its newest one, while it is still running or once it failed. Control resumes
- * only a running operation, and opens past a failed one.
+ * The environment's stuck operation: its newest one, while it is still running or once it failed. A failed recovery is
+ * not the target: the operation it recovers, through each recovery under it, is; and an open refused because of a
+ * rewound migration leads to that migration. Control resumes only a running operation, opens past a failed one, and
+ * rolls back and opens a failed migration that Control reports eligible (`rollbackAndOpen`).
  */
-export function recoveryChoice(
-	operations: readonly DataOperationDto[],
-): { readonly operation: DataOperationDto; readonly resolutions: readonly DataOperationResolution[] } | null {
+export function recoveryChoice(operations: readonly DataOperationDto[]): RecoveryChoice | null {
 	const [newest] = operations
-	if (newest === undefined) return null
-	if (newest.state === 'running') return { operation: newest, resolutions: ['resume', 'open'] }
-	if (newest.state === 'failed') return { operation: newest, resolutions: ['open'] }
-	return null
+	if (newest === undefined || newest.state === 'succeeded') return null
+	let operation = newest
+	const seen = new Set<string>()
+	while (operation.kind === 'recovery' && operation.state === 'failed' && operation.recoversOperationId !== null && !seen.has(operation.id)) {
+		seen.add(operation.id)
+		const recovered = operations.find((candidate) => candidate.id === operation.recoversOperationId)
+		if (recovered === undefined) break
+		operation = recovered
+	}
+	if (operation.kind !== 'migrate' && operation.errorCode !== null && REWIND_GATE_CODES.includes(operation.errorCode)) {
+		operation = operations.find((candidate) => candidate.kind === 'migrate' && candidate.recordsBookmark) ?? operation
+	}
+	const stoppedBy = operation.id === newest.id ? null : newest
+	if (operation.state === 'running') return { operation, resolutions: ['resume', 'open'], stoppedBy }
+	if (operation.state === 'failed') return { operation, resolutions: operation.rollbackAndOpen ? ['rollback', 'open'] : ['open'], stoppedBy }
+	return { operation: newest, resolutions: ['open'], stoppedBy: null }
 }
 
 export default createPage()
@@ -503,7 +526,7 @@ export function StuckOperation(
 	{ appId, env, stuck, mode, manages, onChanged }: {
 		appId: string
 		env: string
-		stuck: { readonly operation: DataOperationDto; readonly resolutions: readonly DataOperationResolution[] }
+		stuck: RecoveryChoice
 		mode: MaintenanceMode | null
 		manages: boolean
 		onChanged: () => void
@@ -533,6 +556,7 @@ export function StuckOperation(
 							</>
 						)}
 					</p>
+					{stuck.stoppedBy !== null && <StoppedBy operation={operation} stoppedBy={stuck.stoppedBy} />}
 					<RestoreSituation operation={operation} />
 					<MigrationSituation operation={operation} />
 					{manages
@@ -555,6 +579,20 @@ export function StuckOperation(
 				<OperationProgress operation={operation} />
 			</details>
 		</section>
+	)
+}
+
+/** The newest operation failed on the stuck one: a recovery, or an open, that Control refused. */
+function StoppedBy({ operation, stoppedBy }: { operation: DataOperationDto; stoppedBy: DataOperationDto }) {
+	return (
+		<p>
+			The newest operation, {stoppedBy.kind} <code>{shortId(stoppedBy.id)}</code>, failed
+			{stoppedBy.errorCode !== null && (
+				<>
+					{' '}with <code>{stoppedBy.errorCode}</code>
+				</>
+			)}. It stopped on the {operation.kind} operation <code>{shortId(operation.id)}</code>, which a recovery acts on.
+		</p>
 	)
 }
 
@@ -703,7 +741,7 @@ export function RecoverControl(
 	{ appId, env, stuck, primary, onChanged }: {
 		appId: string
 		env: string
-		stuck: { readonly operation: DataOperationDto; readonly resolutions: readonly DataOperationResolution[] }
+		stuck: RecoveryChoice
 		/** A failed operation's single way out is the page's main step. */
 		primary: boolean
 		onChanged: () => void
@@ -728,14 +766,14 @@ export function RecoverControl(
 					onClick={() => setConfirming(resolution)}
 					disabled={outcome?.kind === 'not-in-release'}
 				>
-					{resolution === 'resume' ? 'Recover and resume' : 'Recover and open'}
+					{RESOLUTION_LABELS[resolution]}
 				</button>
 			))}
 			{outcome !== null && <ActionOutcome outcome={outcome} />}
 			{confirming !== null && (
 				<ConfirmDialog
 					title="Recover the environment"
-					confirmLabel={confirming === 'resume' ? 'Recover and resume' : 'Recover and open'}
+					confirmLabel={RESOLUTION_LABELS[confirming]}
 					body={<RecoveryEffect operation={stuck.operation} resolution={confirming} />}
 					onConfirm={() => recover(confirming)}
 					onClose={() => setConfirming(null)}
@@ -745,28 +783,59 @@ export function RecoverControl(
 	)
 }
 
+const RESOLUTION_LABELS: Readonly<Record<DataOperationResolution, string>> = {
+	resume: 'Recover and resume',
+	open: 'Recover and open',
+	rollback: 'Roll back and open',
+}
+
 /** What a recovery does, in the order Control does it (ADR-0069 §3). */
 export function RecoveryEffect({ operation, resolution }: { operation: DataOperationDto; resolution: DataOperationResolution }) {
 	const id = <code>{shortId(operation.id)}</code>
-	return (
-		<>
-			<p>
-				Control first fences the environment at a fresh generation in <code>closed</code>: the application answers nothing but Control's ops requests.
-			</p>
-			{resolution === 'resume'
-				? (
+	switch (resolution) {
+		case 'rollback':
+			return (
+				<>
+					<p>
+						Control first fences the environment at a fresh generation in{' '}
+						<code>inspect</code>: the application boots nothing and answers nothing but Control's ops requests. If the rewind of the data is unconfirmed,
+						Control verifies it there; when the data still holds the migration, the recovery stops and the environment stays in <code>inspect</code>.
+					</p>
+					<p>
+						It then deploys the last succeeded commit again, as a new run, and keeps the environment in <code>inspect</code>{' '}
+						for six minutes after that deploy succeeded, until the failed version is gone. Then it opens the application at a new generation. The migration
+						operation {id} stays failed.
+					</p>
+				</>
+			)
+		case 'resume':
+			return (
+				<>
+					<ClosedFence />
 					<p>
 						It then resumes the {operation.kind} operation {id} from its recorded step{' '}
 						<code>{operation.step}</code>. The environment ends in the mode that operation leaves it in.
 					</p>
-				)
-				: (
+				</>
+			)
+		case 'open':
+			return (
+				<>
+					<ClosedFence />
 					<p>
 						It then opens the application at a new generation, so it admits every request again. The {operation.kind} operation {id}{' '}
 						does not continue; if it is still running, it is recorded as failed.
 					</p>
-				)}
-		</>
+				</>
+			)
+	}
+}
+
+function ClosedFence() {
+	return (
+		<p>
+			Control first fences the environment at a fresh generation in <code>closed</code>: the application answers nothing but Control's ops requests.
+		</p>
 	)
 }
 
@@ -808,6 +877,12 @@ export function MigrationSituation({ operation }: { operation: DataOperationDto 
 					The new version answered <code>{failure}</code>. {MIGRATION_FAILURES[failure]}
 				</p>
 			)}
+			{operation.rewound && <p>Control rewound the data to just before the migration, so the last succeeded commit meets its own schema.</p>}
+			{operation.rewindRefusal !== null && (
+				<p>
+					The object refused to rewind the migration (<code>{operation.rewindRefusal}</code>), so nothing was rewound.
+				</p>
+			)}
 			<p>{migrationEffect(operation)}</p>
 		</>
 	)
@@ -815,15 +890,24 @@ export function MigrationSituation({ operation }: { operation: DataOperationDto 
 
 function migrationEffect(operation: DataOperationDto): string {
 	if (operation.state === 'running') {
-		return operation.step === 'revert' || operation.step === 'check'
-			? 'Control is deploying the last succeeded commit back; the environment stays open.'
-			: 'The environment stays open while the new version migrates: there is no read-only window and no backup.'
+		if (operation.step === 'rewind') return 'Control is rewinding the data; the environment is in inspect, so nothing reads or writes it.'
+		if (operation.step !== 'revert' && operation.step !== 'check') {
+			return 'The environment stays open while the new version migrates: there is no read-only window and no backup.'
+		}
+		return operation.rewound || operation.rewindRefusal !== null
+			? 'Control is deploying the last succeeded commit back; the environment opens once that version answers.'
+			: 'Control is deploying the last succeeded commit back; the environment stays open.'
 	}
 	switch (operation.errorCode) {
 		case 'migration_unconfirmed':
 			return 'The new version did not confirm its migration before the deadline. The environment stays open; the next deploy asks again.'
 		case 'migration_reverted':
 			return 'The last succeeded commit serves again, and the environment is open. The failed version needs a fix before it is deployed again.'
+		case 'rewind_failed':
+			if (operation.rewound) {
+				return 'A later verify confirmed the rewind. The environment stays in inspect until a recovery rolls back and opens it: the failed version would migrate again on its next boot.'
+			}
+			return 'The rewind is unconfirmed: it may not have taken, or may still take at the next restart. The environment stays in inspect, so nothing writes over the data; Control verifies the rewind before anything opens it. An operator decides what follows.'
 		case 'migration_failed':
 			return operation.candidateRecovered
 				? 'The failed version booted after all while the rollback deployed, so either version may serve. The environment is closed: an operator decides what follows.'
@@ -867,10 +951,11 @@ function RestoreSteps({ operation }: { operation: DataOperationDto }) {
 
 function MigrationSteps({ operation }: { operation: DataOperationDto }) {
 	if (!MIGRATE_BACK_STEPS.some((entry) => entry.step === operation.step)) return <StepsTable operation={operation} steps={MIGRATE_STEPS} />
-	// A committed migration that lost data goes straight to `restrict`, without a rollback deploy.
-	const steps = operation.revertRunId === null && operation.step === 'restrict'
-		? MIGRATE_BACK_STEPS.filter((entry) => entry.step === 'restrict')
-		: MIGRATE_BACK_STEPS
+	// A refused rewind changed nothing: the situation names the refusal, and the table leaves the step out.
+	const rewind = operation.step === 'rewind' || operation.rewound
+	// A committed migration that lost data and is not rewound goes straight to `restrict`, without a rollback deploy.
+	const closedAtOnce = operation.revertRunId === null && operation.step === 'restrict'
+	const steps = MIGRATE_BACK_STEPS.filter((entry) => entry.step === 'rewind' ? rewind : !closedAtOnce || entry.step === 'restrict')
 	return <StepsTable operation={operation} steps={steps} />
 }
 

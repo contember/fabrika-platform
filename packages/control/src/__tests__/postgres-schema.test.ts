@@ -192,6 +192,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0046_approval_defaults_keep_saved_choices.sql' },
 			{ bundle: 'control', name: '0047_iam_gate_mirrors_agent_write.sql' },
 			{ bundle: 'control', name: '0048_migration_bookmark.sql' },
+			{ bundle: 'control', name: '0049_migration_rewind.sql' },
 		])
 	})
 

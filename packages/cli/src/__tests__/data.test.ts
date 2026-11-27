@@ -42,6 +42,9 @@ const OPERATION: DataOperationDto = {
 	migrationFailure: null,
 	revertRunId: null,
 	candidateRecovered: false,
+	rewound: false,
+	rewindRefusal: null,
+	rollbackAndOpen: false,
 }
 const STUCK_ID = '0192c4a0-0000-7000-8000-0000000000aa'
 const OPERATION_LINE = `${OPERATION.id}\tmaintenance\trunning\trestrict\tread-only\t8\t-\t2025-10-24T12:00:00.000Z`
@@ -323,7 +326,7 @@ describe('env operations', () => {
 
 describe('env recover', () => {
 	test('recovers a stuck operation with the resolution given and prints the recovery', async () => {
-		for (const resolution of ['resume', 'open'] as const) {
+		for (const resolution of ['resume', 'open', 'rollback'] as const) {
 			const recovery = { ...OPERATION, kind: 'recovery', step: 'reconcile', targetMode: 'closed', recoversOperationId: STUCK_ID, resolution }
 			const control = fakeControl({ result: recovery })
 			const { out } = await captureOutput(() => runEnvCli('recover', ['notes', 'prod', STUCK_ID, resolution], CONTROL_ENV))
@@ -335,9 +338,9 @@ describe('env recover', () => {
 		}
 	})
 
-	test('refuses a resolution other than resume or open before anything is sent', async () => {
+	test('refuses a resolution other than resume, open or rollback before anything is sent', async () => {
 		const control = fakeControl({ result: OPERATION })
-		await expect(runEnvCli('recover', ['notes', 'prod', STUCK_ID, 'close'], CONTROL_ENV)).rejects.toThrow('The resolution is resume or open')
+		await expect(runEnvCli('recover', ['notes', 'prod', STUCK_ID, 'close'], CONTROL_ENV)).rejects.toThrow('The resolution is resume, open or rollback')
 		expect(control.calls).toEqual([])
 	})
 
