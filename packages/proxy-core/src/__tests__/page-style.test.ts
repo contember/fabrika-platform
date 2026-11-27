@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { PAGE_STYLE, pageBody } from '../page-style'
+import { PAGE_STYLE, pageBody, WORKSPACE_STYLE, workspaceBody } from '../page-style'
 
 const CONSOLE = await Bun.file(join(import.meta.dir, '../../../dashboard/src/styles.css')).text()
 
@@ -16,6 +16,9 @@ const MIRRORED: [page: string, console: string][] = [
 	['logo', 'rail-logo'],
 	['art-rule', 'rail-rule'],
 	['recess', 'recess'],
+	['tile', 'tile'],
+	['plate-raised', 'plate-raised'],
+	['rule-soft', 'rule-soft'],
 	['rule', 'rule'],
 	['rule-strong', 'rule-strong'],
 	['control', 'control'],
@@ -25,6 +28,7 @@ const MIRRORED: [page: string, console: string][] = [
 	['ink-2', 'ink-2'],
 	['ink-3', 'ink-3'],
 	['ink-4', 'ink-4'],
+	['engrave', 'engrave'],
 	['brand', 'brand'],
 	['brand-hover', 'brand-hover'],
 	['brand-on', 'brand-on'],
@@ -146,10 +150,18 @@ describe("the pages' stylesheet repeats the console's tokens", () => {
 describe("the pages' stylesheet", () => {
 	test('loads nothing', () => {
 		expect(PAGE_STYLE).not.toMatch(/url\(|@import/)
+		expect(WORKSPACE_STYLE).not.toMatch(/url\(|@import/)
 	})
 
 	test('holds no `{name}` Caddy would expand as a placeholder', () => {
 		expect(PAGE_STYLE).not.toMatch(/\{\S/)
+		expect(WORKSPACE_STYLE).not.toMatch(/\{\S/)
+	})
+
+	test('the workspace frame uses only tokens the pages define', () => {
+		const defined = new Set([...PAGE_STYLE.matchAll(/--([\w-]+):/g)].map(([, name]) => name))
+		const used = [...WORKSPACE_STYLE.matchAll(/var\(--([\w-]+)\)/g)].map(([, name]) => name)
+		expect(used.filter((name) => !defined.has(name))).toEqual([])
 	})
 })
 
@@ -160,6 +172,13 @@ describe('the frame every page has', () => {
 		expect(body).toMatch(
 			/<\/main>\n<footer class="made-with"><span class="runs-on">Runs on <svg[^>]*>.*?<\/svg> fabrika<\/span><span class="status">Status 403<\/span><\/footer>$/,
 		)
+	})
+
+	test('the workspace frame: the mark in the bar, the content in the column, the same footer', () => {
+		const body = workspaceBody('<h1>Title</h1>', { runsOn: 'Runs on' })
+		expect(body).toMatch(/^<header class="topbar"><span aria-hidden="true"><svg [^>]*height="24"/)
+		expect(body).toContain('<main class="workspace">\n<h1>Title</h1>\n</main>')
+		expect(body).toMatch(/<footer class="made-with"><span class="runs-on">Runs on <svg[^>]*>.*?<\/svg> fabrika<\/span><\/footer>$/)
 	})
 
 	test('a page without a status has only the line that names fabrika', () => {

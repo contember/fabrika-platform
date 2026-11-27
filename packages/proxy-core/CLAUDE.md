@@ -66,7 +66,9 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   with the page's words at the left and the mark on the blueprint grid at the right, a plate in light and the
   welcome's dark panel in dark, and a footer under it, "Runs on [mark] fabrika" (IAM's words in its language) with the
   status at the right where the page has one. Buttons are the console's: outlined, the brand blue only on a form's first
-  button, or the first of its `.actions` row. It imports nothing and loads nothing, and it repeats the console's tokens (`packages/dashboard/src/styles.css`)
+  button, or the first of its `.actions` row. A page a person works on (IAM's account page) adds `WORKSPACE_STYLE` and
+  uses `workspaceBody`: the brand in a bar at the top, the content in the console's wide column on tiles, its tables,
+  chips, quiet destructive buttons and dialog. It imports nothing and loads nothing, and it repeats the console's tokens (`packages/dashboard/src/styles.css`)
   because it cannot read them: `page-style.test.ts` resolves the console's `light-dark()`, `var()` and `color-mix()`
   and fails on a drifted value, so change a colour in the console first and copy it here. Caddy serves it in a
   `static_response` body, so no `{` may be followed by a name. The footer links nowhere: the proxy's pages are read by
