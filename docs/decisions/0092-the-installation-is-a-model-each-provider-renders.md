@@ -60,21 +60,31 @@ envelope ([ADR-0011](0011-static-provider-bundles.md): envelopes only where data
     provider composition root's (`packages/control/src/<cloud>/`), so the provider passes them to the builder.
   - `jobs`: each scheduled job's command and schedule, a five-field cron expression in UTC (what Zerops' crontab,
     EventBridge Scheduler, a Kubernetes `CronJob` and a Container Apps job take). A renderer that runs a job as a loop
-    derives the interval from the forms it accepts and refuses the others.
+    keeps an interval, not a time of day: it accepts the every-N-minutes forms, and `M H * * *` only as every 24 hours
+    from the task's start, and refuses the others. So no job may rely on the hour it runs at.
   - `calls`: the services it dials over the private network. A renderer derives its network rules from them (AWS
     security groups, Kubernetes network policies).
   - `environment`: every variable it reads, by name, each with a **kind** and whether it is sensitive:
     - `fixed`: true for every installation (`PORT`, an asset directory), with its value;
     - `address`: another service's private address (`FABRIKA_IAM_RPC_URL` is `iam`'s), spelled by the renderer;
-    - `data`: a database's or bucket's coordinate (a DSN, a bucket name, an endpoint, a key), spelled by the provider;
-    - `generated`: a secret the bring-up generates once and every reader shares (`FABRIKA_IAM_RPC_KEY`);
+    - `data`: one entry per store the service reads, naming the store and the variable (a database's DSN,
+      `FABRIKA_IAM_DATABASE_URL`) or the prefix (a bucket's, `FABRIKA_CONTROL_RUN_LOGS`). The provider spells the
+      variables under a prefix: Zerops writes a key pair and an endpoint; AWS writes a region and
+      `_CREDENTIALS=container` and no key, because the task role signs;
+    - `generated`: a secret the bring-up generates once and every reader shares (`FABRIKA_IAM_RPC_KEY`), with whether
+      an upgrade may generate it when no reader holds it. IAM's data key alone may. Any other generated value missing
+      stops the run, because a new one would hide a loss: a new vault key orphans every application's secret;
     - `bring-up`: the operator's choice at install, written once and never by a deploy (the sign-in methods, the mail
       transport);
     - `derived`: computed from where the installation answers, rewritten by every deploy (`ISSUER`, the console
       table's digest).
       The model holds names, kinds and fixed values only. The values of the other kinds stay where they are produced
       today, in `installationServiceEnvironment` and `deployedServiceEnvironment`, and reach the services through the
-      applier; a test holds the model's names and those two functions' names equal.
+      applier; a test holds the model's names, outside the data prefixes, equal to those two functions' names.
+    - **A provider's own variables** sit beside the model's, each declared with a kind from the same list: Control's
+      cloud coordinates (`FABRIKA_ZEROPS_*`, `FABRIKA_AWS_*`), or a provider's name for a shared generated value
+      (`FABRIKA_AWS_PROXY_IAM_KEY` is IAM's proxy key). The renderer and the applier treat them as the model's, so no
+      provider keeps a second list of kinds.
   - `public`: true on the proxy alone. The builder refuses a model with another public service
     ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)).
 - **Databases**, logical: `iam`, `control`, `operations`, each owned by one service. They may share a server: their
@@ -84,8 +94,17 @@ envelope ([ADR-0011](0011-static-provider-bundles.md): envelopes only where data
 - **Buckets**, logical: Control's run logs and Operations' blobs, each owned by one service. Their key prefixes are
   disjoint, so they may share a physical bucket (Zerops' light tier does).
 - **Public hosts**: IAM's, Control's (the console) and Operations', each routed to the proxy, from `PlatformHosts`.
-- **The deploy order**: IAM, Operations, the proxy, Control, with the proxy manifest applied in the same run as the
-  code it describes. The applier keeps ADR-0027's invariant; the model states the order so no renderer restates it.
+- **The order's constraints**, not a sequence:
+  - a service starts after the services it calls exist; where `calls` form a cycle (IAM and Control dial each other),
+    the applier closes it;
+  - no new code serves behind an older proxy manifest, and the manifest is applied in the same run as the code it
+    describes (ADR-0027's invariant);
+  - a provider's database setup (users, databases, grants), where it has one, runs before any service moves.
+
+  Each applier keeps them in its own sequence. Zerops deploys IAM, Operations, the proxy and Control one after
+  another. AWS runs the setup, rolls the three services in one stack update, creates the proxy after them (a Service
+  Connect task resolves only the endpoints that existed when it deployed) and, on a fresh install, redeploys once the
+  services that dial each other.
 
 The model holds no provider's spelling (no hostname of a data service, no logical id, no `Ref`, no ARN), no size, no
 network and nothing about application namespaces. A namespace's and an environment's runtime resources stay Control's,
@@ -111,7 +130,8 @@ A provider's installation is in two layers, and the renderer has a function for 
 - **Infrastructure**, which outlives a release: networks, balancers, database servers, buckets, clusters, roles. Its
   renderer needs the model and the options.
 - **Release**, which every `deploy` and `upgrade` moves: the services at one version (images or archives, task
-  definitions or setups), their environment, the order, the manifest. Its renderer needs the model, the options and
+  definitions or setups), their environment, the database setup where a provider has one (it runs on every upgrade),
+  the order, the manifest. Its renderer needs the model, the options and
   the infrastructure's coordinates.
 
 **Invariant: a renderer is a pure function of the model, the provider's options and, for the release, the
@@ -129,8 +149,9 @@ hand fabrika the coordinates instead, and fabrika applies only the release onto 
   after the coordinates' fields.
 - The applier checks the coordinates against the cloud before it uses them (the resources exist and fit together, for
   example the subnets are in the VPC and the database answers from them) and changes nothing it did not render.
-- The installation records where its coordinates came from, and `upgrade` reads them back: an installation set up
-  from an operator's coordinates never starts rendering its infrastructure on an upgrade.
+- The installation records where its coordinates came from, in the record it already keeps of the operator's choices
+  (on AWS the installation record `install` writes and `upgrade` reads back). An installation set up from an
+  operator's coordinates never starts rendering its infrastructure on an upgrade.
 - The release layer, the order and the proxy manifest stay fabrika's in every case: ADR-0025 and ADR-0027 are
   unchanged.
 
