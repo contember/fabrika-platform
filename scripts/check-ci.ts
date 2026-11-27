@@ -1,13 +1,15 @@
-// `bun run check:ci` runs locally what `.github/workflows/ci.yml` runs, in the same order, so a green run here is a
-// green CI run. `release.yml` calls that workflow as its `verify` job, so this is also the gate a tag must pass.
+// `bun run check:ci` runs locally every step `.github/workflows/ci.yml` runs, so a green run here is a green CI run.
+// `release.yml` calls that workflow as its `verify` job, so this is also the gate a tag must pass.
 //
-// Each job of the test matrix (PostgreSQL major × shard) gets its own throwaway PostgreSQL and SeaweedFS containers on
-// free loopback ports, as each CI job gets its own runner, and the jobs run concurrently, one per two available CPUs. A
-// backend the environment already names is used as it is, by one job at a time. What cannot run here — no docker, no
-// npm — is skipped and named in the summary, never silently.
+// After the install, CI's jobs run at once, as on CI's runners: the quality and build steps, the test matrix, the images
+// and the release artifacts, each lane's steps in `ci.yml`'s order. Each job of the test matrix (PostgreSQL major × shard)
+// gets its own throwaway PostgreSQL and SeaweedFS containers on free loopback ports, and the jobs run concurrently, one
+// per available core. A backend the environment already names is used as it is, by one job at a time. What cannot run
+// here — no docker, no npm — is skipped and named in the summary, never silently.
 // `scripts/__tests__/check-ci.test.ts` fails when these steps and `ci.yml` drift apart.
 
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 
@@ -293,10 +295,12 @@ export const startSeaweedfs = async (): Promise<Backend> => {
 	return { env: { ...S3_VALUES, FABRIKA_TEST_S3_ENDPOINT: `http://127.0.0.1:${await publishedPort(name, 9000)}` }, container: name }
 }
 
-const runStep = async (step: CiStep, label: string, env: Record<string, string | undefined>, results: StepResult[]): Promise<void> => {
-	console.info(`\n▸ ${label}\n  $ ${step.run}`)
+/** The install streams its output: it runs alone, before every lane. */
+const runInstall = async (env: Record<string, string | undefined>, results: StepResult[]): Promise<void> => {
+	const label = `${INSTALL_STEP.job}: ${INSTALL_STEP.name}`
+	console.info(`\n▸ ${label}\n  $ ${INSTALL_STEP.run}`)
 	const started = performance.now()
-	const child = Bun.spawn(['bash', '-eo', 'pipefail', '-c', step.run], { cwd: ROOT, env, stdout: 'inherit', stderr: 'inherit' })
+	const child = Bun.spawn(['bash', '-eo', 'pipefail', '-c', INSTALL_STEP.run], { cwd: ROOT, env, stdout: 'inherit', stderr: 'inherit' })
 	const exitCode = await child.exited
 	if (exitCode !== 0) throw new StepFailure(`"${label}" failed (exit ${exitCode})`)
 	results.push({ label, seconds: (performance.now() - started) / 1000 })
@@ -324,11 +328,52 @@ const testBackends = (docker: boolean, skipped: string[]): TestBackends => {
 	return { postgres, s3, concurrent: !postgresGiven && !s3Given }
 }
 
+/**
+ * The lanes beside the test matrix run below its priority: its suites have 5 s timeouts, and a typecheck or a build
+ * competing at the same priority pushed them past those. The lanes take what CPU the tests leave.
+ */
+const BACKGROUND_NICENESS = '10'
+
 /** Runs a step with its stdout and stderr captured together, so concurrent jobs do not interleave their output. */
-const captureStep = async (run: string, env: Record<string, string | undefined>): Promise<{ readonly exitCode: number; readonly output: string }> => {
-	const child = Bun.spawn(['bash', '-eo', 'pipefail', '-c', `exec 2>&1\n${run}`], { cwd: ROOT, env, stdout: 'pipe', stderr: 'inherit' })
+const captureStep = async (
+	run: string,
+	env: Record<string, string | undefined>,
+	priority: 'tests' | 'background',
+): Promise<{ readonly exitCode: number; readonly output: string }> => {
+	const shell = ['bash', '-eo', 'pipefail', '-c', `exec 2>&1\n${run}`]
+	const command = priority === 'tests' ? shell : ['nice', '-n', BACKGROUND_NICENESS, ...shell]
+	const child = Bun.spawn(command, { cwd: ROOT, env, stdout: 'pipe', stderr: 'inherit' })
 	const [exitCode, output] = await Promise.all([child.exited, new Response(child.stdout).text()])
 	return { exitCode, output }
+}
+
+/** Runs one step with its output captured; false when it failed, after printing its output. */
+const runCaptured = async (
+	run: string,
+	label: string,
+	env: Record<string, string | undefined>,
+	priority: 'tests' | 'background',
+	results: StepResult[],
+): Promise<boolean> => {
+	console.info(`▸ ${label}\n  $ ${run}`)
+	const started = performance.now()
+	const { exitCode, output } = await captureStep(run, env, priority)
+	if (exitCode !== 0) {
+		console.error(`\n✗ ${label} failed (exit ${exitCode}):\n${output}`)
+		return false
+	}
+	const seconds = (performance.now() - started) / 1000
+	results.push({ label, seconds })
+	console.info(`✓ ${label} (${seconds.toFixed(1)} s)`)
+	return true
+}
+
+/** A lane: CI jobs' steps in order, stopping at the first that fails, as one CI job does. */
+const runLane = async (steps: readonly CiStep[], env: Record<string, string | undefined>, results: StepResult[]): Promise<void> => {
+	for (const step of steps) {
+		const label = `${step.job}: ${step.name}`
+		if (!await runCaptured(step.run, label, env, 'background', results)) throw new StepFailure(`"${label}" failed`)
+	}
 }
 
 /** Runs one job of the test matrix on backends of its own; false when a step failed, after printing its output. */
@@ -348,17 +393,7 @@ const runTestJob = async (
 		for (const step of TEST_STEPS) {
 			if (step.onlyInShard !== undefined && step.onlyInShard !== job.shard) continue
 			const run = step.run.replaceAll(SHARD_PLACEHOLDER, String(job.shard))
-			const label = `${job.label}: ${step.name}`
-			console.info(`\n▸ ${label}\n  $ ${run}`)
-			const started = performance.now()
-			const { exitCode, output } = await captureStep(run, jobEnv)
-			if (exitCode !== 0) {
-				console.error(`\n✗ ${label} failed (exit ${exitCode}):\n${output}`)
-				return false
-			}
-			const seconds = (performance.now() - started) / 1000
-			results.push({ label, seconds })
-			console.info(`✓ ${label} (${seconds.toFixed(1)} s)`)
+			if (!await runCaptured(run, `${job.label}: ${step.name}`, jobEnv, 'tests', results)) return false
 		}
 		return true
 	} finally {
@@ -366,8 +401,35 @@ const runTestJob = async (
 	}
 }
 
-/** One test job per two CPUs the run may use: on 4 vCPU (2 cores), 4 jobs at once pushed tests past their 5 s timeouts. */
-export const testJobWorkers = (jobs: number): number => Math.max(1, Math.min(Math.floor(availableParallelism() / 2), jobs))
+/**
+ * The physical cores among the CPUs this process may run on: SMT siblings share one core, so they count once. Undefined
+ * where Linux's `/proc` and `/sys` do not say.
+ */
+export const availableCores = (): number | undefined => {
+	try {
+		const allowed = /^Cpus_allowed_list:\s*([\d,-]+)$/m.exec(readFileSync('/proc/self/status', 'utf8'))?.[1]
+		if (allowed === undefined) return undefined
+		const cores = new Set<string>()
+		for (const range of allowed.split(',')) {
+			const bounds = /^(\d+)(?:-(\d+))?$/.exec(range)
+			if (bounds?.[1] === undefined) return undefined
+			const first = Number(bounds[1])
+			const last = bounds[2] === undefined ? first : Number(bounds[2])
+			for (let cpu = first; cpu <= last; cpu += 1) {
+				cores.add(readFileSync(`/sys/devices/system/cpu/cpu${cpu}/topology/thread_siblings_list`, 'utf8').trim())
+			}
+		}
+		return cores.size
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * One test job per core the run may use: on 4 vCPU (2 cores), 4 jobs at once pushed tests past their 5 s timeouts. Without
+ * a topology to read, a core is taken to be two CPUs.
+ */
+export const testJobWorkers = (jobs: number): number => Math.max(1, Math.min(availableCores() ?? Math.floor(availableParallelism() / 2), jobs))
 
 const runTestMatrix = async (env: Record<string, string | undefined>, backends: TestBackends, results: StepResult[]): Promise<void> => {
 	const jobs = backends.postgres.flatMap((postgres) =>
@@ -396,24 +458,24 @@ const runTestMatrix = async (env: Record<string, string | undefined>, backends: 
 
 const run = async (results: StepResult[], skipped: string[]): Promise<void> => {
 	const env = { ...process.env }
-	await runStep(INSTALL_STEP, `quality: ${INSTALL_STEP.name}`, env, results)
-	for (const step of QUALITY_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
+	await runInstall(env, results)
+	const docker = await dockerAvailable()
 
-	await runTestMatrix(env, testBackends(await dockerAvailable(), skipped), results)
+	const quality = runLane(QUALITY_STEPS, env, results)
+	// The builds start once the quality steps end, whatever their outcome: the typecheck and the dashboard's build both
+	// rewrite its generated routes, and one would read the file while the other writes it.
+	const build = quality.catch(() => {}).then(() => runLane(BUILD_STEPS, env, results))
+	const lanes: Promise<void>[] = [quality, build, runTestMatrix(env, testBackends(docker, skipped), results)]
+	if (docker) lanes.push(runLane(PROXY_IMAGE_STEPS, env, results))
+	else skipped.push(`the image jobs (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
+	if (Bun.which('npm') !== null) lanes.push(runLane(RELEASE_ARTIFACT_STEPS, env, results))
+	else skipped.push(`the release-artifacts job (${RELEASE_ARTIFACT_STEPS.map((step) => step.name).join(', ')}): npm is not on PATH`)
 
-	for (const step of BUILD_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
-
-	if (await dockerAvailable()) {
-		for (const step of PROXY_IMAGE_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
-	} else {
-		skipped.push(`the image jobs (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
-	}
-
-	if (Bun.which('npm') === null) {
-		skipped.push(`the release-artifacts job (${RELEASE_ARTIFACT_STEPS.map((step) => step.name).join(', ')}): npm is not on PATH`)
-		return
-	}
-	for (const step of RELEASE_ARTIFACT_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
+	// Every lane runs to its end, as CI's jobs do, so one run names every failure.
+	const failures = (await Promise.allSettled(lanes)).flatMap((lane) =>
+		lane.status === 'fulfilled' ? [] : [lane.reason instanceof Error ? lane.reason.message : String(lane.reason)]
+	)
+	if (failures.length > 0) throw new StepFailure(failures.join('; '))
 }
 
 const printSummary = (results: readonly StepResult[], skipped: readonly string[], totalSeconds: number): void => {
