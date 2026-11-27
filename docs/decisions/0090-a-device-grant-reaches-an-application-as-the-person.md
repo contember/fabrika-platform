@@ -182,7 +182,8 @@ confirmed the grant's approval (ADR-0083 §1, §4). The strict default is `off` 
 lifetime they chose. IAM records when it answered and which passkey answered on the attempt and on the grant
 (`passkey_confirmed_at`, `passkey_credential_id`), and the person's account page names that passkey; a `write` grant
 without a confirmation is refused there as under `refuse`. An administrator's passkey reset revokes the person's grants a
-reset passkey confirmed, so a lost authenticator does not leave them live until the login ends. A person without a passkey is offered `read`, with a link to add
+reset passkey confirmed, so a lost authenticator does not leave them live until the login ends; a person removing one
+of their own passkeys revokes the grants that passkey confirmed. A person without a passkey is offered `read`, with a link to add
 one. An environment with no gate mirrored reads `refuse`: the absence fails closed. IAM reads the gate on the device
 page and at every exchange, so a gate that tightens refuses a `write` grant from its next exchange on
 (`write_refused`), for as long as it holds. The

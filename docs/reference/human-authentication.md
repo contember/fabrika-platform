@@ -178,9 +178,11 @@ can register the first passkey of a person who has none. It is audited, and a re
 longer answer with any passkey asks an installation administrator. The administrator removes every passkey of that
 person: "Remove all passkeys" on the person's Sign-in tab, or `passkeys.reset` over `/admin/rpc`. The reset also
 revokes the person's agent grants that one of those passkeys confirmed (ADR-0090 §5), and denies an approval so
-confirmed that the agent has not redeemed yet.
+confirmed that the agent has not redeemed yet. A person who removes one of their own passkeys revokes and denies the
+same way what that passkey confirmed; a grant confirmed before IAM recorded which passkey answered names none and stays.
 
-**Records.** `iam.passkey.register` and `iam.passkey.remove` are filed under the person, and `iam.passkey.reset`
+**Records.** `iam.passkey.register` and `iam.passkey.remove` are filed under the person, `iam.passkey.remove` with one
+`iam.oauth.grant.revoke` (`reason: passkey_removed`) when the removal revoked a grant, and `iam.passkey.reset`
 under the administrator, with one `iam.oauth.grant.revoke` (`reason: passkey_reset`) when the reset revoked a grant. Each is written in its change's own transaction. A verified assertion records only its use,
 as the passkey's last-used time.
 

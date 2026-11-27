@@ -198,13 +198,33 @@ export class PasskeyRepository {
 		return row !== null
 	}
 
-	/** Remove one of the principal's passkeys with its record; false when it has no such passkey. */
-	async remove(principalId: string, passkeyId: string, audit: AuditEventInput): Promise<boolean> {
-		const rows = await this.writer.run([{
+	/**
+	 * Remove one of the principal's passkeys with its `removal` record, and end what that passkey confirmed (ADR-0090 §5):
+	 * its live agent grants, with one `revocation` record, and its approved attempts not yet redeemed. A grant confirmed
+	 * before IAM recorded which passkey answered names none and stays. False when the principal has no such passkey.
+	 */
+	async remove(
+		principalId: string,
+		passkeyId: string,
+		audit: { removal: AuditEventInput; revocation: AuditEventInput },
+		now: number,
+	): Promise<boolean> {
+		const confirmedByRemoved = 'passkey_credential_id = (SELECT credential_id FROM passkeys WHERE id = ? AND principal_id = ?)'
+		const attempts = this.db
+			.prepare(`UPDATE oauth_device_authorizations SET status = 'denied' WHERE principal_id = ? AND status = 'approved' AND ${confirmedByRemoved}`)
+			.bind(principalId, passkeyId, principalId)
+		const revocation = this.writer.changed([{
+			sql:
+				`UPDATE oauth_grants SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL AND expires_at > ? AND ${confirmedByRemoved} RETURNING id`,
+			binds: [now, principalId, now, passkeyId, principalId],
+		}], audit.revocation)
+		const removal = this.writer.changed([{
 			sql: 'DELETE FROM passkeys WHERE id = ? AND principal_id = ? RETURNING id',
 			binds: [passkeyId, principalId],
-		}], audit)
-		return rows.length > 0
+		}], audit.removal)
+		// The grants are matched against the passkey before the removal, so it runs last.
+		const results = await this.db.batch([attempts, ...revocation.statements, ...removal.statements])
+		return removal.rows(results, 1 + revocation.statements.length).length > 0
 	}
 
 	/**
