@@ -3,9 +3,10 @@
 // the task definition names as secrets. The names and values are `installation-init`'s, the same as on every cloud
 // (`installationServiceEnvironment`, `deployedServiceEnvironment`), and the AWS provider adds its own beside them.
 //
-// Three kinds of value, each written its own way:
+// Three kinds of value, each written its own way. The kinds are the installation model's (ADR-0092), and Control's AWS
+// variables are declared with theirs (`model.ts`'s `AWS_CONTROL_VARIABLES`):
 //
-// - **Generated** (the installation model's `generated` variables, `model.ts`'s `AWS_GENERATED`: the signing keys, the RPC, proxy, provisioning and sync keys, the
+// - **Generated** (`model.ts`'s `AWS_GENERATED`: the signing keys, the RPC, proxy, provisioning and sync keys, the
 //   vault and data keys, and Control's copy of the proxy key for the namespace proxies): written once and never
 //   replaced. A secret several services read is one value in each reader's path, so a run that stopped part way takes
 //   the value an earlier run wrote from any reader that holds it, and refuses to go on when two readers hold different
@@ -42,7 +43,7 @@ import { awsAccessEnvironment, awsRunLogsBucket } from './access'
 import { awsPlatformAccessInput, type AwsPlatformState } from './apply'
 import { awsBalancersEnvironment } from './balancers'
 import { AWS_DATABASE_SERVICES, awsDatabasePasswordParameter, awsDatabaseUrl } from './database'
-import { AWS_GENERATED, AWS_UPGRADE_MAY_ADD, isAwsDataVariable } from './model'
+import { AWS_GENERATED, AWS_UPGRADE_MAY_ADD, awsProviderVariableKind, isAwsDataVariable } from './model'
 import { awsNetworkEnvironment, awsNetworkLayout } from './network'
 import { AWS_PLATFORM_SERVICE_PORT, awsOperationsBucket, awsPlatformParameters } from './runtime'
 import type { AwsServicesInput } from './services'
@@ -180,8 +181,12 @@ export async function desiredAwsParameters(input: AwsParametersInput): Promise<D
 		for (const [name, value] of [...installation[task], ...aws[task]]) {
 			// A storage key, a secret key or an endpoint the account's own S3 takes none of.
 			if (value === '') continue
+			const data = isAwsDataVariable(task, name)
+			const kind = awsProviderVariableKind(task, name)
+			// Every variable of the AWS provider's own is declared with its kind (`model.ts`).
+			if (aws[task].has(name) && !data && kind === undefined) throw new Error(`aws: the ${task} task's ${name} is declared with no kind`)
 			if (generated.has(name)) taskOnce.set(name, value)
-			else if (isAwsDataVariable(task, name) || deployed[task].has(name) || aws[task].has(name)) taskDerived.set(name, value)
+			else if (data || deployed[task].has(name) || kind === 'derived') taskDerived.set(name, value)
 			else if (input.bringUp !== undefined) taskOnce.set(name, value)
 		}
 		for (const [name, value] of deployed[task]) taskDerived.set(name, value)

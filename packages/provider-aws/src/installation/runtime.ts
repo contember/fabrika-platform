@@ -28,6 +28,7 @@
 // UNVERIFIED: the resources' properties follow the CloudFormation reference, and that the VPC's DNS resolver is
 // reached whatever a task's group allows follows the VPC documentation; none was checked against an account.
 
+import { PLATFORM_PROXY_HEALTH_PORT, PLATFORM_PROXY_PORT, PLATFORM_SERVICE_PORT } from '@fabrika/installation-init'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { allow, AWS_LOG_RETENTION_DAYS, policy, trust } from '../environment-stack'
 import type { AwsStack } from '../stack'
@@ -40,11 +41,11 @@ import type { AwsNetworkOutputs } from './network'
 /** The foundation's stack: under `fabrika-platform-`, which no grant of Control's role names. */
 export const AWS_RUNTIME_STACK = 'fabrika-platform-runtime'
 export { AWS_PLATFORM_NAMESPACE, awsRunLogsBucket }
-/** The port IAM, Control and Operations listen on, as on Zerops. */
-export const AWS_PLATFORM_SERVICE_PORT = 3000
-/** The platform proxy's request port and its health route's, as a namespace proxy's. */
-export const AWS_PLATFORM_PROXY_PORT = 8080
-export const AWS_PLATFORM_PROXY_HEALTH_PORT = 8081
+/** The port IAM, Control and Operations listen on: the installation model's (ADR-0092), as on Zerops. */
+export const AWS_PLATFORM_SERVICE_PORT = PLATFORM_SERVICE_PORT
+/** The platform proxy's request port and its health route's, as a namespace proxy's: the installation model's. */
+export const AWS_PLATFORM_PROXY_PORT = PLATFORM_PROXY_PORT
+export const AWS_PLATFORM_PROXY_HEALTH_PORT = PLATFORM_PROXY_HEALTH_PORT
 const POSTGRES_PORT = 5432
 const HTTPS_PORT = 443
 

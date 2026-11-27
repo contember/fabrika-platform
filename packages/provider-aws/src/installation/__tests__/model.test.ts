@@ -4,9 +4,20 @@
 
 import { INSTALLATION_SECRET_VARIABLES, PLATFORM_SERVICES, type PlatformService } from '@fabrika/installation-init'
 import { describe, expect, test } from 'bun:test'
-import { AWS_GENERATED, AWS_UPGRADE_MAY_ADD, awsInstallationModel, awsJobInterval, isAwsDataVariable } from '../model'
+import type { SsmPlatformSecrets } from '../../aws/ssm'
+import {
+	AWS_CONTROL_VARIABLES,
+	AWS_GENERATED,
+	AWS_PROVIDER_VARIABLES,
+	AWS_UPGRADE_MAY_ADD,
+	awsInstallationModel,
+	awsJobInterval,
+	isAwsDataVariable,
+} from '../model'
 import { awsNetworkOutputs } from '../network'
+import { desiredAwsParameters } from '../parameters'
 import { AWS_PLATFORM_PROXY_HEALTH_PORT, AWS_PLATFORM_PROXY_PORT, AWS_PLATFORM_SERVICE_PORT, awsRuntimeStack } from '../runtime'
+import { platformState } from './platform-fixture'
 
 const model = awsInstallationModel
 
@@ -78,6 +89,45 @@ describe('AWS renders the installation model', () => {
 		}
 		expect(AWS_GENERATED.control.get('FABRIKA_AWS_PROXY_IAM_KEY')).toBe(AWS_GENERATED.iam.get('FABRIKA_IAM_PROXY_KEY'))
 		expect([...AWS_UPGRADE_MAY_ADD]).toEqual(['dataKey'])
+	})
+
+	test("every name a run writes is the model's, a store's coordinate, the operator's mail, or one of AWS's own declared with its kind", async () => {
+		const secrets: SsmPlatformSecrets = {
+			putSecretOnce: async () => true,
+			putSecret: async () => {},
+			readSecret: async (name) => (name.startsWith('/fabrika/platform/database/') ? 'P'.repeat(40) : null),
+			listNames: async () => [],
+		}
+		const mail = new Map([['FABRIKA_EMAIL_PROVIDER', 'smtp']])
+		const desired = await desiredAwsParameters({
+			state: platformState(),
+			environment: 'production',
+			bringUp: {
+				authentication: { passwordEnabled: true, oidc: { issuer: 'https://idp.example.com', clientId: 'c', clientSecret: 's' } },
+				email: { kind: 'provider', variables: mail, secretNames: new Set() },
+			},
+			manifest: { controlTableDigest: 'd'.repeat(64), oauthConfig: { resources: [], hosts: [] }, operationsOAuthResource: 'https://o.example.com/rpc' },
+			release: { repository: 'contember/fabrika-platform', commitSha: 'c'.repeat(40) },
+			baseImage: `docker.io/oven/bun@sha256:${'e'.repeat(64)}`,
+			secrets,
+			signal: new AbortController().signal,
+			log: () => {},
+		})
+		for (const service of PLATFORM_SERVICES) {
+			const written = [...(desired.once.get(service)?.keys() ?? []), ...(desired.derived.get(service)?.keys() ?? [])]
+			const named = new Set(
+				[...model.services[service].environment, ...AWS_PROVIDER_VARIABLES[service]].map((variable) => ('name' in variable ? variable.name : '')),
+			)
+			const stray = written.filter((name) => !named.has(name) && !isAwsDataVariable(service, name) && !mail.has(name))
+			expect({ service, stray }).toEqual({ service, stray: [] })
+		}
+		const control = [...(desired.once.get('control')?.keys() ?? []), ...(desired.derived.get('control')?.keys() ?? [])]
+		expect(control.filter((name) => name.startsWith('FABRIKA_AWS_')).sort()).toEqual(
+			AWS_CONTROL_VARIABLES.map((variable) => ('name' in variable ? variable.name : '')).sort(),
+		)
+		// A derived one is replaced when it differs; the generated proxy key is written once.
+		expect(desired.derived.get('control')?.has('FABRIKA_AWS_SUBNETS')).toBe(true)
+		expect(desired.once.get('control')?.has('FABRIKA_AWS_PROXY_IAM_KEY')).toBe(true)
 	})
 
 	test("a store's coordinates are the model's data: a database's DSN and a bucket's prefix", () => {

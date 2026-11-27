@@ -22,17 +22,50 @@ export const awsInstallationModel: PlatformInstallationModel = platformInstallat
 	},
 })
 
+const derived = (name: string): ModelVariable => ({ kind: 'derived', name, sensitive: false })
+
 /**
- * The AWS provider's own generated variables, beside the model's: Control's copy of IAM's proxy key, which it hands
- * to the namespace proxies. Control's other AWS variables (`FABRIKA_AWS_*`: the cluster, the subnets, the listener, the
- * sources bucket, the namespace proxies' source) and each bucket's `_REGION`, `_CREDENTIALS` and `_ADDRESSING` are
- * derived: every run writes them when they differ.
+ * Control's AWS variables beside the model's (ADR-0092), with the model's kinds. Every one but the proxy key is derived
+ * from the stacks' outputs, the operator's plan or the release, so every run writes it when it differs. Each bucket's
+ * `_REGION`, `_CREDENTIALS` and `_ADDRESSING` are under the model's bucket prefixes (`data`), not here.
+ * `parameters.test.ts` holds the names a run writes to this list.
  */
-export const AWS_GENERATED_VARIABLES: Readonly<Record<PlatformService, readonly ModelVariable[]>> = {
+export const AWS_CONTROL_VARIABLES: readonly ModelVariable[] = checkProviderVariables(awsInstallationModel, 'control', [
+	// Where the applications run (`access.ts`).
+	derived('FABRIKA_AWS_ACCOUNT_ID'),
+	derived('FABRIKA_AWS_REGION'),
+	derived('FABRIKA_AWS_CLUSTER'),
+	derived('FABRIKA_AWS_SOURCES_BUCKET'),
+	// The applications' network (`network.ts`).
+	derived('FABRIKA_AWS_VPC_ID'),
+	derived('FABRIKA_AWS_SUBNETS'),
+	derived('FABRIKA_AWS_TASK_PUBLIC_IP'),
+	derived('FABRIKA_AWS_VPC_CIDR'),
+	derived('FABRIKA_AWS_BALANCER_SUBNET_CIDRS'),
+	// The applications' balancer (`balancers.ts`).
+	derived('FABRIKA_AWS_BALANCER_SECURITY_GROUP'),
+	derived('FABRIKA_AWS_BALANCER_LISTENER'),
+	derived('FABRIKA_AWS_INSTALLATION_HOSTS'),
+	// The image an application's build starts from, and the namespace proxies' source and IAM.
+	derived('FABRIKA_AWS_BASE_IMAGE'),
+	derived('FABRIKA_AWS_PROXY_REPOSITORY'),
+	derived('FABRIKA_AWS_PROXY_COMMIT_SHA'),
+	derived('FABRIKA_AWS_PROXY_IAM_URL'),
+	// IAM's proxy key, which Control hands to the namespace proxies.
+	{ kind: 'generated', name: 'FABRIKA_AWS_PROXY_IAM_KEY', secret: 'proxyKey' },
+])
+
+/** Each task's AWS variables beside the model's: Control's alone. */
+export const AWS_PROVIDER_VARIABLES: Readonly<Record<PlatformService, readonly ModelVariable[]>> = {
 	iam: [],
 	operations: [],
-	control: checkProviderVariables(awsInstallationModel, 'control', [{ kind: 'generated', name: 'FABRIKA_AWS_PROXY_IAM_KEY', secret: 'proxyKey' }]),
+	control: AWS_CONTROL_VARIABLES,
 	proxy: [],
+}
+
+/** The kind of one of a task's AWS variables, or `undefined` for a name it does not declare. */
+export function awsProviderVariableKind(service: PlatformService, name: string): ModelVariable['kind'] | undefined {
+	return AWS_PROVIDER_VARIABLES[service].find((variable) => variableKey(variable) === name)?.kind
 }
 
 /** Each task's generated variables, by name, with the secret each carries: the model's and the AWS provider's own. */
@@ -45,7 +78,7 @@ export const AWS_GENERATED: Readonly<Record<PlatformService, ReadonlyMap<string,
 
 function generatedOf(service: PlatformService): ReadonlyMap<string, keyof InstallationSecrets> {
 	const generated = new Map<string, keyof InstallationSecrets>()
-	for (const variable of [...awsInstallationModel.services[service].environment, ...AWS_GENERATED_VARIABLES[service]]) {
+	for (const variable of [...awsInstallationModel.services[service].environment, ...AWS_PROVIDER_VARIABLES[service]]) {
 		if (variable.kind !== 'generated') continue
 		// A credential the provider makes for itself; the AWS provider makes none.
 		if (variable.secret === undefined) throw new Error(`aws: the ${service} task's generated ${variable.name} has no value of its own here`)
