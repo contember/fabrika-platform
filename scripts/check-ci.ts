@@ -1,11 +1,5 @@
-// `bun run check:ci` runs locally every step `.github/workflows/ci.yml` runs, so a green run here is a green CI run.
-// `release.yml` calls that workflow as its `verify` job, so this is also the gate a tag must pass.
-//
-// After the install, CI's jobs run at once, as on CI's runners: the quality and build steps, the test matrix, the images
-// and the release artifacts, each lane's steps in `ci.yml`'s order. Each job of the test matrix (PostgreSQL major × shard)
-// gets its own throwaway PostgreSQL and SeaweedFS containers on free loopback ports, and the jobs run concurrently, one
-// per available core. A backend the environment already names is used as it is, by one job at a time. What cannot run
-// here — no docker, no npm — is skipped and named in the summary, never silently.
+// `bun run check:ci` runs every step of `.github/workflows/ci.yml` locally, CI's jobs at once, so a green run here is a green
+// CI run; docs/reference/release-process.md ("The same gates locally") says in what order and why.
 // `scripts/__tests__/check-ci.test.ts` fails when these steps and `ci.yml` drift apart.
 
 import { randomUUID } from 'node:crypto'
@@ -89,12 +83,13 @@ export const PROXY_IMAGE_STEPS: readonly CiStep[] = [
 	},
 ]
 
-/** These need npm on PATH, as the CI job gets it from `setup-node`. */
-export const RELEASE_ARTIFACT_STEPS: readonly CiStep[] = [
-	{ job: 'release-artifacts', name: 'Pack public packages', run: 'bun run release:pack --tag=v0.0.0-ci.0' },
+/** These need npm on PATH, as the CI job gets it from `setup-node`. The pack reads the working tree, the others its tarballs. */
+export const RELEASE_PACK_STEP: CiStep = { job: 'release-artifacts', name: 'Pack public packages', run: 'bun run release:pack --tag=v0.0.0-ci.0' }
+export const RELEASE_CHECK_STEPS: readonly CiStep[] = [
 	{ job: 'release-artifacts', name: 'Test tarballs in an isolated consumer', run: 'bun run release:smoke --tag=v0.0.0-ci.0' },
 	{ job: 'release-artifacts', name: 'Verify npm publish inputs', run: 'bun run release:publish --tag=v0.0.0-ci.0 --dry-run' },
 ]
+export const RELEASE_ARTIFACT_STEPS: readonly CiStep[] = [RELEASE_PACK_STEP, ...RELEASE_CHECK_STEPS]
 
 /** The test job's PostgreSQL majors in the gate: the one Zerops runs. `ci.yml`'s nightly run adds 17, which this script does not run. */
 export const POSTGRES_MAJORS: readonly string[] = ['18']
@@ -460,16 +455,21 @@ const run = async (results: StepResult[], skipped: string[]): Promise<void> => {
 	const env = { ...process.env }
 	await runInstall(env, results)
 	const docker = await dockerAvailable()
+	const npm = Bun.which('npm') !== null
 
+	// Each image is built from `git archive HEAD`, so it reads nothing the other jobs write; each is a job of its own.
+	const lanes: Promise<void>[] = docker ? PROXY_IMAGE_STEPS.map((step) => runLane([step], env, results)) : []
+	if (!docker) skipped.push(`the image jobs (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
+	if (!npm) skipped.push(`the release-artifacts job (${RELEASE_ARTIFACT_STEPS.map((step) => step.name).join(', ')}): npm is not on PATH`)
+
+	// Suites write scratch files into the source tree, which the quality steps and the pack walk; these end before tests start.
 	const quality = runLane(QUALITY_STEPS, env, results)
-	// The builds start once the quality steps end, whatever their outcome: the typecheck and the dashboard's build both
-	// rewrite its generated routes, and one would read the file while the other writes it.
-	const build = quality.catch(() => {}).then(() => runLane(BUILD_STEPS, env, results))
-	const lanes: Promise<void>[] = [quality, build, runTestMatrix(env, testBackends(docker, skipped), results)]
-	if (docker) lanes.push(runLane(PROXY_IMAGE_STEPS, env, results))
-	else skipped.push(`the image jobs (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
-	if (Bun.which('npm') !== null) lanes.push(runLane(RELEASE_ARTIFACT_STEPS, env, results))
-	else skipped.push(`the release-artifacts job (${RELEASE_ARTIFACT_STEPS.map((step) => step.name).join(', ')}): npm is not on PATH`)
+	const pack = npm ? runLane([RELEASE_PACK_STEP], env, results) : undefined
+	await Promise.allSettled(pack === undefined ? [quality] : [quality, pack])
+
+	// The builds also follow the quality steps: the typecheck and the dashboard's build both rewrite its generated routes.
+	lanes.push(quality, runTestMatrix(env, testBackends(docker, skipped), results), runLane(BUILD_STEPS, env, results))
+	if (pack !== undefined) lanes.push(pack.then(() => runLane(RELEASE_CHECK_STEPS, env, results)))
 
 	// Every lane runs to its end, as CI's jobs do, so one run names every failure.
 	const failures = (await Promise.allSettled(lanes)).flatMap((lane) =>
