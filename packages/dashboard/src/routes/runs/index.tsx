@@ -3,11 +3,12 @@ import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { QuerySearch } from '../../components/QuerySearch'
+import { RunDuration, RunReview } from '../../components/RunDuration'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api, ApiError, type RunDto } from '../../lib/api'
 import { holdsGlobally, opensApplications, scopedRunReads } from '../../lib/console-access'
-import { fmtAgo, fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
+import { fmtAgo, fmtDate, shortRef, shortSha } from '../../lib/format'
 import type { QueryLanguage } from '../../lib/query-search'
 import { consoleSession } from '../../lib/session'
 
@@ -143,9 +144,12 @@ export default createPage()
 					{runs.map((run) => (
 						<tr key={run.id}>
 							<td>
-								<Link to="runs/detail" params={{ id: run.id }}>
-									<RunStatus status={run.status} />
-								</Link>
+								<div className="cell-stack">
+									<Link to="runs/detail" params={{ id: run.id }}>
+										<RunStatus status={run.status} />
+									</Link>
+									<RunReview run={run} />
+								</div>
 							</td>
 							<td>
 								<span className="linked-value">
@@ -171,7 +175,9 @@ export default createPage()
 								<code>{shortSha(run.commitSha)}</code>
 							</td>
 							<td className="muted small">{run.trigger}</td>
-							<td className="small">{fmtDuration(run.startedAt, run.finishedAt)}</td>
+							<td className="small">
+								<RunDuration run={run} />
+							</td>
 							<td className="muted small" title={fmtDate(run.createdAt)}>{fmtAgo(run.createdAt)}</td>
 						</tr>
 					))}

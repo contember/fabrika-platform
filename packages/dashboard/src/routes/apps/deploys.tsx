@@ -2,10 +2,11 @@ import { createPage, Link } from '@buzola/router'
 import { AppFrame, loadAppFrame, useEnvironmentStates } from '../../components/app/AppFrame'
 import { DeployButton } from '../../components/app/DeployButton'
 import { Icon } from '../../components/Icon'
+import { RunDuration, RunReview } from '../../components/RunDuration'
 import { RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
-import { fmtAgo, fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
+import { fmtAgo, fmtDate, shortRef, shortSha } from '../../lib/format'
 
 // An application's runs, newest first, narrowed to one environment by the address (`?env=`); the global Deploy runs
 // list holds every application's, with its paging.
@@ -67,9 +68,12 @@ export default createPage()
 					{runs.items.map((run) => (
 						<tr key={run.id}>
 							<td>
-								<Link to="runs/detail" params={{ id: run.id }}>
-									<RunStatus status={run.status} />
-								</Link>
+								<div className="cell-stack">
+									<Link to="runs/detail" params={{ id: run.id }}>
+										<RunStatus status={run.status} />
+									</Link>
+									<RunReview run={run} />
+								</div>
 							</td>
 							<td>{run.env}</td>
 							<td>
@@ -78,7 +82,9 @@ export default createPage()
 							<td>
 								<code>{shortSha(run.commitSha)}</code>
 							</td>
-							<td className="muted small nowrap">{fmtDuration(run.startedAt, run.finishedAt)}</td>
+							<td className="muted small nowrap">
+								<RunDuration run={run} />
+							</td>
 							<td className="muted small nowrap" title={fmtDate(run.createdAt)}>{fmtAgo(run.createdAt)}</td>
 						</tr>
 					))}

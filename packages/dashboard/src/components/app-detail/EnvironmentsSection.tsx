@@ -175,11 +175,7 @@ function EnvironmentRow(
 						<ConfirmDialog
 							title="Delete environment"
 							confirmLabel="Delete environment"
-							body={
-								<p>
-									Delete environment <strong>{env.env}</strong> of <strong>{appId}</strong>?
-								</p>
-							}
+							body={<DeleteEnvironmentConsequences appId={appId} env={env} />}
 							onConfirm={remove}
 							onClose={() => setConfirming(false)}
 						/>
@@ -210,6 +206,44 @@ function EnvironmentRow(
 					</td>
 				</tr>
 			)}
+		</>
+	)
+}
+
+/**
+ * What deleting an environment removes and what it leaves, read before it happens. A namespace proxy routes only the
+ * environments the registry lists, so a routed one stops being served at its domain.
+ */
+export function DeleteEnvironmentConsequences({ appId, env }: { appId: string; env: Pick<AppEnvDto, 'env' | 'domain' | 'namespaceId'> }) {
+	const routed = env.namespaceId !== null
+	return (
+		<>
+			<p>
+				Delete environment <strong>{env.env}</strong> of <strong>{appId}</strong>?
+			</p>
+			<p>Goes:</p>
+			<ul>
+				{routed && (
+					<li>
+						{env.domain === null ? "its route: the platform's proxy no longer serves it" : (
+							<>
+								its route: <code>{env.domain}</code> no longer reaches it through the platform
+							</>
+						)};
+					</li>
+				)}
+				<li>its settings here: domain, deploy trigger and placement, so a push no longer deploys {env.env};</li>
+				<li>the keys and credentials the platform handed it;</li>
+				<li>its list of backups (the backup files stay in storage).</li>
+			</ul>
+			<p>Stays:</p>
+			<ul>
+				<li>
+					what runs at the hosting, and its data: it keeps running{routed ? ', unreachable through the platform,' : ''} until you remove it there;
+				</li>
+				<li>its deploy history;</li>
+				<li>secrets and variables set for {env.env} only, and its approval rules: an environment added again as {env.env} starts with them.</li>
+			</ul>
 		</>
 	)
 }

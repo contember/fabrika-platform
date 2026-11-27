@@ -4,7 +4,7 @@
 import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
 import { BuzolaProvider } from '@buzola/router/react'
 import type { RpcFetch } from '@fabrika/app'
-import type { AppDto, AppEnvDto, ConsoleAccessDto, DataOperationDto } from '@fabrika/control-contract'
+import type { AppDto, AppEnvDto, AppSecretDto, ConsoleAccessDto, DataOperationDto } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -20,12 +20,14 @@ import { loadOverview, type OverviewData } from '../lib/overview'
 import dataPage from '../routes/apps/data'
 import appPage from '../routes/apps/detail'
 import appsPage, { ApplicationStates, environmentsFailure, type EnvironmentsRead } from '../routes/apps/index'
+import secretsPage from '../routes/apps/secrets'
 import healthPage from '../routes/operations/health/index'
 
 const pageRegistry = {
 	apps: appsPage.route,
 	'apps/detail': appPage.route,
 	'apps/data': dataPage.route,
+	'apps/secrets': secretsPage.route,
 	'operations/health': healthPage.route,
 }
 
@@ -254,5 +256,60 @@ describe('the console overview', () => {
 		const data = await loadOverview(caller, fetchOverview)
 		const html = attention(data, new Map([[environmentKey('crm', 'prod'), { kind: 'unknown', reason: 'unavailable' }]]))
 		expect(html).toContain('Some checks could not be read')
+	})
+})
+
+const secret = (appId: string, name: string, env: string | null): AppSecretDto => ({
+	appId,
+	env,
+	name,
+	storage: 'vault',
+	valueRef: `vault:${appId}-${name}-${env ?? 'all'}`,
+	createdAt: 0,
+})
+
+/** `fetchOverview`, whose crm holds these secrets; `secretsFail` answers the secrets read with that status instead. */
+const withSecrets = (secrets: AppSecretDto[], secretsFail: number | null = null): RpcFetch => async (url, init) => {
+	const body = requestBody.parse(JSON.parse(String(init?.body)))
+	if (body.method !== 'apps.secrets.list') return fetchOverview(url, init)
+	if (secretsFail !== null) return Response.json({ error: { type: 'error', message: 'no' } }, { status: secretsFail })
+	const { appId } = appInput.parse(body.input)
+	return Response.json({ result: { items: appId === 'crm' ? secrets : [], nextCursor: null } })
+}
+
+describe("the overview's missing secrets", () => {
+	test('a secret set on one environment only is listed as missing on the other, linked to Secrets', async () => {
+		const data = await loadOverview(caller, withSecrets([secret('crm', 'PAYMENT_API_KEY', 'prod'), secret('crm', 'SESSION_KEY', 'prod')]))
+		const html = attention(data, new Map())
+		expect(html).toContain('crm / test: 2 secrets missing')
+		expect(html).toContain('PAYMENT_API_KEY, SESSION_KEY are set on another environment, not on test')
+		expect(html).toContain('href="/apps/crm/secrets"')
+		expect(html).not.toContain('crm / prod: ')
+	})
+
+	test('a secret only a deleted environment held is no gap: no current environment has it', async () => {
+		const data = await loadOverview(caller, withSecrets([secret('crm', 'OLD_KEY', 'stage')]))
+		expect(attention(data, new Map())).not.toContain('missing')
+	})
+
+	test('a value for all environments, or an own value everywhere, leaves no gap', async () => {
+		const data = await loadOverview(
+			caller,
+			withSecrets([secret('crm', 'A', null), secret('crm', 'A', 'prod'), secret('crm', 'B', 'prod'), secret('crm', 'B', 'test')]),
+		)
+		expect(attention(data, new Map())).not.toContain('missing')
+	})
+
+	test('secrets are not read where the caller may not manage them, and a failed read is disclosed', async () => {
+		const scoped: ConsoleCaller = {
+			...caller,
+			access: { ...readingAt('notes', ['secret.manage']), global: ['app.manage', 'namespace.manage', 'deploy.read'] },
+		}
+		const refused = await loadOverview(scoped, withSecrets([secret('crm', 'A', 'prod')]))
+		expect(refused.secrets.get('crm')?.problem).toBe('forbidden')
+		expect(refused.secrets.get('notes')?.problem).toBeNull()
+
+		const failed = await loadOverview(caller, withSecrets([], 500))
+		expect(attention(failed, new Map())).toContain('Some checks could not be read')
 	})
 })

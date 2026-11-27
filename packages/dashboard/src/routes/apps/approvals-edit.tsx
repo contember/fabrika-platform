@@ -32,7 +32,7 @@ export default createPage()
 				{env === undefined
 					? <EmptyState title={`${app.id} has no environment ${params.env}.`} />
 					: !mayDo(access, CONTROL_ACTIONS.ACCESS_APPROVE, { app: app.id, env: env.env })
-					? <EmptyState icon="lock" title="Only a holder of access.approve on this environment changes its rules." />
+					? <EmptyState icon="lock" title="Only a person who may approve on this environment changes its rules." />
 					: !env.protected
 					? <EmptyState title={`Approval is off on ${env.env}.`} body="Turn it on from the Approvals tab; its rules then apply and can be changed here." />
 					: (
