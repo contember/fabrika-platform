@@ -77,8 +77,8 @@ export interface ScheduledJob {
 	readonly command: string
 	/**
 	 * Five-field cron, UTC. A renderer that runs a job as a loop keeps an interval, not a time of day: it accepts every
-	 * minute, every N minutes, and `M H * * *` as every 24 hours from the task's start. No job may rely on the hour it
-	 * runs at.
+	 * minute, every N minutes for an N that divides 60, and `M H * * *` as every 24 hours from the task's start. No job
+	 * may rely on the hour it runs at.
 	 */
 	readonly schedule: string
 }
