@@ -45,6 +45,7 @@ export {
 	refuseMcpClientsVariable,
 } from './mcp'
 export {
+	type AddressOf,
 	checkInstallationModel,
 	checkProviderVariables,
 	type ControlEntry,

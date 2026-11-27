@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { InstallationEmail } from '../email'
 import {
 	checkInstallationModel,
+	checkProviderVariables,
 	type ModelService,
 	type ModelVariable,
 	PLATFORM_SERVICES,
@@ -131,16 +132,17 @@ describe('the installation model', () => {
 		expect(model.services.control.jobs).toEqual([{ command: CONTROL.job, schedule: '*/5 * * * *' }])
 	})
 
-	test('the static environment spells each address at the host the renderer gives', () => {
+	test('the static environment spells each address as the renderer gives it whole', () => {
 		expect(staticEnvironment(model, 'control')).toEqual([
 			['PORT', '3000'],
 			['FABRIKA_CONTROL_ASSETS_DIR', 'packages/dashboard/dist'],
 			['FABRIKA_IAM_RPC_URL', 'http://iam:3000'],
 			['FABRIKA_OPERATIONS_URL', 'http://operations:3000'],
 		])
-		expect(staticEnvironment(model, 'iam', (service) => `${service}.internal`)).toEqual([
+		// A cloud whose services are reached at an ingress with no port, over TLS.
+		expect(staticEnvironment(model, 'iam', (service) => `https://${service.name}.internal`)).toEqual([
 			['PORT', '3000'],
-			['FABRIKA_CONTROL_URL', 'http://control.internal:3000'],
+			['FABRIKA_CONTROL_URL', 'https://control.internal'],
 		])
 		expect(staticEnvironment(model, 'proxy')).toEqual([])
 	})
@@ -173,8 +175,34 @@ describe('checkInstallationModel refuses', () => {
 		expect(() => checkInstallationModel(withService('iam', (service) => ({ ...service, environment: [...service.environment, twice] })))).toThrow(
 			'names PORT twice',
 		)
-		expect(() => checkInstallationModel(withService('iam', (service) => ({ ...service, jobs: [{ command: 'x', schedule: '@daily' }] })))).toThrow(
-			'schedule of another form',
+		for (const schedule of ['@daily', '75 3 * * *', '0 24 * * *', '0 0 0 * *', '0 0 * 13 *', '0 0 * * 8', '*/60 * * * *', '*/0 * * * *']) {
+			expect(() => checkInstallationModel(withService('iam', (service) => ({ ...service, jobs: [{ command: 'x', schedule }] })))).toThrow(
+				'schedule of another form',
+			)
+		}
+		for (const schedule of ['59 23 31 12 7', '*/30 */2 * * *', '0 0 1 1 0']) {
+			expect(() => checkInstallationModel(withService('iam', (service) => ({ ...service, jobs: [{ command: 'x', schedule }] })))).not.toThrow()
+		}
+	})
+})
+
+describe('checkProviderVariables refuses what the model refuses of its own', () => {
+	test('a name the model has, or one given twice', () => {
+		expect(() => checkProviderVariables(model, 'control', [{ kind: 'fixed', name: 'PORT', value: '1' }])).toThrow('named twice')
+		const once: ModelVariable = { kind: 'derived', name: 'FABRIKA_X', sensitive: false }
+		expect(() => checkProviderVariables(model, 'control', [once, once])).toThrow('named twice')
+	})
+
+	test('an address to a service it does not call, a store it does not own, a name of another form, and the mail family', () => {
+		expect(() => checkProviderVariables(model, 'operations', [{ kind: 'address', name: 'FABRIKA_X_URL', service: 'control' }])).toThrow(
+			'which it does not call',
 		)
+		expect(() => checkProviderVariables(model, 'iam', [{ kind: 'data', prefix: 'FABRIKA_X', bucket: 'runLogs' }])).toThrow('which it does not own')
+		expect(() => checkProviderVariables(model, 'iam', [{ kind: 'derived', name: 'fabrika_x', sensitive: false }])).toThrow("not a variable's name")
+		expect(() => checkProviderVariables(model, 'iam', [{ kind: 'bring-up', family: 'email', when: 'email' }])).toThrow('no family')
+	})
+
+	test('a generated credential the provider makes for itself, with no installation secret', () => {
+		expect(checkProviderVariables(model, 'control', [{ kind: 'generated', name: 'FABRIKA_X_TOKEN' }])).toHaveLength(1)
 	})
 })

@@ -44,7 +44,8 @@ export type VariableCondition = 'oidc' | 'email' | 'oauth' | 'provider-option'
  * One variable a service reads, by kind (ADR-0092):
  *
  * - `fixed`: true for every installation, with its value;
- * - `address`: another service's private HTTP address, spelled by the renderer (`http://<host>:<port>`);
+ * - `address`: another service's private address, spelled whole by the renderer (`AddressOf`; `privateAddress` is the
+ *   spelling where a service's name resolves and its own port is dialled);
  * - `data`: a database's DSN under `name`, or a bucket's coordinates under `prefix`, which the provider spells;
  * - `generated`: a secret generated once and shared by every reader of the same `secret`, whose entry in the model's
  *   `secrets` says whether an upgrade that finds it on no reader may generate it (`mint`) or must stop (`refuse`). A
@@ -289,28 +290,36 @@ export const variableKey = (variable: ModelVariable): string => {
 	return variable.family
 }
 
-/** `http://<host>:<port>`: a service's private HTTP address, at the host a renderer gives it. */
-export const privateAddress = (service: ModelService, host: string = service.name): string => {
+/** How a renderer spells a service's private address: the whole address, scheme and port included. */
+export type AddressOf = (service: ModelService) => string
+
+/**
+ * `http://<name>:<first HTTP port>`: a service's private address where the service's name resolves on the private
+ * network and its own port is dialled (Zerops' hostnames, AWS's Service Connect names). A cloud that reaches a service
+ * another way (an ingress port, an `https://` URL) gives its own `AddressOf`.
+ */
+export const privateAddress: AddressOf = (service) => {
 	const port = service.ports.find((candidate) => candidate.http)
 	if (port === undefined) throw new Error(`installation model: ${service.name} has no HTTP port`)
-	return `http://${host}:${port.port}`
+	return `http://${service.name}:${port.port}`
 }
 
 /** A service's `fixed` and `address` variables, in the model's order, as a renderer writes them into its own document. */
 export const staticEnvironment = (
 	model: PlatformInstallationModel,
 	service: PlatformService,
-	host: (service: PlatformService) => string = (name) => name,
+	address: AddressOf = privateAddress,
 ): ReadonlyArray<readonly [string, string]> =>
 	model.services[service].environment.flatMap((variable): Array<readonly [string, string]> => {
 		if (variable.kind === 'fixed') return [[variable.name, variable.value]]
-		if (variable.kind === 'address') return [[variable.name, privateAddress(model.services[variable.service], host(variable.service))]]
+		if (variable.kind === 'address') return [[variable.name, address(model.services[variable.service])]]
 		return []
 	})
 
 /**
- * A provider's own variables on one service (ADR-0092), as given, or an error: each in a variable's form, named once,
- * and none the model already names. They carry the model's kinds, so a renderer and an applier treat them alike.
+ * A provider's own variables on one service (ADR-0092), as given, or an error: none the model already names, each named
+ * once, and each passing the checks the model's own variables pass (an address only to a service it calls, a store
+ * read by its owner). A provider's `generated` variable may carry no `secret`: a credential it makes for itself.
  */
 export const checkProviderVariables = (
 	model: PlatformInstallationModel,
@@ -320,15 +329,49 @@ export const checkProviderVariables = (
 	const taken = new Set(model.services[service].environment.map(variableKey))
 	for (const variable of variables) {
 		const key = variableKey(variable)
-		if (!VARIABLE_NAME.test(key)) throw new Error(`installation model: ${service}'s provider variable ${key} is not a variable's name`)
 		if (taken.has(key)) throw new Error(`installation model: ${service}'s ${key} is named twice`)
 		taken.add(key)
+		checkVariable(model, service, variable, 'provider')
 	}
 	return variables
 }
 
 const VARIABLE_NAME = /^[A-Z][A-Z0-9_]*$/
-const CRON_FIELD = /^(\*|\*\/[1-9]\d*|\d+)$/
+
+/** One variable of `service`, the model's or a provider's: an error naming what breaks it. */
+const checkVariable = (model: PlatformInstallationModel, name: PlatformService, variable: ModelVariable, whose: 'model' | 'provider'): void => {
+	const fail = (message: string): never => {
+		throw new Error(`installation model: ${message}`)
+	}
+	const key = variableKey(variable)
+	if (!('family' in variable) && !VARIABLE_NAME.test(key)) fail(`${name}'s ${key} is not a variable's name`)
+	if ('family' in variable && whose === 'provider') fail(`${name}'s provider variables name no family`)
+	if (variable.kind === 'generated' && variable.secret === undefined && whose === 'model') {
+		fail(`${name}'s ${key} is generated from no installation secret`)
+	}
+	if (variable.kind === 'address' && !model.services[name].calls.includes(variable.service)) {
+		fail(`${name}'s ${key} addresses ${variable.service}, which it does not call`)
+	}
+	if ('database' in variable && model.databases[variable.database].owner !== name) {
+		fail(`${name} reads the ${variable.database} database, which it does not own`)
+	}
+	if ('bucket' in variable && model.buckets[variable.bucket].owner !== name) fail(`${name} reads the ${variable.bucket} bucket, which it does not own`)
+}
+
+/** Each cron field's range: minute, hour, day of month, month, day of week (0 and 7 are Sunday). */
+const CRON_RANGES: ReadonlyArray<readonly [number, number]> = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]]
+
+/** A five-field cron expression of `*`, `*` with a step, or one number, each in its field's range. */
+const isCron = (schedule: string): boolean => {
+	const fields = schedule.split(' ')
+	return fields.length === CRON_RANGES.length && fields.every((field, index) => {
+		const [low, high] = CRON_RANGES[index] ?? [0, -1]
+		if (field === '*') return true
+		const step = /^\*\/([1-9]\d*)$/.exec(field)?.[1]
+		if (step !== undefined) return Number(step) <= high
+		return /^\d+$/.test(field) && Number(field) >= low && Number(field) <= high
+	})
+}
 
 /**
  * `model` as given, or an error naming what breaks it: one public service, the proxy; every variable named once per
@@ -347,23 +390,9 @@ export const checkInstallationModel = (model: PlatformInstallationModel): Platfo
 		const keys = service.environment.map(variableKey)
 		const twice = keys.find((key, index) => keys.indexOf(key) !== index)
 		if (twice !== undefined) fail(`${name} names ${twice} twice`)
-		for (const variable of service.environment) {
-			if ('name' in variable && !VARIABLE_NAME.test(variable.name)) fail(`${name}'s ${variable.name} is not a variable's name`)
-			if ('prefix' in variable && !VARIABLE_NAME.test(variable.prefix)) fail(`${name}'s prefix ${variable.prefix} is not a variable's name`)
-			if (variable.kind === 'generated' && variable.secret === undefined) fail(`${name}'s ${variable.name} is generated from no installation secret`)
-			if (variable.kind === 'address' && !service.calls.includes(variable.service)) {
-				fail(`${name}'s ${variable.name} addresses ${variable.service}, which it does not call`)
-			}
-			if ('database' in variable && model.databases[variable.database].owner !== name) {
-				fail(`${name} reads the ${variable.database} database, which it does not own`)
-			}
-			if ('bucket' in variable && model.buckets[variable.bucket].owner !== name) {
-				fail(`${name} reads the ${variable.bucket} bucket, which it does not own`)
-			}
-		}
+		for (const variable of service.environment) checkVariable(model, name, variable, 'model')
 		for (const job of service.jobs) {
-			const fields = job.schedule.split(' ')
-			if (fields.length !== 5 || !fields.every((field) => CRON_FIELD.test(field))) fail(`${name}'s job ${job.command} has a schedule of another form`)
+			if (!isCron(job.schedule)) fail(`${name}'s job ${job.command} has a schedule of another form`)
 		}
 		if (service.entry === undefined && service.artifact === 'services') fail(`${name} runs from the services artifact with no entry`)
 	}

@@ -6,6 +6,7 @@
 import { generateInstallationSecrets, type ModelVariable, PLATFORM_SERVICES, variableKey } from '@fabrika/installation-init'
 import { describe, expect, test } from 'bun:test'
 import { fakeNamespaceProxySource } from '../../__tests__/fake-platform-source'
+import { desiredServiceEnv, IAM_DATA_KEY_VARIABLE } from '../../deploy'
 import { GENERATED_SECRET_KEYS, installationServiceEnv } from '../../install'
 import { ZEROPS_CONTROL_VARIABLES, ZEROPS_DATA_PLACEMENT, zeropsInstallationModel } from '../model'
 import { fabrikaZeropsYaml, PROXY_HEALTH_PORT, PROXY_PUBLIC_PORTS } from '../setups'
@@ -72,5 +73,29 @@ describe('Zerops renders the installation model', () => {
 			const variables = [...model.services[service].environment, ...(service === 'control' ? ZEROPS_CONTROL_VARIABLES : [])]
 			expect({ service, keys: generated(variables).sort() }).toEqual({ service, keys: [...(GENERATED_SECRET_KEYS.get(service) ?? [])].sort() })
 		}
+	})
+
+	test("a deploy writes exactly Control's derived Zerops variables", () => {
+		const env = desiredServiceEnv(
+			'stage',
+			'project-1',
+			{ hosts: { iam: 'iam.example.com', control: 'console.example.com', operations: 'errors.example.com' }, scheme: 'https', zeropsSubdomain: false },
+			fakeNamespaceProxySource(),
+			undefined,
+			'd'.repeat(64),
+			'px_provisioning',
+		)
+		const written = [...(env.get('control')?.keys() ?? [])].filter((key) => key.startsWith('FABRIKA_ZEROPS_')).sort()
+		expect(written).toEqual(ZEROPS_CONTROL_VARIABLES.filter((variable) => variable.kind === 'derived').map(variableKey).sort())
+	})
+
+	test("the one key a deploy may generate is the model's one secret an upgrade may make", () => {
+		const minted = Object.entries(model.secrets).filter(([, secret]) => secret.upgrade === 'mint').map(([name]) => name)
+		const variables = PLATFORM_SERVICES.flatMap((service) =>
+			model.services[service].environment.flatMap((variable) =>
+				variable.kind === 'generated' && variable.secret !== undefined && minted.includes(variable.secret) ? [`${service}:${variable.name}`] : []
+			)
+		)
+		expect(variables).toEqual([`iam:${IAM_DATA_KEY_VARIABLE}`])
 	})
 })
