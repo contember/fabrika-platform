@@ -54,38 +54,55 @@ envelope ([ADR-0011](0011-static-provider-bundles.md): envelopes only where data
   - `artifact`: which of the release's two build outputs runs it, the workspace (`services`) or the proxy's own
     (`proxy`). How the provider produces it (a Zerops build setup, an image from a Dockerfile) is the provider's.
   - `ports`: each named, with its number and whether it speaks HTTP; the proxy's health listener is a port of its own.
-  - `health`: the port and path of liveness and readiness (`/healthz`), and whether the service migrates at start (a
-    longer start allowance). Probe timings are the provider's.
+  - `health`: the port and path of liveness and readiness (`/healthz`). Probe timings are the provider's; a service
+    with a migrate command gets the longer start allowance its migrations need.
   - `entry`: the migrate command, if any, and the server command, as paths inside the artifact. Control's are its
-    provider composition root's (`packages/control/src/<cloud>/`), so the provider passes them to the builder.
-  - `jobs`: each scheduled job's command and schedule, a five-field cron expression in UTC (what Zerops' crontab,
-    EventBridge Scheduler, a Kubernetes `CronJob` and a Container Apps job take). A renderer that runs a job as a loop
-    keeps an interval, not a time of day: it accepts every minute, every N minutes for an N that divides 60 (cron restarts
-    the count each hour, so another N matches no fixed interval), and `M H * * *` only as every 24 hours from the task's
+    provider composition root's (`packages/control/src/<cloud>/`), so the provider passes them to the builder. The
+    proxy has none: its artifact starts itself.
+  - `jobs`: each scheduled job's command and schedule, a five-field cron expression in UTC, each field in its range
+    (what Zerops' crontab, a Kubernetes `CronJob` and a Container Apps job take; a renderer for EventBridge Scheduler,
+    whose `cron()` has six fields, translates it). **A job runs once per schedule across the service's instances**:
+    Zerops writes `allContainers: false`, a `CronJob` gives it, and a renderer that scales a service must keep it. A
+    renderer that runs a job as a loop beside each task keeps it only while the service runs one task, and keeps an
+    interval, not a time of day: it accepts every minute, every N minutes for an N that divides 60 (cron restarts the
+    count each hour, so another N matches no fixed interval), and `M H * * *` only as every 24 hours from the task's
     start, and refuses the others. So no job may rely on the hour it runs at.
   - `calls`: the services it dials over the private network. A renderer derives its network rules from them (AWS
     security groups, Kubernetes network policies).
-  - `environment`: every variable it reads, by name, each with a **kind** and whether it is sensitive:
+  - `environment`: every variable it reads, by name, each with a **kind**, whether it is sensitive, and a
+    **condition** where it is written only when the installation uses what it configures (the `OIDC_*` variables with
+    OIDC on, the mail transport's with a mail provider, `FABRIKA_IAM_OAUTH_CONFIG` and
+    `FABRIKA_OPERATIONS_OAUTH_RESOURCE` with OAuth over https, a provider's variable with that provider's option). A
+    renderer or an applier writes a conditional variable only when its condition holds; a deploy without it leaves the
+    variable as it is (so the manifest, whose rows then admit no OAuth token, is what turns OAuth off). The kinds:
     - `fixed`: true for every installation (`PORT`, an asset directory), with its value;
-    - `address`: another service's private address (`FABRIKA_IAM_RPC_URL` is `iam`'s), spelled by the renderer;
+    - `address`: another service's private address (`FABRIKA_IAM_RPC_URL` is `iam`'s), spelled whole by the renderer,
+      scheme and port included (Zerops and AWS write `http://<service>:<port>`; a cloud that reaches a service at an
+      ingress or an `https://` URL writes that);
     - `data`: one entry per store the service reads, naming the store and the variable (a database's DSN,
       `FABRIKA_IAM_DATABASE_URL`) or the prefix (a bucket's, `FABRIKA_CONTROL_RUN_LOGS`). The provider spells the
       variables under a prefix: Zerops writes a key pair and an endpoint; AWS writes a region and
       `_CREDENTIALS=container` and no key, because the task role signs;
-    - `generated`: a secret the bring-up generates once and every reader shares (`FABRIKA_IAM_RPC_KEY`), with whether
-      an upgrade may generate it when no reader holds it. IAM's data key alone may. Any other generated value missing
-      stops the run, because a new one would hide a loss: a new vault key orphans every application's secret;
+    - `generated`: a secret the bring-up generates once. A generated variable names the **installation secret** it
+      carries, and readers share the secret, not the name: IAM's `FABRIKA_IAM_PROXY_KEY` and the proxy's
+      `FABRIKA_IAM_KEY` are one key. Each installation secret states whether an upgrade may generate it when no reader
+      holds it: IAM's data key alone may. Any other one missing stops the run, because a new one would hide a loss: a
+      new vault key orphans every application's secret. A provider's own generated variable may name no installation
+      secret: a credential the provider makes for itself at install (Zerops' integration token for Control), which an
+      upgrade never makes;
     - `bring-up`: the operator's choice at install, written once and never by a deploy (the sign-in methods, the mail
       transport);
-    - `derived`: computed from where the installation answers, rewritten by every deploy (`ISSUER`, the console
-      table's digest).
-      The model holds names, kinds and fixed values only. The values of the other kinds stay where they are produced
-      today, in `installationServiceEnvironment` and `deployedServiceEnvironment`, and reach the services through the
-      applier; a test holds the model's names, outside the data prefixes, equal to those two functions' names.
-    - **A provider's own variables** sit beside the model's, each declared with a kind from the same list: Control's
-      cloud coordinates (`FABRIKA_ZEROPS_*`, `FABRIKA_AWS_*`), or a provider's name for a shared generated value
-      (`FABRIKA_AWS_PROXY_IAM_KEY` is IAM's proxy key). The renderer and the applier treat them as the model's, so no
-      provider keeps a second list of kinds.
+    - `derived`: computed by every deploy from the placement (where the installation answers) and the generated
+      values, and rewritten by it (`ISSUER`, the console table's digest, and the IAM proxy secret, which is derived
+      from the provisioning key and so is sensitive).
+      The model holds names, kinds, conditions and fixed values only. The values of the other kinds stay where they
+      are produced today, in `installationServiceEnvironment` and `deployedServiceEnvironment`, and reach the services
+      through the applier. A test holds the names of the kinds those two functions write (`data` outside its prefixes,
+      `generated`, `bring-up`, `derived`) equal to the names they write, with every condition on and off.
+    - **A provider's own variables** sit beside the model's, each declared with a kind from the same list and passing
+      the same checks: Control's cloud coordinates (`FABRIKA_ZEROPS_*`, `FABRIKA_AWS_*`), or a provider's name for a
+      shared generated value (`FABRIKA_AWS_PROXY_IAM_KEY` carries IAM's proxy key). The renderer and the applier treat
+      them as the model's, so no provider keeps a second list of kinds.
   - `public`: true on the proxy alone. The builder refuses a model with another public service
     ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)).
 - **Databases**, logical: `iam`, `control`, `operations`, each owned by one service. They may share a server: their
@@ -102,8 +119,8 @@ envelope ([ADR-0011](0011-static-provider-bundles.md): envelopes only where data
     describes (ADR-0027's invariant);
   - a provider's database setup (users, databases, grants), where it has one, runs before any service moves.
 
-  Each applier keeps them in its own sequence. Zerops deploys IAM, Operations, the proxy and Control one after
-  another. AWS runs the setup, rolls the three services in one stack update, creates the proxy after them (a Service
+  Each applier keeps them in its own sequence. Zerops builds IAM and Operations at once, then the proxy, then
+  Control. AWS runs the setup, rolls the three services in one stack update, creates the proxy after them (a Service
   Connect task resolves only the endpoints that existed when it deployed) and, on a fresh install, redeploys once the
   services that dial each other.
 
@@ -146,8 +163,16 @@ hand fabrika the coordinates instead, and fabrika applies only the release onto 
 
 - Each provider defines its coordinates' schema, read strictly and versioned as `{ provider, version, payload }`,
   because they cross from outside fabrika. A missing or extra field, another provider or another version fails closed.
-  The reader also takes the shape `terraform output -json` prints, so an operator's module needs only outputs named
-  after the coordinates' fields.
+- From Terraform (or OpenTofu), the operator's root module exposes **one output, `fabrika_coordinates`**, whose value
+  is that whole envelope. The reader takes what `terraform output -json` prints, picks that output by name, reads its
+  `value` strictly, and ignores the root module's other outputs, so an operator's module may output whatever else it
+  needs.
+- **Coordinates never carry a secret value.** They hold where a credential lives (a parameter's name, a secret's ARN),
+  never the credential: the applier resolves the reference through the provider's secret mechanism, so the
+  renderer's invariant below holds for the release too. The reader refuses an output marked `sensitive`, because
+  `terraform output -json` prints a sensitive output's value in clear. A credential fabrika needs and did not create
+  (on AWS, the database's master user, whose password the install generates into Parameter Store today) is named by
+  reference in the coordinates.
 - The applier checks the coordinates against the cloud before it uses them (the resources exist and fit together, for
   example the subnets are in the VPC and the database answers from them) and changes nothing it did not render.
 - The installation records where its coordinates came from, in the record it already keeps of the operator's choices
