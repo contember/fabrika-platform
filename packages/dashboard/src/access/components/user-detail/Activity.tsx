@@ -74,7 +74,7 @@ export function UserActivity({ principal, mode, audit, authLog, actors, before }
 						<li key={event.id}>
 							<time dateTime={new Date(event.createdAt * 1000).toISOString()}>{fmtDate(event.createdAt)}</time>
 							<div>
-								<strong>{auditActionLabel(event.action)}</strong>
+								<strong>{auditActionLabel(event.action, event.metadata)}</strong>
 								<p className="muted small">
 									{actor.kind === 'principal' && actor.isUser
 										? <Link to="access/users/detail" params={{ id: actor.principalId }}>{actor.label}</Link>

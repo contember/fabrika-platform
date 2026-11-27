@@ -47,9 +47,26 @@ describe("Control's audit events", () => {
 		expect(auditActionLabel('control.something.new')).toBe('control.something.new')
 	})
 
-	test("an approved request's execution says when it failed; another action with a `state` of its own does not", () => {
+	test("an approved request's execution says when it failed or its outcome is unknown", () => {
 		expect(auditActionLabel('apps.secrets.put', { state: 'unknown' })).toBe('Approved request: secret set (outcome unknown)')
-		expect(auditActionLabel('app.env.suspend', { mode: 'closed', operationId: 'op-1', state: 'failed' })).toBe('Environment taken offline')
+	})
+
+	test("a suspension reads from its data operation's state whether the mode took effect", () => {
+		expect(auditActionLabel('app.env.suspend', { mode: 'closed', operationId: 'op-1', state: 'succeeded' })).toBe('Environment taken offline')
+		expect(auditActionLabel('app.env.suspend', { mode: 'closed', operationId: 'op-1', state: 'failed' })).toBe('Taking the environment offline failed')
+		expect(auditActionLabel('app.env.suspend', { mode: 'closed', operationId: 'op-1', state: 'running' })).toBe(
+			'Environment going offline, not yet confirmed',
+		)
+		expect(auditActionLabel('app.env.resume', { mode: 'open', operationId: null })).toBe('Environment back online')
+		expect(auditActionLabel('app.env.resume', { mode: 'open', operationId: 'op-2', state: 'failed' })).toBe(
+			'Bringing the environment back online failed',
+		)
+	})
+
+	test('a deploy a non-person asked for reads as requested; every request kind Control executes has a label', () => {
+		expect(auditActionLabel('deploy.trigger', { appId: 'notes', env: 'prod', requested: true })).toBe('Deploy requested')
+		expect(auditActionLabel('vault.delete', { state: 'executed' })).toBe('Approved request: secret deleted')
+		expect(auditActionLabel('apps.environments.resume', { state: 'failed' })).toBe('Approved request: environment back online (failed)')
 	})
 
 	test("the subject is the environment, secret or variable the event's id names, else the application and environment of its metadata", () => {

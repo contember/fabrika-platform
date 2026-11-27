@@ -65,7 +65,7 @@ const ACTION_LABELS = new Map<string, string>([
 	['iam.oauth_registry.import', 'OAuth client list imported'],
 ])
 
-/** Control's own events (its use cases audit through IAM), and an approved request's execution, named by its procedure. */
+/** Control's own events: its use cases audit through IAM. A label says only what the event alone proves. */
 const CONTROL_ACTION_LABELS = new Map<string, string>([
 	['app.create', 'Application registered'],
 	['app.update', 'Application source changed'],
@@ -87,7 +87,7 @@ const CONTROL_ACTION_LABELS = new Map<string, string>([
 	['data.backups.schedule', 'Daily backups changed'],
 	['namespace.create', 'Namespace created'],
 	['namespace.adopt', 'Namespace adopted'],
-	['namespace.reconcile', 'Namespace repaired'],
+	['namespace.reconcile', 'Namespace repair queued'],
 	['namespace.republish', 'Namespace proxy republished'],
 	['namespace.update', 'Namespace changed'],
 	['namespace.remove', 'Namespace removed'],
@@ -96,7 +96,7 @@ const CONTROL_ACTION_LABELS = new Map<string, string>([
 	['source.connection.handoff', 'Source connection handed to GitHub'],
 	['source.connection.connected', 'Source connection connected'],
 	['source.connection.cancel', 'Source connection cancelled'],
-	['source.connection.repair', 'Source connection repaired'],
+	['source.connection.repair', 'Source connection repair attempted'],
 	['source.connection.reconcile', 'Source connection checked'],
 	['source.workspace.create', 'Agent workspace created'],
 	['source.workspace.commit', 'Agent workspace changed'],
@@ -105,14 +105,20 @@ const CONTROL_ACTION_LABELS = new Map<string, string>([
 	['dev.bind', 'Dev sandbox started'],
 	['dev.checks', 'Dev sandbox checks requested'],
 	['dev.reset', 'Dev sandbox reset'],
+])
+
+/** An approved request's execution, audited under its procedure with the state it ended in. */
+const APPROVED_REQUEST_LABELS = new Map<string, string>([
 	['apps.update', 'Approved request: application source changed'],
 	['apps.environments.put', 'Approved request: environment saved'],
 	['apps.environments.rotateTokenKey', 'Approved request: token key rotation'],
 	['apps.environments.suspend', 'Approved request: environment taken offline'],
+	['apps.environments.resume', 'Approved request: environment back online'],
 	['apps.secrets.put', 'Approved request: secret set'],
 	['apps.secrets.delete', 'Approved request: secret deleted'],
 	['vault.set', 'Approved request: secret set'],
 	['vault.rotate', 'Approved request: secret rotated'],
+	['vault.delete', 'Approved request: secret deleted'],
 	['apps.variables.put', 'Approved request: variable set'],
 	['apps.variables.delete', 'Approved request: variable deleted'],
 	['data.backups.setSchedule', 'Approved request: daily backups changed'],
@@ -123,9 +129,8 @@ const CONTROL_ACTION_LABELS = new Map<string, string>([
 ])
 
 /**
- * The fields of a Control event's metadata a label or a subject reads, each parsed on its own: Control's events carry
- * other fields under the same names (a suspension's `state` is its data operation's), and one of another type must not
- * drop the rest.
+ * The fields of a Control event's metadata a label or a subject reads, each parsed on its own, so one of another type
+ * does not drop the rest. `state` means what the action makes it: a request execution's or a data operation's.
  */
 const controlMetadata = z.object({
 	appId: z.string().optional().catch(undefined),
@@ -133,10 +138,11 @@ const controlMetadata = z.object({
 	decision: z.enum(['approve', 'reject']).optional().catch(undefined),
 	partial: z.boolean().optional().catch(undefined),
 	cancelled: z.boolean().optional().catch(undefined),
+	requested: z.boolean().optional().catch(undefined),
 	daily: z.boolean().optional().catch(undefined),
 	from: z.boolean().optional().catch(undefined),
 	to: z.boolean().optional().catch(undefined),
-	state: z.enum(['executed', 'failed', 'unknown']).optional().catch(undefined),
+	state: z.string().optional().catch(undefined),
 })
 
 type ControlMetadata = z.infer<typeof controlMetadata>
@@ -146,16 +152,12 @@ function parseControlMetadata(metadata: unknown): ControlMetadata {
 	return parsed.success ? parsed.data : {}
 }
 
-/** An approved request's execution, audited under its procedure with the state it ended in. */
-const APPROVED_REQUEST_ACTIONS = new Set(
-	[...CONTROL_ACTION_LABELS.keys()].filter((action) => CONTROL_ACTION_LABELS.get(action)?.startsWith('Approved request')),
-)
-
 /** A label that depends on what the event did, where its metadata says; `null` falls back to the action's own. */
 function controlOutcomeLabel(action: string, label: string, metadata: ControlMetadata): string | null {
 	switch (action) {
 		case 'deploy.trigger':
-			return metadata.cancelled === true ? 'Deploy cancelled' : null
+			if (metadata.cancelled === true) return 'Deploy cancelled'
+			return metadata.requested === true ? 'Deploy requested' : null
 		case 'access.approve':
 			if (metadata.decision === 'reject') return 'Change rejected'
 			if (metadata.decision === 'approve') return metadata.partial === true ? 'Change approved by the first of two' : 'Change approved'
@@ -166,8 +168,15 @@ function controlOutcomeLabel(action: string, label: string, metadata: ControlMet
 			return null
 		case 'data.backups.schedule':
 			return metadata.daily === undefined ? null : metadata.daily ? 'Daily backups turned on' : 'Daily backups turned off'
+		// Audited before the use case answers; the data operation's state says whether the mode took effect.
+		case 'app.env.suspend':
+			if (metadata.state === 'failed') return 'Taking the environment offline failed'
+			return metadata.state === 'running' ? 'Environment going offline, not yet confirmed' : null
+		case 'app.env.resume':
+			if (metadata.state === 'failed') return 'Bringing the environment back online failed'
+			return metadata.state === 'running' ? 'Environment coming back online, not yet confirmed' : null
 	}
-	if (!APPROVED_REQUEST_ACTIONS.has(action)) return null
+	if (!APPROVED_REQUEST_LABELS.has(action)) return null
 	if (metadata.state === 'failed') return `${label} (failed)`
 	if (metadata.state === 'unknown') return `${label} (outcome unknown)`
 	return null
@@ -215,7 +224,7 @@ export function auditActionLabel(action: string, metadata?: unknown): string {
 		const label = reason === null ? undefined : REVOCATION_LABELS.get(reason)
 		if (label !== undefined) return label
 	}
-	const control = CONTROL_ACTION_LABELS.get(action)
+	const control = CONTROL_ACTION_LABELS.get(action) ?? APPROVED_REQUEST_LABELS.get(action)
 	if (control !== undefined) return controlOutcomeLabel(action, control, parseControlMetadata(metadata)) ?? control
 	return ACTION_LABELS.get(action) ?? action
 }
