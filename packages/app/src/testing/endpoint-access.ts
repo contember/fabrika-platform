@@ -143,7 +143,7 @@ export interface EndpointAccessOptions {
 	/**
 	 * The file every case of an endpoint sends in a file field instead of the kit's sample, by endpoint id and input
 	 * field: a file of the application's repository that a handler inspecting the content accepts (a valid package). Its
-	 * type is the first of the field's kind that its bytes are; a file of none of them throws. `files` of the fixtures.
+	 * type is the first of the field's kind that its bytes are; a file of none of them throws.
 	 */
 	readonly files?: Readonly<Record<string, Readonly<Record<string, URL>>>>
 	/**
@@ -152,21 +152,21 @@ export interface EndpointAccessOptions {
 	 * the access form, and the endpoint's own case gets it as `{ status: 400 }` instead of failing; so does the other
 	 * scope's request a leak case makes first. The own scope's answer of a leak case, and a global or capability case,
 	 * still throw on it (an answer that holds nothing proves no isolation), so does any other 400, and an input the schema
-	 * refuses (`validation`) always does. `refusals` of the fixtures.
+	 * refuses (`validation`) always does.
 	 */
 	readonly refusals?: Readonly<Record<string, readonly string[]>>
 	/**
 	 * Known values for text columns of the row the endpoint addresses (the row of the table that owns its dimension), by
 	 * endpoint id: the value in the own scope's row, and `<value>-other` in the other scope's, which counts among the
 	 * other scope's values a leak shows. For a handler whose rule ties a column to the input or a file fixture (a package
-	 * that names the skill's slug). `pins` of the fixtures.
+	 * that names the skill's slug).
 	 */
 	readonly pins?: Readonly<Record<string, Readonly<Record<string, string>>>>
 	/**
 	 * The rows of application tables that the caller of each global case holds, by table, each with its columns: the
 	 * caller's own record a handler looks up before it answers (a person's card bound to the account). A column whose
 	 * value is `fabrika:caller` (`GENERATED_CALLER`) gets the caller's id. Every global case asks as one principal,
-	 * whose rows are seeded before its first case and kept for the kit's life. `callerRows` of the fixtures.
+	 * whose rows are seeded before its first case and kept for the kit's life.
 	 */
 	readonly callerRows?: AppRows
 }

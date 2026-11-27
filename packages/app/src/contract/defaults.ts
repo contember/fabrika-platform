@@ -305,26 +305,26 @@ export function spaPrefixRowId(mount: string): string {
 }
 
 /**
- * The value a generated endpoint access case sends in an input field that names a member the handler looks up
- * (`members` of `endpoint-access.fixtures.ts`); the endpoint access kit replaces it with a real member of the directory.
+ * The value an endpoint access case sends in an input field that names a member the handler looks up
+ * (`LeakSweepOptions.inputs`, or a case's own input); the endpoint access kit replaces it with a real member of the directory.
  */
 export const GENERATED_MEMBER = 'fabrika:member'
 
 /**
- * The value a generated endpoint access case sends in an input field that names an invitation the handler cancels
- * (`invitations` of `endpoint-access.fixtures.ts`); the endpoint access kit replaces it with one open in the target's value.
+ * The value an endpoint access case sends in an input field that names an invitation the handler cancels
+ * (`LeakSweepOptions.inputs`, or a case's own input); the endpoint access kit replaces it with one open in the target's value.
  */
 export const GENERATED_INVITATION = 'fabrika:invitation'
 
 /**
- * The value a generated endpoint access case sends in an input field that names a share link the handler revokes
- * (`links` of `endpoint-access.fixtures.ts`); the endpoint access kit replaces it with one the case's caller issued.
+ * The value an endpoint access case sends in an input field that names a share link the handler revokes
+ * (`LeakSweepOptions.inputs`, or a case's own input); the endpoint access kit replaces it with one the case's caller issued.
  */
 export const GENERATED_LINK = 'fabrika:link'
 
 /**
- * The prefix of the value a generated endpoint access case sends in an input field that names a row lying in its object
- * or its list (`rows` of `endpoint-access.fixtures.ts`), followed by the row's table: `fabrika:row:note_comments`. The
+ * The prefix of the value an endpoint access case sends in an input field that names a row lying in its object
+ * or its list (`LeakSweepOptions.inputs`, or a case's own input), followed by the row's table: `fabrika:row:note_comments`. The
  * endpoint access kit seeds one such row in each scope and sends that scope's key.
  */
 export const GENERATED_ROW_PREFIX = 'fabrika:row:'
@@ -333,13 +333,13 @@ export const GENERATED_ROW_PREFIX = 'fabrika:row:'
 export const GENERATED_ROW_CAPABILITY = '@'
 
 /**
- * The prefix of the value a generated endpoint access case sends in a file field, followed by the field's file kind:
+ * The prefix of the value an endpoint access case sends in a file field, followed by the field's file kind:
  * `fabrika:file:attachments`. The endpoint access kit sends a small file of the kind's first type it can write in its place.
  */
 export const GENERATED_FILE_PREFIX = 'fabrika:file:'
 
 /**
- * The value of a column of a caller row (`callerRows` of `endpoint-access.fixtures.ts`): the endpoint access kit writes
+ * The value of a column of a caller row (`EndpointAccessOptions.callerRows`): the endpoint access kit writes
  * the id of the case's caller there, so a handler that looks up the caller's own record (`ctx.principal.id`) finds it.
  */
 export const GENERATED_CALLER = 'fabrika:caller'

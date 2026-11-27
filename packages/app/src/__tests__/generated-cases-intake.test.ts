@@ -1,4 +1,4 @@
-// The generated tests' kits over a public intake application: application tables a public procedure writes (one a
+// The isolation kits over a public intake application: application tables a public procedure writes (one a
 // queue), a public procedure with a challenge, and a `scan: true` file kind. The policy probe compiles against the
 // policies beside them; the endpoint access kit boots without the challenge's secret and site key or an SPA mount's
 // public variable, which no case uses, and its scanner passes the files it seeds. Skips cleanly when
@@ -68,7 +68,7 @@ const guarded = app.contract((c) => ({
 }))
 
 if (postgres !== null) {
-	describe('the generated tests of a public intake', () => {
+	describe('the isolation kits over a public intake', () => {
 		test('a policy probe of a table beside the tables public procedures write compiles and isolates', async () => {
 			const kit = policyIsolationKit(intakeContract, tables, 'candidates', postgres)
 			expect((await kit.get('own')).status).toBe(200)
