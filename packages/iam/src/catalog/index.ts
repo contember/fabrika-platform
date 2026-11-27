@@ -3,6 +3,7 @@
 // translation fails the typecheck.
 
 import type { IamMailCatalog, Locale } from '@fabrika/auth-core'
+import type { ControlCliPreset } from '@fabrika/control-contract'
 import type { AuthFailure } from '../auth/failure'
 import type { PasswordProblem } from '../password-policy'
 import { cs } from './cs'
@@ -131,6 +132,25 @@ export interface PageText {
 		readonly alreadyEnded: string
 		/** More grants are live than the page lists; `shown` is how many it lists. */
 		readonly more: (shown: number) => string
+		/** The accessible name of the links to the page's sections. */
+		readonly onThisPage: string
+		/** The column of who holds a grant: an agent, the command-line client or another client. */
+		readonly holder: string
+		/** When a grant last renewed its access; `notRenewed` when it has not since its approval. */
+		readonly lastActive: string
+		readonly notRenewed: string
+		readonly lastActiveText: string
+		/** The disclosure of a grant's endpoints and raw scopes. */
+		readonly details: string
+		readonly endpoints: string
+		/** What a command-line grant's preset lets it do, in words; `app` is the application it is narrowed to, if any. */
+		readonly cliPreset: (preset: ControlCliPreset, app: string | null) => string
+		/** A grant's revoke button, named for a screen reader by what it revokes. */
+		readonly revokeLabel: (holder: string, reaches: string, allowed: string) => string
+		/** The confirmation a revocation asks first; the dialog lists when the grant was allowed and last active under it. */
+		readonly revokeTitle: string
+		readonly revokeConfirm: (holder: string, reaches: string) => string
+		readonly cancel: string
 	}
 	/**
 	 * A person's passkeys (WebAuthn), on IAM's own pages: the section of the account page, the pages that add and remove
@@ -144,6 +164,8 @@ export interface PageText {
 		readonly lastUsed: string
 		readonly neverUsed: string
 		readonly remove: string
+		/** A passkey's remove button, named for a screen reader by the passkey. */
+		readonly removeLabel: (label: string) => string
 		readonly addTitle: string
 		readonly label: string
 		readonly labelHint: string

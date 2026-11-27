@@ -77,16 +77,25 @@ browserTest(
 
 		await step('the account page lists the grant, and revoking it removes it', {
 			intent: "the person's own page shows what acts as them and ends it",
-			manual: 'Open /auth/account on IAM. Under "Connected agents and devices", choose "Revoke" next to "The fabrika command-line client".',
+			manual:
+				'Open /auth/account on IAM. Under "Connected agents and devices", choose "Revoke" in the row of "The fabrika command-line client", then "Cancel" in the dialog that asks; the row stays. Choose "Revoke" again, then "Revoke" in the dialog.',
 		}, async () => {
 			await getPage().goto(`${IAM_URL}/auth/account`)
 			await expectOnIam('/auth/account')
 			await expect(byRole('heading', 'Your account', { exact: true, level: 1 })).toBeVisible()
 			// The page lists newest first, so the first match is this run's grant; a reused stack may still hold an earlier run's.
-			const items = getPage().getByRole('listitem').filter({ hasText: 'The fabrika command-line client' }).filter({ hasText: resource })
+			const items = getPage().getByRole('row').filter({ hasText: 'The fabrika command-line client' }).filter({ hasText: resource })
 			await expect(items.first()).toBeVisible()
 			listedBefore = await items.count()
-			await items.first().getByRole('button', { name: 'Revoke', exact: true }).click()
+			// The row's button names what it revokes; the dialog asks before anything is posted.
+			const revoke = items.first().getByRole('button', { name: /^Revoke The fabrika command-line client at / })
+			// Cancel posts nothing: the row stays.
+			await revoke.click()
+			await getPage().getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click()
+			await expect(getPage().getByRole('dialog')).toBeHidden()
+			await expect(items).toHaveCount(listedBefore)
+			await revoke.click()
+			await getPage().getByRole('dialog').getByRole('button', { name: 'Revoke', exact: true }).click()
 			await expect(getPage().getByRole('status')).toHaveText('Access revoked. It stops within five minutes.')
 			await expect(items).toHaveCount(listedBefore - 1)
 		})
@@ -106,7 +115,7 @@ browserTest(
 		})
 
 		await invariant('a revoked grant is no longer listed on the account page', async () => {
-			const items = getPage().getByRole('listitem').filter({ hasText: 'The fabrika command-line client' }).filter({ hasText: resource })
+			const items = getPage().getByRole('row').filter({ hasText: 'The fabrika command-line client' }).filter({ hasText: resource })
 			await expect(items).toHaveCount(listedBefore - 1)
 		})
 	},

@@ -985,7 +985,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   with the label of the passkey that confirmed it (or that it was since removed). The same-origin
   POST revokes a grant by id with `revokeOwnGrant`, whose UPDATE names the person, so another person's id, an unknown
   one and a spent one all answer "already ended" and change nothing. A revocation writes `iam.oauth.grant.revoke` under
-  the person, `reason: 'owner'`, in its own statement. Words come from the catalog in the person's language.
+  the person, `reason: 'owner'`, in its own statement. Words come from the catalog in the person's language. The page
+  is the console's wide frame (`htmlPage` `layout: 'workspace'`): passkeys first, the grants grouped by what they reach,
+  each with its last renewal (`lastRenewed`, the latest spent refresh token), and a revocation asks in a `<dialog>`
+  before it posts (`CONFIRM_SCRIPT`; a browser without `<dialog>` posts at once, as before).
 - **THE CLIENT'S DOCUMENT, NEVER THE REQUEST, PICKS HOW THE CLIENT AUTHENTICATES** (`oauth-client-auth.ts`).
   A `none` document is a public client and is refused if it sends an assertion; a `private_key_jwt` document
   (ChatGPT) must send a JWT assertion at `/oauth/token` and `/oauth/revoke`, verified against the `jwks_uri`

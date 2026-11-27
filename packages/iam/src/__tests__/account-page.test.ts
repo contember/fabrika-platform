@@ -188,9 +188,11 @@ for (const engine of engines) {
 			expect(html).toContain('Acts as you, including changes')
 			expect(html).toContain(a.agentOrigin)
 			expect(html).toContain('The fabrika command-line client')
-			// The console's resources read as the device page names them, not as the console's app id.
-			expect(html).toContain('<strong>Console, Operations</strong>')
-			expect(html).toContain('<code>deploy:alpha</code>')
+			// The console's resources read as the device page names them, not as the console's app id: the group's name.
+			expect(html).toContain('<th colspan="5" scope="rowgroup">Console, Operations <span class="count">1</span></th>')
+			// A console preset reads in words; its name stays in the row's details.
+			expect(html).toContain('<span class="line">Reads and deploys alpha</span>')
+			expect(html).toContain('<dt>Scopes</dt><dd><code>deploy:alpha</code></dd>')
 			const listed = Object.entries(a.ids).filter(([, id]) => html.includes(id)).map(([name]) => name)
 			expect(listed).toEqual(['agent', 'cli'])
 			expect(html).not.toContain('not yours')
@@ -260,13 +262,114 @@ for (const engine of engines) {
 			)
 			await confirmed(markup, 'markup')
 			const html = await (await a.get()).text()
-			expect(html).toContain('<p>Confirmed with the passkey “&lt;b&gt;Key&lt;/b&gt;”: 2026-01-02 03:04 UTC</p>')
+			expect(html).toContain('<span class="line">Confirmed with the passkey “&lt;b&gt;Key&lt;/b&gt;”: 2026-01-02 03:04 UTC</span>')
 			expect(html).not.toContain('<b>Key</b>')
-			expect(html).toContain('<p>Confirmed with the passkey “Laptop”: 2026-01-02 03:04 UTC</p>')
-			expect(html).toContain('<p>Confirmed with a passkey you have since removed: 2026-01-02 03:04 UTC</p>')
-			expect(html).toContain('<p>Confirmed with a passkey: 2026-01-02 03:04 UTC</p>')
+			expect(html).toContain('<span class="line">Confirmed with the passkey “Laptop”: 2026-01-02 03:04 UTC</span>')
+			expect(html).toContain('<span class="line">Confirmed with a passkey you have since removed: 2026-01-02 03:04 UTC</span>')
+			expect(html).toContain('<span class="line">Confirmed with a passkey: 2026-01-02 03:04 UTC</span>')
 			// The grant no passkey confirmed says nothing of one.
 			expect(html.match(/Confirmed with/g)).toHaveLength(4)
+		})
+
+		test('groups the grants by what they reach, tells similar ones apart by when each was last active, and folds the endpoints', async () => {
+			const a = await accountFixture(engine.repositories())
+			const at = Date.UTC(2026, 0, 2, 3, 4) / 1000
+			const similar = (created: number) =>
+				grant(a.repositories, {
+					principal_id: a.person,
+					session_id: a.f.sessionId,
+					client_id: OAUTH_CLI_CLIENT_ID,
+					app: CONTROL_APP_ID,
+					resource: `https://console.example.test${CONTROL_RPC_PATH}`,
+					scopes: '["deploy:alpha"]',
+					created_at: created,
+					expires_at: unixNow() + 3600,
+				})
+			const renewedOne = await similar(at)
+			const idleOne = await similar(at + 60)
+			// A rotation spends the previous refresh token: the latest spend is when the grant was last active.
+			for (const [index, usedAt] of [at + 600, at + 7200].entries()) {
+				await a.repositories.oauth.insertRefreshToken({ token_hash: `renewed-${a.tag}-${index}`, grant_id: renewedOne, expires_at: unixNow() + 3600 })
+				await a.repositories.oauth.consumeRefreshToken(`renewed-${a.tag}-${index}`, usedAt)
+			}
+			await a.repositories.oauth.insertRefreshToken({ token_hash: `idle-${a.tag}`, grant_id: idleOne, expires_at: unixNow() + 3600 })
+			const html = await (await a.get()).text()
+			const row = (id: string) => {
+				const start = html.lastIndexOf('<tr>', html.indexOf(`value="${id}"`))
+				return html.slice(start, html.indexOf('</tr>', start))
+			}
+			expect(row(renewedOne)).toContain('data-label="Last active">2026-01-02 05:04 UTC</td>')
+			expect(row(idleOne)).toContain('data-label="Last active">Not since approval</td>')
+			expect(row(idleOne)).toContain('data-label="Allowed">2026-01-02 03:05 UTC</td>')
+			// One group per application, its rows newest first; the endpoint and the raw scopes sit in the row's details.
+			expect(html.match(/scope="rowgroup">Console </g)).toHaveLength(1)
+			expect(html).toContain('<th colspan="5" scope="rowgroup">Console <span class="count">2</span></th>')
+			expect(html.indexOf(`value="${idleOne}"`)).toBeLessThan(html.indexOf(`value="${renewedOne}"`))
+			expect(row(a.ids.agent)).toMatch(
+				new RegExp(`<details><summary>Details</summary><dl><dt>Addresses it can call</dt><dd><code>${a.agentOrigin}</code></dd>`),
+			)
+		})
+
+		test('a scope that is not a console preset shows as it is', async () => {
+			const a = await accountFixture(engine.repositories())
+			const odd = await grant(a.repositories, {
+				principal_id: a.person,
+				session_id: a.f.sessionId,
+				client_id: OAUTH_CLI_CLIENT_ID,
+				app: CONTROL_APP_ID,
+				resource: `https://console.example.test${CONTROL_RPC_PATH}`,
+				scopes: '["deploy:alpha","audit:<b>"]',
+			})
+			const html = await (await a.get()).text()
+			const start = html.lastIndexOf('<tr>', html.indexOf(`value="${odd}"`))
+			const row = html.slice(start, html.indexOf('</tr>', start))
+			expect(row).toContain('<span class="chips"><code class="chip">deploy:alpha</code><code class="chip">audit:&lt;b&gt;</code></span>')
+			expect(row).not.toContain('class="line"')
+		})
+
+		test('a revocation lands on the grants with its outcome there', async () => {
+			const a = await accountFixture(engine.repositories())
+			const response = await a.revoke(a.ids.agent)
+			expect(response.headers.get('location')).toBe(`${ACCOUNT_PATH}?done=revoked#connections`)
+			const html = await (await a.get(true, `${ACCOUNT_PATH}?done=revoked`)).text()
+			expect(html.indexOf('id="connections"')).toBeLessThan(html.indexOf('role="status"'))
+		})
+
+		test('asks before a revocation, names what it revokes, and puts the passkeys first', async () => {
+			const a = await accountFixture(engine.repositories())
+			const html = await (await a.get()).text()
+			const allowed = (await a.repositories.oauth.grant(a.ids.agent))?.created_at ?? 0
+			const when = `${new Date(allowed * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC`
+			const app = `notes-${a.tag}@prod`
+			expect(html).toContain(
+				`data-confirm="Agent “release bot”: access to ${app} ends within five minutes. What it already changed stays." data-confirm-detail="Allowed: ${when}\nLast active: Not since approval"`,
+			)
+			expect(html).toContain(`aria-label="Revoke Agent “release bot” at ${app}, allowed ${when}">Revoke</button>`)
+			expect(html).toContain('<dialog id="revoke-dialog"')
+			// Revoke is quiet: no revoke button is the page's filled one, which is the passkey form's.
+			expect(html.match(/<button type="submit" class="danger small"/g)).toHaveLength(2)
+			expect(html.indexOf('id="passkeys"')).toBeLessThan(html.indexOf('id="connections"'))
+			expect(html).toContain('<a href="#passkeys">Passkeys <span class="count">0</span></a>')
+			expect(html).toContain('<main class="workspace">')
+		})
+
+		test("escapes an agent's own name in the confirmation and the button's name", async () => {
+			const a = await accountFixture(engine.repositories())
+			const id = await grant(a.repositories, {
+				principal_id: a.person,
+				session_id: a.f.sessionId,
+				client_id: AGENT_CLIENT_ID,
+				app: `notes-${a.tag}@prod`,
+				resource: a.agentOrigin,
+				scopes: '["read"]',
+				agent_label: '"><b>x</b>',
+			})
+			const html = await (await a.get()).text()
+			const start = html.lastIndexOf('<tr>', html.indexOf(`value="${id}"`))
+			const row = html.slice(start, html.indexOf('</tr>', start))
+			expect(row).toContain('data-confirm="Agent “&quot;&gt;&lt;b&gt;x&lt;/b&gt;”: access to')
+			expect(row).toContain('aria-label="Revoke Agent “&quot;&gt;&lt;b&gt;x&lt;/b&gt;” at')
+			expect(row).not.toContain('<b>x</b>')
 		})
 
 		test("the person's own language wins over the browser's", async () => {

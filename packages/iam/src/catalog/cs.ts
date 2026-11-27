@@ -166,6 +166,30 @@ export const cs: Catalog = {
 			revoked: 'Přístup odvolán. Přestane fungovat do pěti minut.',
 			alreadyEnded: 'Tento přístup už skončil.',
 			more: (shown) => `Zobrazeno ${shown} nejnovějších.`,
+			onThisPage: 'Na této stránce',
+			holder: 'Agent nebo zařízení',
+			lastActive: 'Naposledy aktivní',
+			notRenewed: 'Od schválení ne',
+			lastActiveText: 'Naposledy aktivní je chvíle posledního obnovení přístupu; během používání se obnovuje každých pět minut.',
+			details: 'Podrobnosti',
+			endpoints: 'Adresy, které může volat',
+			cliPreset: (preset, app) => {
+				const target = app ?? 'každou aplikaci, kterou smíte'
+				switch (preset) {
+					case 'read':
+						return `Čte ${target} a nic nemění`
+					case 'deploy':
+						return `Čte a nasazuje ${target}`
+					case 'operate':
+						return `Nasazuje ${target} a spravuje její tajné hodnoty a nastavení`
+					case 'create':
+						return 'Registruje aplikace a mění nebo maže ty, které smíte spravovat'
+				}
+			},
+			revokeLabel: (holder, reaches, allowed) => `Odvolat ${holder} – ${reaches}, povoleno ${allowed}`,
+			revokeTitle: 'Odvolat tento přístup?',
+			revokeConfirm: (holder, reaches) => `${holder}: přístup k ${reaches} skončí do pěti minut. Co už bylo změněno, zůstává.`,
+			cancel: 'Zrušit',
 		},
 		passkeys: {
 			title: 'Přístupové klíče',
@@ -175,6 +199,7 @@ export const cs: Catalog = {
 			lastUsed: 'Naposledy použit',
 			neverUsed: 'Zatím nepoužit',
 			remove: 'Odebrat',
+			removeLabel: (label) => `Odebrat přístupový klíč „${label}“`,
 			addTitle: 'Přidat přístupový klíč',
 			label: 'Název',
 			labelHint: 'Například zařízení nebo správce hesel, který ho uchovává.',

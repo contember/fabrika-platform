@@ -168,6 +168,30 @@ export const en: Catalog = {
 			revoked: 'Access revoked. It stops within five minutes.',
 			alreadyEnded: 'That access had already ended.',
 			more: (shown) => `Showing the ${shown} most recent.`,
+			onThisPage: 'On this page',
+			holder: 'Agent or device',
+			lastActive: 'Last active',
+			notRenewed: 'Not since approval',
+			lastActiveText: 'Last active is when it last renewed its access; while in use it renews it every five minutes.',
+			details: 'Details',
+			endpoints: 'Addresses it can call',
+			cliPreset: (preset, app) => {
+				const target = app ?? 'every application you may'
+				switch (preset) {
+					case 'read':
+						return `Reads ${target}, and changes nothing`
+					case 'deploy':
+						return `Reads and deploys ${target}`
+					case 'operate':
+						return `Deploys ${target}, and manages its secrets and settings`
+					case 'create':
+						return 'Registers applications, and changes or deletes any you may manage'
+				}
+			},
+			revokeLabel: (holder, reaches, allowed) => `Revoke ${holder} at ${reaches}, allowed ${allowed}`,
+			revokeTitle: 'Revoke this access?',
+			revokeConfirm: (holder, reaches) => `${holder}: access to ${reaches} ends within five minutes. What it already changed stays.`,
+			cancel: 'Cancel',
 		},
 		passkeys: {
 			title: 'Passkeys',
@@ -177,6 +201,7 @@ export const en: Catalog = {
 			lastUsed: 'Last used',
 			neverUsed: 'Never used',
 			remove: 'Remove',
+			removeLabel: (label) => `Remove the passkey “${label}”`,
 			addTitle: 'Add a passkey',
 			label: 'Name',
 			labelHint: 'For example the device or the password manager that keeps it.',

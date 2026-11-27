@@ -1,6 +1,6 @@
 import type { Locale } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
-import { PAGE_STYLE, pageBody } from '@fabrika/proxy-core/page-style'
+import { PAGE_STYLE, pageBody, WORKSPACE_STYLE, workspaceBody } from '@fabrika/proxy-core/page-style'
 import { type AppPresentation, appQuery, landingUrl, localeQuery } from './app-presentation'
 import type { AuthFailure } from './auth/failure'
 import type { Handoff } from './auth/handoff'
@@ -366,6 +366,8 @@ export function htmlPage(page: {
 	readonly formActionOrigin?: string
 	/** A page's own script, run after the shared one under the same nonce: a fixed string, never built from input. */
 	readonly script?: string
+	/** `workspace` for a page a person works on (the account page): the console's wide frame instead of the panel. */
+	readonly layout?: 'workspace'
 }): Response {
 	const formAction = page.formActionOrigin === undefined ? `'self'` : `'self' ${page.formActionOrigin}`
 	const nonce = randomNonce()
@@ -373,8 +375,8 @@ export function htmlPage(page: {
 		`<!doctype html><html lang="${page.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${
 			escapeHtml(page.title)
 		}</title>
-	<style nonce="${nonce}">${PAGE_STYLE}</style></head><body>${
-			pageBody(page.content, { runsOn: escapeHtml(catalogFor(page.locale).pages.runsOn) }, page.brand)
+	<style nonce="${nonce}">${PAGE_STYLE}${page.layout === 'workspace' ? WORKSPACE_STYLE : ''}</style></head><body>${
+			(page.layout === 'workspace' ? workspaceBody : pageBody)(page.content, { runsOn: escapeHtml(catalogFor(page.locale).pages.runsOn) }, page.brand)
 		}
 	<script nonce="${nonce}">var actionToken=document.getElementById('action-token');if(actionToken&&!actionToken.value){var fragment=new URLSearchParams(location.hash.slice(1));var token=fragment.get('token');if(token){actionToken.value=token;history.replaceState(null,'',location.pathname+location.search);}}document.querySelectorAll('[data-show]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.dataset.show);if(!input)return;var show=input.type==='password';input.type=show?'text':'password';button.textContent=show?button.dataset.labelHide:button.dataset.labelShow;} );});${
 			page.script ?? ''
