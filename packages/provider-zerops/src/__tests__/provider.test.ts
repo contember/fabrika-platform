@@ -1245,7 +1245,7 @@ describe('Zerops provider', () => {
 	})
 })
 
-// The init commands ran `fabrika db test-isolation`, which the platform's 0.125 GB floor killed (ADR-0043); the floor stays until remeasured.
+// A started container holds more than the platform's 0.125 GB floor, so a deploy raises it first (ADR-0043).
 describe("the deploy service's minimum RAM", () => {
 	const deploy = (overrides: Overrides, run: ZeropsDeployRun = deployRun(recorded)) =>
 		createZeropsDeployer(() => makeCollaborators(recorded, overrides))(run)
@@ -1290,8 +1290,8 @@ describe("the deploy service's minimum RAM", () => {
 				`zerops: api reads back a minimum RAM of 0.125 GB after it was raised to ${ZEROPS_START_MIN_RAM_GB} GB`,
 			],
 			[
-				{ minRam: null, maxRam: 0.25 },
-				`zerops: api may use at most 0.25 GB of RAM and its start needs ${ZEROPS_START_MIN_RAM_GB} GB; raise verticalAutoscaling.maxRam`,
+				{ minRam: null, maxRam: 0.125 },
+				`zerops: api may use at most 0.125 GB of RAM and its start needs ${ZEROPS_START_MIN_RAM_GB} GB; raise verticalAutoscaling.maxRam`,
 			],
 			[
 				{ noAutoscaling: true },
@@ -1316,12 +1316,12 @@ describe("the application's database connections", () => {
 	const sentConnections = (): string | undefined => /FABRIKA_APP_DATABASE_CONNECTIONS: "(\d+)"/.exec(recorded.builds[0]?.zeropsYaml ?? '')?.[1]
 
 	test('each process gets its share of what the database admits, and the database is left alone when that is enough', async () => {
-		// 50 connections at 1 GB, 12 of them unavailable or the init commands', shared by 2 × 4 containers and 2 jobs.
+		// 50 connections at 1 GB, 8 of them unavailable or the init commands', shared by 2 × 4 containers and 2 jobs.
 		expect((await deploy({ databaseMinRam: 1, maxContainers: 4 })).status).toBe('succeeded')
-		expect(sentConnections()).toBe('3')
+		expect(sentConnections()).toBe('4')
 		expect(recorded.databaseAutoscaling).toEqual([])
 		expect(recorded.logs).toContain(
-			'  db: 50 connections at 1 GB; each process opens at most 3, for 4 container(s) of api, twice while a deploy replaces them, and 2 job process(es)',
+			'  db: 50 connections at 1 GB; each process opens at most 4, for 4 container(s) of api, twice while a deploy replaces them, and 2 job process(es)',
 		)
 	})
 
@@ -1331,7 +1331,7 @@ describe("the application's database connections", () => {
 		expect(recorded.databaseAutoscaling).toEqual([autoscalingWith(1, null, null)])
 		expect(recorded.calls.indexOf('configureCustomAutoscaling:db')).toBeLessThan(recorded.calls.indexOf('createAppVersion:service-1'))
 		expect(recorded.logs).toContain('  minimum RAM of db: 0.25 → 1 GB, for its connection limit')
-		expect(sentConnections()).toBe('3')
+		expect(sentConnections()).toBe('4')
 	})
 
 	test('a service that reads no maximum container count is sized for the 10 Zerops may scale it to', async () => {
@@ -1340,10 +1340,11 @@ describe("the application's database connections", () => {
 		expect(sentConnections()).toBe('4')
 	})
 
-	test('one container fits the smallest database with the minimum for each process', async () => {
+	test('one container fits the smallest database with more than the minimum for each process', async () => {
+		// 20 − 8 = 12, over 2 × 1 container and 2 jobs.
 		expect((await deploy({ databaseMinRam: 0.25, maxContainers: 1 })).status).toBe('succeeded')
 		expect(recorded.databaseAutoscaling).toEqual([])
-		expect(sentConnections()).toBe('2')
+		expect(sentConnections()).toBe('3')
 	})
 
 	test("a namespace's shared database is never raised: each process gets the minimum, and the run log says it may not fit", async () => {

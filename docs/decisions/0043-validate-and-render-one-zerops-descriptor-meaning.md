@@ -130,13 +130,14 @@ commands run before `run.start` because the readiness window opens with `run.sta
 application cannot raise it. A check in the start script would share that window with the server, so a long one would
 fail a deploy although every check passed.
 
-**A container starts with the memory its init commands need.** The floor was measured when the init commands also
-ran the isolation tests, whose run peaked at 161 MiB of anonymous memory for the Notes example and 225 MiB for the CRM
-example, within about 1.5 s. A Zerops runtime starts at 0.125 GB, and vertical autoscaling reacts in 10–20 s, so the
-platform killed the run on 2 of 3 first deploys and marked the version `DEPLOY_FAILED` (measured 2026-10-15,
-[platform facts](../reference/zerops-platform.md)). The floor stays until it is measured for today's init commands. Each
-deploy therefore raises the deploy
-service's minimum RAM to 0.5 GB for an application with a database, and to 2 GB for one that scans uploads, in the
+**A container starts with the memory it holds once started.** A Zerops runtime starts at 0.125 GB, and vertical
+autoscaling reacts in 10–20 s. When the init commands also ran the isolation tests, their run peaked at 161 MiB of
+anonymous memory for the Notes example within about 1.5 s, and the platform killed it on 2 of 3 first deploys
+(measured 2026-10-15). Today's init commands (`migrate`, `codegen --verify`) peak at about 40 MiB (measured locally, 2026-11-21), and the started
+Notes container holds about 115 MiB at rest, so 0.25 GB starts it with room; a burst above it is autoscaling's, which
+absorbed the heaviest measured one at that floor (measured 2026-11-27, [platform facts](../reference/zerops-platform.md)).
+Each deploy therefore raises the deploy
+service's minimum RAM to 0.25 GB for an application with a database, and to 2 GB for one that scans uploads, in the
 `raise-start-memory` step before it reserves a version. An import cannot do it: Zerops ignores a changed
 `verticalAutoscaling` of an existing service. The step changes only that field through the autoscaling API, reads it
 back, and never lowers it.
@@ -144,8 +145,8 @@ back, and never lowers it.
 **Every process of an application fits its database's connection limit.** The deploy's `size-database`
 step, after `raise-start-memory`, reads the minimum RAM and the profile of the application's PostgreSQL
 service and the deploy service's maximum container count (10, Zerops' maximum, when it reads none). Of
-`max_connections`, it keeps 7 for superusers and Zerops and 5 for one container's init commands (the
-peak measured when they also ran the isolation tests, kept until it is measured again), and shares the rest between twice the maximum container count (old and new
+`max_connections`, it keeps 7 for superusers and Zerops and 1 for one container's init commands (`migrate` and
+`codegen --verify` open one at a time; the serving process holds only its own pool, measured 2026-11-27), and shares the rest between twice the maximum container count (old and new
 containers overlap while a deploy replaces them) and one process per crontab job. Each process gets its
 share, at most 10. When the share is below 2 (a job's fenced write and its cancellation need one
 connection each), the step raises the minimum RAM of the application's own database to the smallest
@@ -305,13 +306,14 @@ execution document carries the generated `run` and `build`.
 - The build is slower: every deploy installs, type-checks, checks the contract and runs migrations.
 - The authored descriptor loses freedom: no custom start command, no custom `run` section, no package
   overrides of `@fabrika/*`.
-- A contract application with a database costs at least 0.5 GB of RAM per container. An existing installation
+- A contract application with a database costs at least 0.25 GB of RAM per container. An existing installation
   converges on `fabrika platform upgrade` and the application's next deploy: the step is Control's code, not the
-  application's, so no package update of the application is needed. Until then the earlier release's deploys can
-  still be killed at start.
+  application's, so no package update of the application is needed. A service an earlier release raised to 0.5 GB
+  keeps it, because the step never lowers; the operator lowers it in the Zerops GUI
+  ([platform facts](../reference/zerops-platform.md)).
 - A database too small for its application's container range costs more RAM. At Zerops' price of $3 per GB and
-  30 days, raising one database node from the 0.25 GB floor (1 container and 2 jobs) to 0.5 GB (2 containers and 2
-  jobs) costs $0.75, to 1 GB (8 containers and 2 jobs) $2.25, and to 2 GB (10 containers) $5.25 per 30 days; an HA
+  30 days, raising one database node from the 0.25 GB floor (2 containers and 2 jobs) to 0.5 GB (3 containers and 2
+  jobs) costs $0.75, to 1 GB (9 containers and 2 jobs) $2.25, and to 2 GB (10 containers and 2 jobs) $5.25 per 30 days; an HA
   service has three nodes. The Notes example (4 containers, 2 jobs) needs 1 GB. Raising a single-node database
   restarts it once, about 15 s after the raise (measured live, 2026-10-16): the version still serving loses its open
   connections, and no fresh connection was refused.
@@ -387,6 +389,6 @@ execution document carries the generated `run` and `build`.
 - **pgBouncer on `portTls`.** Rejected: it refuses every role fabrika creates (measured 2026-10-15).
 - **A `CONNECTION LIMIT` on the runtime role.** Rejected: it turns too many connections into failed requests instead
   of preventing them.
-- **Give every application's database 1 GB.** Rejected: one container with up to 2 jobs fits the 0.25 GB floor.
+- **Give every application's database 1 GB.** Rejected: two containers with up to 2 jobs fit the 0.25 GB floor.
 - **Retry the whole `bun test` run on a refused connection.** Rejected: a refusal inside a case reads as a failed
   assertion, not as a refusal; the test kit opens its pools before the first case and waits there instead.

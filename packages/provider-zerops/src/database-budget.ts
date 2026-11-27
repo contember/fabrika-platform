@@ -15,11 +15,10 @@ export const ZEROPS_POSTGRES_MIN_RAM_GB = 0.25
 export const ZEROPS_POSTGRES_UNAVAILABLE_CONNECTIONS = 7
 
 /**
- * The most connections one container's init commands hold at once, measured (2026-10-16) when they also ran `fabrika db
- * test-isolation`, which peaked at 5. Migrating and reading the schema, all they run now, take fewer, one after the
- * other; the budget keeps the measured value until it is measured again.
+ * The most connections one container's init commands hold at once: `fabrika db migrate` and `codegen --verify` open
+ * one at a time (measured 2026-11-21). The serving process holds only its own pool, which the holders count.
  */
-export const ZEROPS_START_CONNECTIONS = 5
+export const ZEROPS_START_CONNECTIONS = 1
 
 /** The fewest connections a process may have: a job's fenced write and its cancellation each need one at once. */
 export const MIN_PROCESS_CONNECTIONS = 2

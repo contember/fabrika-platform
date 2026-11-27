@@ -17,7 +17,7 @@ One Zerops project, LIGHT core, every runtime at one container:
 | application services                                           | shared database binding only       | Control                           |
 
 Idle floor for three applications ≈ $23 (≈ $25 if Operations keeps its own `operationsdb`), against ≈ $26 for the "data" preset and ≈ $34 for two HA databases in two
-projects. Staging applications stay in an ordinary `cheap` namespace (ADR-0006).
+projects (priced at the earlier 0.5 GB application floor; at 0.25 GB each is about $2.25 lower). Staging applications stay in an ordinary `cheap` namespace (ADR-0006).
 
 ## What co-location breaks, and the replacement for each
 

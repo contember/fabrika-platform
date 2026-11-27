@@ -130,7 +130,7 @@ describe('the minimum RAM a deploy raises the deploy service to', () => {
 		return zeropsStartMinRam(execution)
 	}
 
-	test("what the init commands' isolation tests need with a database, what a scan needs with a scanner, nothing without either", async () => {
+	test('what a started container needs with a database, what a scan needs with a scanner, nothing without either', async () => {
 		expect(minRamOf(await compile(app(notesArtifact, null)))).toBe(ZEROPS_START_MIN_RAM_GB)
 		expect(minRamOf(await compile(app(SCANNING, ZEROPS_SCAN_MIN_RAM_GB)))).toBe(ZEROPS_SCAN_MIN_RAM_GB)
 		const withoutDatabase: ZeropsAppConfig = {
