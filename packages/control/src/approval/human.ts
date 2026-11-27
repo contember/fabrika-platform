@@ -82,6 +82,24 @@ export function requirePersonToResume(auth: AuthContext, admission: ConsoleAdmis
 }
 
 /**
+ * A data operation of a suspended protected environment's object could open it again behind the suspension's back, so
+ * only a person in the console starts one, but maintenance `closed`, which keeps it offline (`requirePersonToResume`).
+ */
+export function requirePersonWhileSuspended(
+	auth: AuthContext,
+	admission: ConsoleAdmission | undefined,
+	row: AppEnvRow,
+	keepsOffline: boolean,
+): void {
+	if (row.protected !== 1 || row.suspended_at === null || keepsOffline || isConsolePerson(auth, admission)) return
+	fail(
+		403,
+		`environment \`${row.env}\` is protected and suspended: only a person in the console starts a data operation that may bring it back `
+			+ 'online, or resumes it; an agent, a builder key or a service key cannot',
+	)
+}
+
+/**
  * A person in the console (ADR-0083 §6): a person (`isPerson`) on a request without an `Authorization` header. Every
  * bearer is a non-person, a person's own `px_` key included, so an agent handed that key cannot pass as its owner.
  */

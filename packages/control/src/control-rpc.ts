@@ -672,6 +672,7 @@ export function createControlRpcRouter(
 			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(deps.opsTransport === undefined ? {} : { ops: deps.opsTransport }),
 			...(runDeps === undefined ? {} : { deploys: async () => operationDeploys(await runDeps()) }),
+			admission: { request: ctx.request },
 		}
 	}
 

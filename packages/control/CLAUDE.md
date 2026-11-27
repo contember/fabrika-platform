@@ -849,7 +849,8 @@ other environment, before the provider prepares anything, and the write maps a r
   clears it. The suspension changes no `generation`. Both verbs are retries: a repeated suspend republishes (or closes)
   again. A suspended environment cannot change namespace (`apps.environments.put`), whose pin may not read the flag.
   A protected environment is resumed only by a person in the console (`requirePersonToResume`, `src/approval/human.ts`),
-  whatever its `data` mode; an approved resume request executes as its approver, who is one.
+  whatever its `data` mode; an approved resume request executes as its approver, who is one. While it is suspended,
+  `data.start` (but maintenance `closed`) and `data.recover` are a person's too (`requirePersonWhileSuspended`).
 - **A Zerops namespace pinned to an older proxy source is judged by that release's own manifest parser
   (`src/zerops/older-proxies.ts`).** It holds the parsers of `@fabrika/proxy-core` 0.4.8, 0.5.5 and 0.6.0, and the
   Zerops provider refuses a deploy of a row none of them parses, or of a CSP none of them parses (the CSP field of each

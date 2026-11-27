@@ -378,6 +378,50 @@ describe('resuming a protected environment', () => {
 		])
 	})
 
+	test("a key cannot open a suspended protected environment's object through a data operation; it may keep it closed", async () => {
+		const { deps, audits, object } = await objectHarness()
+		await dataOff(deps)
+		const key = keyOf(deps, audits)
+		const asked = async (auth: ControlRpcDeps, procedure: string, input: Record<string, unknown>) => {
+			const response = await rpcResult(rpcRequest(procedure, { ...TARGET, ...input }), auth, { consoleOrigin: 'https://control.test' })
+			return { status: response.status, body: answerSchema.parse(await response.json()) }
+		}
+		const refusal = 'environment `prod` is protected and suspended: only a person in the console starts a data operation'
+
+		expect((await call(key, 'suspend')).status).toBe(200)
+		for (const mode of ['open', 'read-only', 'inspect']) {
+			const opened = await asked(key, 'data.start', { kind: 'maintenance', mode })
+			expect(opened.status).toBe(403)
+			expect(opened.body.error).toContain(refusal)
+		}
+		const restored = await asked(key, 'data.start', { kind: 'restore', at: '2026-11-01T00:00:00Z' })
+		expect(restored.status).toBe(403)
+		const recovered = await asked(key, 'data.recover', { operationId: 'any', resolution: 'open' })
+		expect(recovered.status).toBe(403)
+		expect(recovered.body.error).toContain(refusal)
+		expect(object.modes).toEqual(['closed'])
+
+		expect((await asked(key, 'data.start', { kind: 'maintenance', mode: 'closed' })).status).toBe(200)
+		expect((await asked(deps, 'data.start', { kind: 'maintenance', mode: 'open' })).status).toBe(200)
+		expect(object.modes).toEqual(['closed', 'closed', 'open'])
+	})
+
+	test("a person's own key is a key: with a bearer, the person cannot resume a protected environment", async () => {
+		const { deps, object } = await objectHarness()
+		expect((await call(deps, 'suspend')).status).toBe(200)
+		const request = rpcRequest('apps.environments.resume', TARGET)
+		const headers = new Headers(request.headers)
+		headers.set('Authorization', 'Bearer px_test')
+		// Under the default `data: person` the bearer's resume waits for a person as a request; nothing resumes.
+		const response = await rpcResult(new Request(request, { headers }), deps, { consoleOrigin: 'https://control.test' })
+		expect(response.status).toBe(409)
+		expect(await deps.repositories.registry.getAppEnv(APP, ENV)).toMatchObject({ suspended_at: expect.any(Number) })
+		await dataOff(deps)
+		const refused = await rpcResult(new Request(request, { headers }), deps, { consoleOrigin: 'https://control.test' })
+		expect(refused.status).toBe(403)
+		expect(object.modes).toEqual(['closed'])
+	})
+
 	test('a key resumes an unprotected environment', async () => {
 		const { deps, audits, object } = await objectHarness()
 		expect((await fixtureProtect(deps.repositories.registry, makeFakeLock(deps.repositories), TARGET, false))?.protected).toBe(0)
