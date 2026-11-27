@@ -5,7 +5,7 @@
 import { AGENT_CLIENT_ID, buildResourceAccessClaims, OAUTH_CLI_CLIENT_ID, parseAccessClaims, permits } from '@fabrika/auth-core'
 import type { AgentWriteGate } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, describe, expect, setSystemTime, test } from 'bun:test'
 import { decodeJwt } from 'jose'
 import { IAM_APP } from '../admin/router'
 import { mintFromGrant } from '../agent-grant'
@@ -300,6 +300,25 @@ for (const engine of engines) {
 			expect(await a.exchange(access)).toEqual({ ok: false, reason: 'invalid_grant' })
 			const records = await a.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: grantId, limit: 5 })
 			expect(JSON.parse(records[0]?.metadata ?? 'null')).toMatchObject({ agentLabel: 'release bot', sessionId: a.f.sessionId })
+		})
+
+		test('the device start gives the person thirty minutes to decide, polled every five seconds', async () => {
+			const a = await agentFixture(engine.repositories())
+			const response = await a.start({ scope: 'read' })
+			const body: unknown = await response.json()
+			expect(field(body, 'expires_in')).toBe(1800)
+			expect(field(body, 'interval')).toBe(5)
+			const deviceCode = field(body, 'device_code')
+			const userCode = field(body, 'user_code')
+			if (typeof deviceCode !== 'string' || typeof userCode !== 'string') throw new Error('no device codes')
+			// Twenty-nine minutes on, the code still reaches its attempt and the approval still gives a grant.
+			setSystemTime(new Date(Date.now() + 29 * 60_000))
+			try {
+				expect((await a.page({ user_code: userCode, decision: 'approve', lifetime: '3600', scope: 'read' })).status).toBe(200)
+				expect(typeof field(await json(await a.poll(deviceCode)), 'access_token')).toBe('string')
+			} finally {
+				setSystemTime()
+			}
 		})
 
 		test('the device start refuses what is no application resource, a scope it cannot hold and a malformed label', async () => {

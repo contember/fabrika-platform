@@ -964,8 +964,9 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A DEVICE GRANT IS EACH BUILT-IN CLIENT'S ONLY WAY TO A GRANT, AND IT IS BOUND TO THE SESSION THAT APPROVED IT** (RFC 8628,
   `oauth-device.ts`, `oauth-device-page.ts`, `oauth_device_authorizations`). `POST /oauth/device_authorization` takes
   `agent-cli` (above) or `fabrika-cli`, the latter with at least one scope and one to eight resources of one app (`resource` is the one parameter that may
-  repeat), each scope resolvable on every resource, and stores only the hashes of both codes; an attempt lives thirty
-  minutes (`OAUTH_DEVICE_ATTEMPT_TTL_SECONDS`) and is polled every five seconds. Starts are counted per client address first, where the composition names one (30 per 10 minutes), and only
+  repeat), each scope resolvable on every resource, and stores only the hashes of both codes; an
+  `agent-cli` attempt lives thirty minutes (its person reads the code on another screen), a `fabrika-cli` one five
+  (`OAUTH_DEVICE_ATTEMPT_TTL_SECONDS`), each polled every five seconds. Starts are counted per client address first, where the composition names one (30 per 10 minutes), and only
   an admitted start counts against the client's bucket (10 000 per 10 minutes, then one minute refused): with one client
   that bucket is installation-wide and bounds a flood's rows, so it must never be small enough for a burst to fill.
   `/oauth/device` needs an IAM login: GET only renders the code form, so a link neither decides nor spends anything; the

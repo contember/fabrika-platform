@@ -31,10 +31,13 @@ type SigningEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 export const OAUTH_DEVICE_PATH = '/oauth/device'
 /**
- * RFC 8628 §3.2 `expires_in`: thirty minutes to enter the code and decide, because the person is often not at the screen
- * that shows it (an agent's code reaches them as a notification). The approval page and its passkey stay the defence.
+ * RFC 8628 §3.2 `expires_in` per client. An agent's code reaches the person as a notification on another screen, so it
+ * gets thirty minutes; the CLI's person is at the terminal, and its grants (deploy included) take no passkey, so five.
  */
-export const OAUTH_DEVICE_ATTEMPT_TTL_SECONDS = 1800
+export const OAUTH_DEVICE_ATTEMPT_TTL_SECONDS: Readonly<Record<typeof OAUTH_CLI_CLIENT_ID | typeof AGENT_CLIENT_ID, number>> = {
+	[OAUTH_CLI_CLIENT_ID]: 300,
+	[AGENT_CLIENT_ID]: 1800,
+}
 export const OAUTH_DEVICE_POLL_INTERVAL_SECONDS = 5
 
 /** RFC 8628 §6.1: twenty consonants, eight of them (about 34 bits), typed without ambiguity. */
@@ -46,7 +49,7 @@ const START_WINDOW_SECONDS = 600
 const STARTS_PER_ADDRESS = 30
 /**
  * Starts per client in a window. With one device client it is installation-wide, and on a composition that names no
- * client address it is the only bound, so it bounds the attempt rows a flood writes (each expires in thirty minutes)
+ * client address it is the only bound, so it bounds the attempt rows a flood writes (each expires in at most thirty minutes)
  * rather than a person: keeping it full takes a sustained flood, and a full bucket refuses for one minute only.
  */
 const STARTS_PER_CLIENT = 10_000
@@ -167,6 +170,7 @@ export async function startDeviceAuthorization(
 		return { ok: false, error: 'temporarily_unavailable' }
 	}
 	const now = unixNow()
+	const ttl = OAUTH_DEVICE_ATTEMPT_TTL_SECONDS[request.client_id]
 	// A collision of either code with a live attempt is improbable; drawing again settles it.
 	for (let attempt = 0; attempt < 3; attempt++) {
 		const deviceCode = generateToken()
@@ -181,7 +185,7 @@ export async function startDeviceAuthorization(
 			agent_label: target.agentLabel,
 			interval_seconds: OAUTH_DEVICE_POLL_INTERVAL_SECONDS,
 			created_at: now,
-			expires_at: now + OAUTH_DEVICE_ATTEMPT_TTL_SECONDS,
+			expires_at: now + ttl,
 		})
 		if (!started) continue
 		const verificationUri = `${services.config.issuer}${OAUTH_DEVICE_PATH}`
@@ -192,7 +196,7 @@ export async function startDeviceAuthorization(
 				user_code: formatUserCode(userCode),
 				verification_uri: verificationUri,
 				verification_uri_complete: `${verificationUri}?${new URLSearchParams({ user_code: formatUserCode(userCode) })}`,
-				expires_in: OAUTH_DEVICE_ATTEMPT_TTL_SECONDS,
+				expires_in: ttl,
 				interval: OAUTH_DEVICE_POLL_INTERVAL_SECONDS,
 			},
 		}
