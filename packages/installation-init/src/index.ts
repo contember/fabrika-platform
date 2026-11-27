@@ -44,6 +44,31 @@ export {
 	platformIamOAuthConfig,
 	refuseMcpClientsVariable,
 } from './mcp'
+export {
+	checkInstallationModel,
+	checkProviderVariables,
+	type ControlEntry,
+	type GeneratedSecret,
+	type ModelService,
+	type ModelVariable,
+	PLATFORM_HEALTH_PATH,
+	PLATFORM_PROXY_HEALTH_PORT,
+	PLATFORM_PROXY_PORT,
+	PLATFORM_SERVICE_PORT,
+	PLATFORM_SERVICES,
+	type PlatformArtifact,
+	type PlatformBucket,
+	type PlatformDatabase,
+	type PlatformInstallationModel,
+	platformInstallationModel,
+	type PlatformInstallationModelInput,
+	privateAddress,
+	type ScheduledJob,
+	type ServicePort,
+	staticEnvironment,
+	type VariableCondition,
+	variableKey,
+} from './model'
 export { type CommandEnv, describeArgument, readEnv, readFlag, requiredSetting, setting, shellWord } from './options'
 export { assertPinnedTag } from './pin'
 export { confirm } from './prompt'

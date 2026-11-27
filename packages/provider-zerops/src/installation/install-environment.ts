@@ -13,6 +13,7 @@ import type { ZeropsNamespaceProxySource } from '../index'
 import type { PlatformDeployService, ResolvedService } from './deploy'
 import { assertRunning, type InstallCollaborators } from './install-collaborators'
 import { FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource } from './installation-source'
+import { ZEROPS_DATA_PLACEMENT } from './topology/model'
 import type { PlatformTier } from './topology/topology'
 
 /** The private address the proxy dials IAM at inside the project, and pass 1's placeholder issuer. */
@@ -29,12 +30,6 @@ const storageOf = (service: string): PlatformStorage => ({
 	secretAccessKey: `\${${service}_secretAccessKey}`,
 	endpoint: `\${${service}_apiUrl}`,
 })
-
-/** IAM and control share `db` and `storage` on both tiers; Operations has its own database on both, and its own bucket on `standard`. */
-const OPERATIONS_DATA: Readonly<Record<PlatformTier, { readonly database: string; readonly storage: string }>> = {
-	light: { database: 'operationsdb', storage: 'storage' },
-	standard: { database: 'operationsdb', storage: 'operationsstorage' },
-}
 
 /**
  * The three variables pass 1 writes on the proxy, and nothing else.
@@ -85,7 +80,7 @@ export interface InstallationEnvInput {
  */
 export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
 	const { secrets } = input
-	const operationsData = OPERATIONS_DATA[input.tier]
+	const { databases, buckets } = ZEROPS_DATA_PLACEMENT[input.tier]
 	const fabrika = installationServiceEnvironment({
 		environment: input.environment,
 		scheme: input.scheme,
@@ -95,11 +90,11 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		email: input.email,
 		authentication: input.authentication,
 		data: {
-			iamDatabase: postgresUrl('db'),
-			controlDatabase: postgresUrl('db'),
-			operationsDatabase: postgresUrl(operationsData.database),
-			runLogs: storageOf('storage'),
-			operationsBlobs: storageOf(operationsData.storage),
+			iamDatabase: postgresUrl(databases.iam),
+			controlDatabase: postgresUrl(databases.control),
+			operationsDatabase: postgresUrl(databases.operations),
+			runLogs: storageOf(buckets.runLogs),
+			operationsBlobs: storageOf(buckets.operationsBlobs),
 		},
 	})
 	const control = new Map([

@@ -50,6 +50,12 @@ Public because both provider packages are, and
   table digest, IAM's OAuth configuration), per service. The provider supplies where the data lives and the proxy's
   private IAM upstream, adds its own variables and writes them. `INSTALLATION_SECRET_VARIABLES` names the generated ones.
   IAM's sign-in switches and OIDC client are the bring-up's alone: a deploy writes none of them.
+- `model.ts` — the installation model ([ADR-0092](../../docs/decisions/0092-the-installation-is-a-model-each-provider-renders.md)):
+  the four services (artifact, ports, health, entry, jobs, calls, every variable by name and kind), the logical
+  databases and buckets with their owners, the generated secrets with whether an upgrade may make one, and the public
+  hosts. `platformInstallationModel` takes Control's entry points from the provider; `checkProviderVariables` checks a
+  provider's own variables beside the model's. `model.test.ts` holds its names equal to what `service-environment.ts`
+  writes. It names variables and holds no value but a fixed one.
 - `proxy-manifest.ts` — the platform proxy manifest TEMPLATE type, `resolvePlatformProxyManifest` and
   `platformServiceTableDigest`. The template itself is a provider's generated data (Zerops: `generated/`).
 - `mcp.ts` — IAM's `FABRIKA_IAM_OAUTH_CONFIG` (`platformIamOAuthConfig`: the composition's OAuth resources and the

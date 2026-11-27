@@ -98,6 +98,10 @@ import {
 	FABRIKA_PROXY_MANIFEST_SANDBOXES_VALUE,
 	FABRIKA_PROXY_MANIFEST_SUSPEND,
 } from '../../proxy-manifest-carrier'
+import { zeropsInstallationModel, zeropsReadiness, zeropsServiceRun } from './model'
+
+/** The installation model's services (ADR-0092): their ports, health, entries, jobs and private addresses. */
+const MODEL = zeropsInstallationModel.services
 
 // ── Readiness and liveness: two mechanisms, two questions ──────────────────────────────────────────
 //
@@ -208,37 +212,15 @@ const iam: ZeropsYamlSetupSpec = {
 		deployFiles: WORKSPACE_DEPLOY_FILES,
 		cache: ['node_modules'],
 	},
-	deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, ...READINESS_WITH_MIGRATIONS } },
-	run: {
-		base: 'alpine/bun@1.3',
-		// Migrations at container start — the Zerops analogue of a discrete migrate step in a Cloudflare
-		// plan, and the reason the Zerops deploy plan has no `migrate`. Safe to repeat: the runner records
-		// what it applied and serializes concurrent containers behind a session-level advisory lock.
-		// Runs in /var/www.
-		initCommands: ['bun packages/iam/src/node/migrate.ts'],
-		start: 'bun packages/iam/src/node/server.ts',
-		// `protocol` is omitted deliberately. TCP is the default at both ends, and the two published
-		// sources disagree about its spelling: the JSON schema's enum is lowercase (`tcp`/`udp`) while its
-		// own description — and every doc example — says `TCP`. Not writing it sidesteps a contradiction we
-		// cannot resolve without an account.
-		ports: [{
-			port: 3000,
-			// The project's L7 balancer terminates TLS and forwards plain HTTP over the private network, so
-			// this process holds no certificates.
-			httpSupport: true,
-		}],
-		// Liveness only — it never touches Postgres. A health check that queried the database would let
-		// one slow query restart every container at once. The deploy gate is `deploy.readinessCheck`.
-		healthCheck: { httpGet: { port: 3000, path: '/healthz' }, ...LIVENESS },
-		// The Cloudflare `scheduled` handler's replacement, running the same code path. `allContainers:
-		// false` so a horizontally scaled service still prunes once.
-		crontab: [{ timing: '0 3 * * *', command: 'bun packages/iam/src/node/prune.ts', allContainers: false }],
-		envVariables: {
-			PORT: '3000',
-			// Control's private origin: with a provider configured, IAM hands its mail to Control's relay.
-			FABRIKA_CONTROL_URL: 'http://control:3000',
-		},
-	},
+	deploy: zeropsReadiness(MODEL.iam, READINESS_WITH_MIGRATIONS),
+	// Migrations at container start: the Zerops analogue of a discrete migrate step in a Cloudflare plan, and the reason
+	// the Zerops deploy plan has no `migrate`. A port's `protocol` is omitted deliberately: TCP is the default at both
+	// ends, and the two published sources disagree about its spelling (the JSON schema's enum is lowercase, its own
+	// description and every doc example say `TCP`). Liveness never touches Postgres: a health check that queried the
+	// database would let one slow query restart every container at once. The prune job replaces the Cloudflare
+	// `scheduled` handler, running the same code path. The start, ports, health, job and private addresses are the
+	// installation model's (`./model.ts`).
+	run: zeropsServiceRun(MODEL.iam, LIVENESS, 'alpine/bun@1.3'),
 }
 
 /**
@@ -281,23 +263,10 @@ const control: ZeropsYamlSetupSpec = {
 		deployFiles: WORKSPACE_DEPLOY_FILES,
 		cache: ['node_modules'],
 	},
-	deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, ...READINESS_WITH_MIGRATIONS } },
-	run: {
-		base: 'alpine/bun@1.3',
-		initCommands: ['bun packages/control/src/zerops/migrate.ts'],
-		start: 'bun packages/control/src/zerops/server.ts',
-		ports: [{ port: 3000, httpSupport: true }],
-		healthCheck: { httpGet: { port: 3000, path: '/healthz' }, ...LIVENESS },
-		crontab: [{ timing: '*/5 * * * *', command: 'bun packages/control/src/zerops/cron.ts', allContainers: false }],
-		envVariables: {
-			PORT: '3000',
-			FABRIKA_CONTROL_ASSETS_DIR: 'packages/dashboard/dist',
-			// Intra-project transport for management RPC. `FABRIKA_IAM_ISSUER` is deliberately absent here:
-			// it is the public token issuer and is supplied per installation through the env API.
-			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
-			FABRIKA_OPERATIONS_URL: 'http://operations:3000',
-		},
-	},
+	deploy: zeropsReadiness(MODEL.control, READINESS_WITH_MIGRATIONS),
+	// `FABRIKA_IAM_RPC_URL` is the intra-project transport for management RPC. `FABRIKA_IAM_ISSUER` is deliberately
+	// absent here: it is the public token issuer and is supplied per installation through the env API.
+	run: zeropsServiceRun(MODEL.control, LIVENESS, 'alpine/bun@1.3'),
 }
 
 /**
@@ -323,20 +292,8 @@ const operations: ZeropsYamlSetupSpec = {
 		deployFiles: WORKSPACE_DEPLOY_FILES,
 		cache: ['node_modules'],
 	},
-	deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, ...READINESS_WITH_MIGRATIONS } },
-	run: {
-		base: 'alpine/bun@1.3',
-		initCommands: ['bun packages/operations/src/node/migrate.ts'],
-		start: 'bun packages/operations/src/node/server.ts',
-		ports: [{ port: 3000, httpSupport: true }],
-		healthCheck: { httpGet: { port: 3000, path: '/healthz' }, ...LIVENESS },
-		crontab: [{ timing: '* * * * *', command: 'bun packages/operations/src/node/cron.ts', allContainers: false }],
-		envVariables: {
-			PORT: '3000',
-			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
-			FABRIKA_CONTROL_URL: 'http://control:3000',
-		},
-	},
+	deploy: zeropsReadiness(MODEL.operations, READINESS_WITH_MIGRATIONS),
+	run: zeropsServiceRun(MODEL.operations, LIVENESS, 'alpine/bun@1.3'),
 }
 
 /**
@@ -393,10 +350,17 @@ const operations: ZeropsYamlSetupSpec = {
  *
  * 8081 is deliberately absent: it is the health listener, which is never published.
  */
-export const PROXY_PUBLIC_PORTS = [8080, 8082, 8083, 8084, 8085, 8086]
+export const PROXY_PUBLIC_PORTS = [
+	...MODEL.proxy.ports.filter((port) => port.port !== MODEL.proxy.health.port).map((port) => port.port),
+	8082,
+	8083,
+	8084,
+	8085,
+	8086,
+]
 
-/** Liveness only, on its own unpublished listener. */
-export const PROXY_HEALTH_PORT = 8081
+/** Liveness only, on its own unpublished listener: the model's health port. */
+export const PROXY_HEALTH_PORT = MODEL.proxy.health.port
 
 const proxy: ZeropsYamlSetupSpec = {
 	setup: 'proxy',
@@ -441,7 +405,7 @@ const proxy: ZeropsYamlSetupSpec = {
 	},
 	// The service this gate matters most for: it is the only publicly routed one in either project, so a
 	// version that builds but cannot serve would take the whole project's public surface with it.
-	deploy: { readinessCheck: { httpGet: { port: PROXY_HEALTH_PORT, path: '/healthz' }, ...READINESS_IMMEDIATE } },
+	deploy: zeropsReadiness(MODEL.proxy, READINESS_IMMEDIATE),
 	run: {
 		// Alpine custom runtime: an arbitrary static binary with an arbitrary start command. No TLS config
 		// anywhere on purpose — the project's L7 balancer terminates TLS, so Caddy serves plain HTTP behind
@@ -450,7 +414,7 @@ const proxy: ZeropsYamlSetupSpec = {
 		ports: PROXY_PUBLIC_PORTS.map((port) => ({ port, httpSupport: true })),
 		// Deliberately NOT one of the public ports: a health path on a public listener would be one path per
 		// proxy that answers 200 without consulting the endpoint table, and would shadow an app path of the same name.
-		healthCheck: { httpGet: { port: PROXY_HEALTH_PORT, path: '/healthz' }, ...LIVENESS },
+		healthCheck: { httpGet: { port: PROXY_HEALTH_PORT, path: MODEL.proxy.health.path }, ...LIVENESS },
 		envVariables: {
 			FABRIKA_PROXY_MANIFEST: '/var/www/proxy.manifest.json',
 			// Loopback only; Caddy dials it. It must never be routable.
