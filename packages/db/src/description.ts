@@ -89,6 +89,8 @@ export interface SelectState {
 	readonly limit: number | undefined
 	readonly offset: number | undefined
 	readonly joins: readonly JoinState[]
+	/** A `where` named an `in` with an empty list, so no row matches; only an aggregate's filter takes it (`finishFilter`). */
+	readonly matchesNone: boolean
 }
 
 type Comparable<V> = Exclude<V, null | undefined>
@@ -159,6 +161,11 @@ export class ScopedSelect<Row, Selected, Children> {
 	where<C extends StringColumn<Row>>(column: C, operator: PatternOperator, pattern: string): ScopedSelect<Row, Selected, Children>
 	where<C extends NullableColumn<Row>>(column: C, operator: NullOperator, value: null): ScopedSelect<Row, Selected, Children>
 	where(column: string, operator: string, value: unknown): ScopedSelect<Row, Selected, Children> {
+		if (operator === 'in' && parseList(value, (item) => item)?.length === 0) {
+			// The column is still held to the shape: an empty list does not make a hidden one nameable.
+			comparableColumnOf(this.#shape, column, 'compares')
+			return this.#next({ matchesNone: true })
+		}
 		return this.#withCondition(this.#parseCondition(column, operator, value))
 	}
 
@@ -309,12 +316,22 @@ export function startSelect<Row, Children>(shape: TableShape): ScopedSelect<Row,
 		limit: undefined,
 		offset: undefined,
 		joins: [],
+		matchesNone: false,
 	}
 	return new ScopedSelect(selectToken, state, shape)
 }
 
-/** The description a callback returned; it must derive from the one it received. */
+/** The description a callback returned; it must derive from the one it received, and an `in` names at least one value. */
 export function finishSelect<Row, Children>(built: unknown, start: ScopedSelect<Row, Row, Children>): SelectState {
+	const state = finishFilter(built, start)
+	if (state.matchesNone) {
+		throw new QueryRefusedError('invalid_argument', 'in needs a non-empty plain array of values')
+	}
+	return state
+}
+
+/** `finishSelect` for an aggregate's `where`, where an `in` with an empty list matches no row (`matchesNone`). */
+export function finishFilter<Row, Children>(built: unknown, start: ScopedSelect<Row, Row, Children>): SelectState {
 	if (!(built instanceof ScopedSelect)) {
 		throw new QueryRefusedError('invalid_argument', 'the query callback must return the description it received')
 	}

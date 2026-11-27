@@ -69,6 +69,11 @@ async function call(handle: unknown, path: string, ...args: unknown[]): Promise<
 
 const organization = (action: string, id = 'o1') => alice.ref('organization', action, id)
 const project = (action: string, id: string, org = 'o1') => alice.ref('project', action, id, { organization: org })
+/** The part of an aggregate's `where` description these tests call. */
+interface Condition {
+	where(column: string, operator: string, value: unknown): Condition
+}
+
 const inOrganizations = (action: string, ids: readonly string[] = ['o1']) => alice.within('organization', action, ids)
 
 function idOf(value: unknown): string {
@@ -431,6 +436,20 @@ describe("an empty 'in' list matches no row", () => {
 		await expect(read('all', { where: [['id', 'in', []]], after: 'x' })).rejects.toThrow('after is not an option of all')
 		await expect(read('list', { where: [['id', 'in', []]], after: 'forged' })).rejects.toThrow(QueryRefusedError)
 		await expect(read('all', { where: [['id', 'not in', []]] })).rejects.toThrow('not in needs a non-empty plain array of values')
+	})
+
+	test("aggregate's where answers no group without a statement, its column still checked", async () => {
+		await insertProject({ name: 'kept', rank: 2 })
+		const emptyIn = (column: string) => (q: Condition) => q.where('name', '=', 'kept').where(column, 'in', [])
+		expect(await read('aggregate', { count: true, where: emptyIn('id') })).toEqual({ answer: [], statements: 0 })
+		expect(await read('aggregate', { groupBy: ['name'], sum: ['rank'], where: emptyIn('id') })).toEqual({ answer: [], statements: 0 })
+		// Without the empty list the same aggregate counts the row.
+		expect((await read('aggregate', { count: true, where: (q: Condition) => q.where('name', '=', 'kept') })).answer).toEqual([{ count: '1' }])
+		await expect(read('aggregate', { count: true, where: emptyIn('nope') })).rejects.toThrow(QueryRefusedError)
+		await expect(read('aggregate', { count: true, where: emptyIn('settings') })).rejects.toThrow('settings of projects is a JSON column')
+		await expect(read('aggregate', { count: true, where: (q: Condition) => q.where('id', 'not in', []) })).rejects.toThrow(
+			'not in needs a non-empty plain array of values',
+		)
 	})
 })
 
