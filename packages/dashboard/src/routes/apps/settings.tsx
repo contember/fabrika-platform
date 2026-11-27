@@ -5,7 +5,7 @@ import { EnvironmentsSection } from '../../components/app-detail/EnvironmentsSec
 import { AppFrame, loadAppFrame, useEnvironmentStates } from '../../components/app/AppFrame'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
-import { api, ApiError, type DeploymentNamespaceDto } from '../../lib/api'
+import { api, ApiError, type AppEnvDto, type DeploymentNamespaceDto } from '../../lib/api'
 import { fmtDate } from '../../lib/format'
 
 // How an application is built and where its environments run. Only this tab reads the namespaces, which an
@@ -53,7 +53,7 @@ export default createPage()
 				<div className="danger-zone">
 					<div className="danger-zone-copy">
 						<strong>Delete this app</strong>
-						Removes its environments, secrets, variables and deploy history. What runs at the hosting stays.
+						Removes its environments, secrets, variables and deploy history. What runs at the hosting keeps running until you remove it there.
 					</div>
 					<span className="spacer" />
 					<button type="button" className="danger" onClick={() => setConfirming(true)}>
@@ -65,7 +65,7 @@ export default createPage()
 					<ConfirmDialog
 						title="Delete app"
 						confirmLabel="Delete app"
-						body={<DeleteAppConsequences appId={app.id} envs={envs.map((env) => env.env)} />}
+						body={<DeleteAppConsequences appId={app.id} envs={envs} />}
 						onConfirm={deleteApp}
 						onClose={() => setConfirming(false)}
 					/>
@@ -74,8 +74,9 @@ export default createPage()
 		)
 	})
 
-/** What deleting an application removes and what it leaves, read before it happens. */
-export function DeleteAppConsequences({ appId, envs }: { appId: string; envs: readonly string[] }) {
+/** What deleting an application removes and what it leaves, read before it happens (`DeleteEnvironmentConsequences`). */
+export function DeleteAppConsequences({ appId, envs }: { appId: string; envs: readonly Pick<AppEnvDto, 'env' | 'namespaceId'>[] }) {
+	const routed = envs.some((env) => env.namespaceId !== null)
 	return (
 		<>
 			<p>
@@ -83,13 +84,20 @@ export function DeleteAppConsequences({ appId, envs }: { appId: string; envs: re
 			</p>
 			<p>Goes:</p>
 			<ul>
-				<li>{envs.length === 0 ? 'its registration' : `its environments (${envs.join(', ')}) and their settings`};</li>
-				<li>its secrets and variables;</li>
+				{routed && <li>its routes: its domains no longer reach it through the platform;</li>}
+				<li>
+					{envs.length === 0
+						? 'its registration'
+						: `its environments (${
+							envs.map((env) => env.env).join(', ')
+						}), their settings, keys, credentials and lists of backups (the backup files stay in storage)`};
+				</li>
+				<li>its secrets and variables: the console can no longer reach them, and a value the hosting keeps stays there;</li>
 				<li>its deploy history.</li>
 			</ul>
 			<p>Stays:</p>
 			<ul>
-				<li>what runs at the hosting, and its data: the platform removes no service or database there;</li>
+				<li>what runs at the hosting, and its data: it keeps running{routed ? ', unreachable through the platform,' : ''} until you remove it there;</li>
 				<li>each environment's approval rules: an app registered again as {appId} starts with them.</li>
 			</ul>
 		</>

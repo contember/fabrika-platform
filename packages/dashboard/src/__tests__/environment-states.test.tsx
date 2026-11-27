@@ -287,6 +287,11 @@ describe("the overview's missing secrets", () => {
 		expect(html).not.toContain('crm / prod: ')
 	})
 
+	test('a secret only a deleted environment held is no gap: no current environment has it', async () => {
+		const data = await loadOverview(caller, withSecrets([secret('crm', 'OLD_KEY', 'stage')]))
+		expect(attention(data, new Map())).not.toContain('missing')
+	})
+
 	test('a value for all environments, or an own value everywhere, leaves no gap', async () => {
 		const data = await loadOverview(
 			caller,

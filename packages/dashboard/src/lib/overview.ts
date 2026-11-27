@@ -159,7 +159,11 @@ export function missingSecrets(data: Pick<OverviewData, 'environments' | 'secret
 	for (const env of overviewEnvironments(data)) {
 		const secrets = data.secrets.get(env.appId)?.data
 		if (secrets === undefined || secrets === null) continue
-		const names = layersByName(secrets).filter((row) => cellAt(row, env.env).kind === 'missing').map((row) => row.name)
+		const live = new Set(overviewEnvironments(data).filter((other) => other.appId === env.appId).map((other) => other.env))
+		// A deleted environment's own secrets outlive it; only one a current environment holds makes a gap on another.
+		const names = layersByName(secrets)
+			.filter((row) => [...row.byEnv.keys()].some((holder) => live.has(holder)) && cellAt(row, env.env).kind === 'missing')
+			.map((row) => row.name)
 		if (names.length > 0) gaps.push({ env, names })
 	}
 	return gaps

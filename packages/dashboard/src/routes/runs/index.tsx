@@ -3,9 +3,9 @@ import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { QuerySearch } from '../../components/QuerySearch'
+import { RunDuration, RunReview } from '../../components/RunDuration'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
-import { RunDuration } from '../../components/RunDuration'
 import { api, ApiError, type RunDto } from '../../lib/api'
 import { holdsGlobally, opensApplications, scopedRunReads } from '../../lib/console-access'
 import { fmtAgo, fmtDate, shortRef, shortSha } from '../../lib/format'
@@ -147,6 +147,7 @@ export default createPage()
 								<Link to="runs/detail" params={{ id: run.id }}>
 									<RunStatus status={run.status} />
 								</Link>
+								<RunReview run={run} />
 							</td>
 							<td>
 								<span className="linked-value">

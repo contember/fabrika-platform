@@ -2,9 +2,9 @@ import { createPage, Link } from '@buzola/router'
 import { AppFrame, loadAppFrame, useEnvironmentStates } from '../../components/app/AppFrame'
 import { DeployButton } from '../../components/app/DeployButton'
 import { Icon } from '../../components/Icon'
+import { RunDuration, RunReview } from '../../components/RunDuration'
 import { RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
-import { RunDuration } from '../../components/RunDuration'
 import { api } from '../../lib/api'
 import { fmtAgo, fmtDate, shortRef, shortSha } from '../../lib/format'
 
@@ -71,6 +71,7 @@ export default createPage()
 								<Link to="runs/detail" params={{ id: run.id }}>
 									<RunStatus status={run.status} />
 								</Link>
+								<RunReview run={run} />
 							</td>
 							<td>{run.env}</td>
 							<td>
