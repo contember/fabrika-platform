@@ -112,11 +112,36 @@ export abstract class AlertsRepository {
 		return results
 	}
 
-	async deleteChannel(sourceId: string, id: string): Promise<boolean> {
-		const result = await this.db.prepare('DELETE FROM notification_channels WHERE source_id = ? AND id = ?')
+	/**
+	 * Delete a channel no notification names. The outbox keeps every notification as the source's delivery history, and
+	 * each names its channel, so a channel that has one stays (`notified`); disabling it stops new ones.
+	 */
+	async deleteChannel(sourceId: string, id: string): Promise<'deleted' | 'not_found' | 'notified'> {
+		let deleted: boolean
+		try {
+			const result = await this.db
+				.prepare(`DELETE FROM notification_channels WHERE source_id = ? AND id = ?
+					AND NOT EXISTS (SELECT 1 FROM notification_outbox WHERE notification_outbox.channel_id = notification_channels.id)`)
+				.bind(sourceId, id)
+				.run()
+			deleted = result.meta.changes === 1
+		} catch (cause) {
+			// A notification queued between the check and the delete trips the foreign key instead.
+			if (await this.channelNotified(sourceId, id).catch(() => false)) return 'notified'
+			throw cause
+		}
+		if (deleted) return 'deleted'
+		const channel = await this.db.prepare('SELECT 1 AS found FROM notification_channels WHERE source_id = ? AND id = ?')
 			.bind(sourceId, id)
-			.run()
-		return result.meta.changes === 1
+			.first<{ found: number }>()
+		return channel === null ? 'not_found' : 'notified'
+	}
+
+	private async channelNotified(sourceId: string, id: string): Promise<boolean> {
+		const row = await this.db.prepare('SELECT 1 AS found FROM notification_outbox WHERE source_id = ? AND channel_id = ? LIMIT 1')
+			.bind(sourceId, id)
+			.first<{ found: number }>()
+		return row !== null
 	}
 
 	async tryClaim(key: string, ttlMs: number): Promise<boolean> {

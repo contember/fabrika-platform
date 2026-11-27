@@ -162,6 +162,20 @@ describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => 
 			kind: 'new_issue',
 			payload: { fingerprint: 'fp-a' },
 		})
+		// The delivery history keeps the channel: the delete is refused, not a foreign-key failure.
+		expect(await repositories.alerts.deleteChannel('source-a', 'channel-a')).toBe('notified')
+		expect(await repositories.alerts.listChannels('source-a')).toHaveLength(1)
+		await repositories.alerts.upsertChannel({
+			id: 'channel-quiet',
+			sourceId: 'source-a',
+			scope: 'new_issue',
+			type: 'webhook',
+			target: 'https://example.test/hook',
+			enabled: true,
+		})
+		expect(await repositories.alerts.deleteChannel('source-b', 'channel-quiet')).toBe('not_found')
+		expect(await repositories.alerts.deleteChannel('source-a', 'channel-quiet')).toBe('deleted')
+		expect(await repositories.alerts.deleteChannel('source-a', 'channel-quiet')).toBe('not_found')
 		const claimed = await repositories.alerts.claimNotifications({ limit: 1, leaseMs: 1_000 })
 		expect(claimed).toHaveLength(1)
 		const notification = claimed[0]
