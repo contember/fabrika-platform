@@ -28,7 +28,7 @@ const derived = (name: string): ModelVariable => ({ kind: 'derived', name, sensi
  * Control's AWS variables beside the model's (ADR-0092), with the model's kinds. Every one but the proxy key is derived
  * from the stacks' outputs, the operator's plan or the release, so every run writes it when it differs. Each bucket's
  * `_REGION`, `_CREDENTIALS` and `_ADDRESSING` are under the model's bucket prefixes (`data`), not here.
- * `parameters.test.ts` holds the names a run writes to this list.
+ * `__tests__/model.test.ts` holds the names a run writes to this list.
  */
 export const AWS_CONTROL_VARIABLES: readonly ModelVariable[] = checkProviderVariables(awsInstallationModel, 'control', [
 	// Where the applications run (`access.ts`).
