@@ -151,6 +151,18 @@ export class OAuthRepository {
 	}
 
 	/**
+	 * When each grant last renewed its access: the latest spent refresh token of each, by grant id. A grant that has not
+	 * renewed since its first token is absent. Refresh tokens live as long as their grant, so a live grant's are all here.
+	 */
+	async lastRenewed(grantIds: readonly string[]): Promise<Map<string, number>> {
+		if (grantIds.length === 0) return new Map()
+		const { results } = await this.db.prepare(`SELECT grant_id, MAX(used_at) AS used_at FROM oauth_refresh_tokens
+			WHERE grant_id IN (${grantIds.map(() => '?').join(', ')}) AND used_at IS NOT NULL GROUP BY grant_id`)
+			.bind(...grantIds).all<{ grant_id: string; used_at: number }>()
+		return new Map(results.map((row) => [row.grant_id, Number(row.used_at)]))
+	}
+
+	/**
 	 * Revoke a live grant of `principalId` only; the person's own revocation names a grant id the browser sent. An expired
 	 * grant has already ended. True when this call revoked it, which is exactly when `audit` is written.
 	 */

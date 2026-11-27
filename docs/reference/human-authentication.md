@@ -150,7 +150,7 @@ on IAM's own pages, where the person signs in, and a passkey answers there and n
 applications, never the console, registers there too. If IAM moves to another host, every passkey stops answering, and
 each person registers a new one.
 
-**On IAM's account page** (`/auth/account`, the section `#passkeys`) a person lists their passkeys (label, added, last
+**On IAM's account page** (`/auth/account`, the section `#passkeys`, first on the page) a person lists their passkeys (label, added, last
 used), adds one and removes one. In the console, the account menu's "Passkeys" links there. Each ceremony is a page of
 its own: a form posts the step, the page runs `navigator.credentials` under its nonce, puts the answer in a hidden field
 and posts it. No page fetches anything, so the pages' `connect-src` stays closed. Every POST is same-origin and needs

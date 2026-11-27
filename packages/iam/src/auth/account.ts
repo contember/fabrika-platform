@@ -105,25 +105,49 @@ async function accountPage(request: Request, services: Services, login: CurrentL
 	const rows = await services.repositories.oauth.listLiveForPrincipal(login.principal.id, unixNow(), ACCOUNT_GRANTS_SHOWN + 1)
 	const shown = rows.slice(0, ACCOUNT_GRANTS_SHOWN)
 	const names = await appNames(services, shown)
+	const renewed = await services.repositories.oauth.lastRenewed(shown.map((grant) => grant.id))
 	const held = await services.repositories.passkeys.list(login.principal.id)
 	const passkeyLabels = new Map(held.map((passkey) => [passkey.credential_id, passkey.label]))
-	const status = notice === null ? '' : `<p role="status">${escapeHtml(noticeText(catalog, notice))}</p>`
-	const list = shown.length === 0
-		? `<p>${escapeHtml(text.none)}</p>`
-		: `<ul class="rows">${shown.map((grant) => grantItem(catalog, grant, names.get(grant.app) ?? grant.app, passkeyLabels)).join('')}</ul>`
-	const more = rows.length > ACCOUNT_GRANTS_SHOWN ? `<p>${escapeHtml(text.more(ACCOUNT_GRANTS_SHOWN))}</p>` : ''
+	const status = notice === null
+		? ''
+		: `<p role="status" class="notice${REFUSALS.has(notice) ? ' error' : ''}">${escapeHtml(noticeText(catalog, notice))}</p>`
+	const grants = shown.map((grant) => describeGrant(catalog, grant, names.get(grant.app) ?? grant.app, renewed.get(grant.id) ?? null, passkeyLabels))
 	return htmlPage({
 		locale,
 		brand: await installationBrand(services),
 		title: text.title,
-		content: `<h1>${escapeHtml(text.title)}</h1>
-		<p>${escapeHtml(catalog.pages.chooseAccount.signedInAs)} <strong>${escapeHtml(login.principal.label)}</strong>.</p>
+		layout: 'workspace',
+		content: `<div class="page-head"><h1>${escapeHtml(text.title)}</h1>
+		<p class="subtitle">${escapeHtml(catalog.pages.chooseAccount.signedInAs)} <strong>${escapeHtml(login.principal.label)}</strong>.</p></div>
+		<nav class="section-nav" aria-label="${escapeHtml(text.onThisPage)}"><a href="#passkeys">${
+			escapeHtml(catalog.pages.passkeys.title)
+		} <span class="count">${held.length}</span></a><a href="#connections">${escapeHtml(text.connectionsTitle)} <span class="count">${
+			rows.length > ACCOUNT_GRANTS_SHOWN ? `${ACCOUNT_GRANTS_SHOWN}+` : shown.length
+		}</span></a></nav>
 		${status}
-		<h2 id="connections">${escapeHtml(text.connectionsTitle)}</h2>
-		<p>${escapeHtml(text.connectionsText)}</p>
-		${list}${more}
-		${passkeysSection(held, catalog)}`,
+		${passkeysSection(held, catalog)}
+		${grantsSection(catalog, grants, rows.length > ACCOUNT_GRANTS_SHOWN)}
+		${revokeDialog(text)}`,
+		script: CONFIRM_SCRIPT,
 	})
+}
+
+/** The outcomes that report a refusal, shown on the stop wash rather than as a plain notice. */
+const REFUSALS: ReadonlySet<Notice> = new Set(['passkey_refused', 'passkey_busy', 'passkey_duplicate', 'passkey_limit', 'passkey_label'])
+
+/**
+ * Asks before a form marked `data-confirm` posts: the dialog shows the form's own words and posts it on its confirm
+ * button. A browser without `<dialog>` posts at once, as the page did before it asked.
+ */
+const CONFIRM_SCRIPT =
+	"var confirmDialog=document.getElementById('revoke-dialog');var confirming=null;if(confirmDialog&&typeof confirmDialog.showModal==='function'){document.querySelectorAll('form[data-confirm]').forEach(function(form){form.addEventListener('submit',function(event){event.preventDefault();confirming=form;document.getElementById('revoke-text').textContent=form.dataset.confirm;confirmDialog.returnValue='';confirmDialog.showModal();});});confirmDialog.addEventListener('close',function(){var form=confirming;confirming=null;if(confirmDialog.returnValue==='revoke'&&form)form.submit();});}"
+
+function revokeDialog(text: Catalog['pages']['account']): string {
+	return `<dialog id="revoke-dialog" aria-labelledby="revoke-title" aria-describedby="revoke-text"><form method="dialog">
+		<h2 id="revoke-title">${escapeHtml(text.revokeTitle)}</h2><p id="revoke-text"></p>
+		<div class="dialog-actions"><button type="submit" value="cancel">${
+		escapeHtml(text.cancel)
+	}</button><button type="submit" value="revoke" class="danger strong">${escapeHtml(text.revoke)}</button></div></form></dialog>`
 }
 
 function noticeText(catalog: Catalog, notice: Notice): string {
@@ -162,65 +186,144 @@ async function appNames(services: Services, grants: readonly OAuthGrantRow[]): P
 	return names
 }
 
-function grantItem(catalog: Catalog, grant: OAuthGrantRow, appName: string, passkeyLabels: ReadonlyMap<string, string>): string {
-	const text = catalog.pages.account
-	const who = grant.client_id === AGENT_CLIENT_ID
-		? `<strong>${escapeHtml(text.agent(grant.agent_label))}</strong>${
-			grant.agent_label === null ? '' : ` <small>${escapeHtml(text.agentWords)}</small>`
-		}`
-		: `<strong>${escapeHtml(grant.client_id === OAUTH_CLI_CLIENT_ID ? text.commandLine : text.client(grant.client_id))}</strong>`
-	const reaches = grant.app === CONTROL_APP_ID ? consoleLabel(grant) ?? appName : appName
-	const tokens = parseStoredPermissions(grant.scopes)
-	const scope = grant.client_id === AGENT_CLIENT_ID ? storedAgentScope(tokens) : null
-	const what = scope === null
-		? `<p>${escapeHtml(text.scopes)}: ${tokens.map((token) => `<code>${escapeHtml(token)}</code>`).join(' ')}</p>`
-		: `<p>${escapeHtml(text.mode(scope.mode))}${scope.within === null ? '' : ` <code>${escapeHtml(agentScopeToken(scope))}</code>`}</p>`
-	const resources = grantResources(grant).map((uri) => `<code>${escapeHtml(uri)}</code>`).join(' ')
-	return `<li>${who}
-		<p>${escapeHtml(text.reaches)}: <strong>${escapeHtml(reaches)}</strong> ${resources}</p>
-		${what}
-		${confirmation(text, grant, passkeyLabels)}
-		<p>${escapeHtml(text.allowed)}: ${utc(grant.created_at)} · ${escapeHtml(text.ends)}: ${utc(grant.expires_at)}</p>
-		<form method="post" action="${ACCOUNT_PATH}"><input type="hidden" name="grant" value="${escapeHtml(grant.id)}">
-		<button type="submit">${escapeHtml(text.revoke)}</button></form></li>`
+/** One grant as the page shows it: who holds it, what it reaches and may do, and when. */
+interface GrantView {
+	readonly grant: OAuthGrantRow
+	readonly holder: string
+	readonly reaches: string
+	/** The holder is an agent that named itself; its name is its own words. */
+	readonly selfNamed: boolean
+	/** When it last renewed its access; null when it has not since its approval. */
+	readonly renewed: number | null
+	/** What it may do: the mode of an agent's grant in words, else its scope names. */
+	readonly mode: string | null
+	readonly scopes: readonly string[]
+	readonly confirmation: string | null
 }
 
-/** Which passkey confirmed the grant's approval and when, by the label of a passkey the person still holds; empty when none did. */
-function confirmation(text: Catalog['pages']['account'], grant: OAuthGrantRow, passkeyLabels: ReadonlyMap<string, string>): string {
-	if (grant.passkey_confirmed_at === null) return ''
+function describeGrant(
+	catalog: Catalog,
+	grant: OAuthGrantRow,
+	appName: string,
+	renewed: number | null,
+	passkeyLabels: ReadonlyMap<string, string>,
+): GrantView {
+	const text = catalog.pages.account
+	const agent = grant.client_id === AGENT_CLIENT_ID
+	const tokens = parseStoredPermissions(grant.scopes)
+	const scope = agent ? storedAgentScope(tokens) : null
+	return {
+		grant,
+		holder: agent ? text.agent(grant.agent_label) : grant.client_id === OAUTH_CLI_CLIENT_ID ? text.commandLine : text.client(grant.client_id),
+		reaches: grant.app === CONTROL_APP_ID ? consoleLabel(grant) ?? appName : appName,
+		selfNamed: agent && grant.agent_label !== null,
+		renewed,
+		mode: scope === null ? null : text.mode(scope.mode),
+		scopes: scope === null ? tokens : scope.within === null ? [] : [agentScopeToken(scope)],
+		confirmation: confirmation(text, grant, passkeyLabels),
+	}
+}
+
+/**
+ * The grants, one group of rows per application they reach, in the order of each group's newest grant. A row leads with
+ * what tells two similar grants apart (when each was allowed, last active and ends) and folds the endpoints away.
+ */
+function grantsSection(catalog: Catalog, grants: readonly GrantView[], more: boolean): string {
+	const text = catalog.pages.account
+	const groups = new Map<string, GrantView[]>()
+	for (const view of grants) groups.set(view.reaches, [...(groups.get(view.reaches) ?? []), view])
+	const table = grants.length === 0
+		? `<p>${escapeHtml(text.none)}</p>`
+		: `<table class="stack"><thead><tr><th class="grow" scope="col">${escapeHtml(text.holder)}</th><th scope="col">${
+			escapeHtml(text.allowed)
+		}</th><th scope="col">${escapeHtml(text.lastActive)}</th><th scope="col">${escapeHtml(text.ends)}</th><th scope="col"><span hidden>${
+			escapeHtml(text.revoke)
+		}</span></th></tr></thead>${
+			[...groups].map(([reaches, views]) =>
+				`<tbody><tr><th colspan="5" scope="rowgroup">${escapeHtml(reaches)} <span class="count">${views.length}</span></th></tr>${
+					views.map((view) => grantRow(catalog, view)).join('')
+				}</tbody>`
+			).join('')
+		}</table>`
+	const words = grants.some((view) => view.selfNamed) ? ` ${text.agentWords}` : ''
+	return `<section class="card" id="connections" aria-labelledby="connections-title"><div class="card-head"><h2 id="connections-title">${
+		escapeHtml(text.connectionsTitle)
+	}</h2></div><div class="card-body">
+		<p>${escapeHtml(text.connectionsText)} ${escapeHtml(text.lastActiveText)}${escapeHtml(words)}</p>
+		${table}${more ? `<p>${escapeHtml(text.more(ACCOUNT_GRANTS_SHOWN))}</p>` : ''}</div></section>`
+}
+
+function grantRow(catalog: Catalog, view: GrantView): string {
+	const text = catalog.pages.account
+	const { grant } = view
+	const allowed = utc(grant.created_at)
+	const chips = view.scopes.length === 0
+		? ''
+		: `<span class="chips">${view.scopes.map((token) => `<code class="chip">${escapeHtml(token)}</code>`).join('')}</span>`
+	const details = `<details><summary>${escapeHtml(text.details)}</summary><dl><dt>${escapeHtml(text.endpoints)}</dt><dd>${
+		grantResources(grant).map((uri) => `<code>${escapeHtml(uri)}</code>`).join('')
+	}</dd><dt>${escapeHtml(text.scopes)}</dt><dd>${
+		parseStoredPermissions(grant.scopes).map((token) => `<code>${escapeHtml(token)}</code>`).join('')
+	}</dd></dl></details>`
+	return `<tr><td><strong>${escapeHtml(view.holder)}</strong>${
+		view.mode === null ? '' : `<span class="line">${escapeHtml(view.mode)}</span>`
+	}${chips}${view.confirmation === null ? '' : `<span class="line">${escapeHtml(view.confirmation)}</span>`}${details}</td>
+		<td class="when" data-label="${escapeHtml(text.allowed)}">${allowed}</td>
+		<td class="when" data-label="${escapeHtml(text.lastActive)}">${view.renewed === null ? escapeHtml(text.notRenewed) : utc(view.renewed)}</td>
+		<td class="when" data-label="${escapeHtml(text.ends)}">${utc(grant.expires_at)}</td>
+		<td class="act"><form method="post" action="${ACCOUNT_PATH}" data-confirm="${escapeHtml(text.revokeConfirm(view.holder, view.reaches, allowed))}">
+		<input type="hidden" name="grant" value="${escapeHtml(grant.id)}"><button type="submit" class="danger small" aria-label="${
+		escapeHtml(text.revokeLabel(view.holder, view.reaches, allowed))
+	}">${escapeHtml(text.revoke)}</button></form></td></tr>`
+}
+
+/** Which passkey confirmed the grant's approval and when, by the label of a passkey the person still holds; null when none did. */
+function confirmation(text: Catalog['pages']['account'], grant: OAuthGrantRow, passkeyLabels: ReadonlyMap<string, string>): string | null {
+	if (grant.passkey_confirmed_at === null) return null
 	const label = grant.passkey_credential_id === null ? null : passkeyLabels.get(grant.passkey_credential_id) ?? null
 	const words = grant.passkey_credential_id === null
 		? text.confirmedWithUnrecorded
 		: label === null
 		? text.confirmedWithRemoved
 		: text.confirmedWith(label)
-	return `<p>${escapeHtml(words)}: ${utc(grant.passkey_confirmed_at)}</p>`
+	return `${words}: ${utc(grant.passkey_confirmed_at)}`
 }
 
-/** The passkeys section of the account page: the person's passkeys, each with its removal, and the form that adds one. */
+/**
+ * The passkeys section, first on the page because registering one is what most people come for: the person's passkeys,
+ * each with its removal (whose own page asks a passkey check first), and the form that adds one.
+ */
 function passkeysSection(held: readonly PasskeyRow[], catalog: Catalog): string {
 	const text = catalog.pages.passkeys
 	const list = held.length === 0
 		? `<p>${escapeHtml(text.none)}</p>`
-		: `<ul class="rows">${
+		: `<table class="stack"><thead><tr><th class="grow" scope="col">${escapeHtml(text.label)}</th><th scope="col">${
+			escapeHtml(text.added)
+		}</th><th scope="col">${escapeHtml(text.lastUsed)}</th><th scope="col"><span hidden>${escapeHtml(text.remove)}</span></th></tr></thead><tbody>${
 			held.map((passkey) =>
-				`<li><strong>${escapeHtml(passkey.label)}</strong><br>${escapeHtml(text.added)}: ${utc(passkey.created_at)} · ${escapeHtml(text.lastUsed)}: ${
+				`<tr><td><strong>${escapeHtml(passkey.label)}</strong></td><td class="when" data-label="${escapeHtml(text.added)}">${
+					utc(passkey.created_at)
+				}</td><td class="when" data-label="${escapeHtml(text.lastUsed)}">${
 					passkey.last_used_at === null ? escapeHtml(text.neverUsed) : utc(passkey.last_used_at)
-				}
-				<form method="post" action="${PASSKEYS_PATH}"><input type="hidden" name="step" value="remove"><input type="hidden" name="passkey" value="${
+				}</td>
+				<td class="act"><form method="post" action="${PASSKEYS_PATH}"><input type="hidden" name="step" value="remove"><input type="hidden" name="passkey" value="${
 					escapeHtml(passkey.id)
-				}"><button type="submit">${escapeHtml(text.remove)}</button></form></li>`
+				}"><button type="submit" class="danger small" aria-label="${escapeHtml(text.removeLabel(passkey.label))}">${
+					escapeHtml(text.remove)
+				}</button></form></td></tr>`
 			).join('')
-		}</ul>`
-	return `<h2 id="passkeys">${escapeHtml(text.title)}</h2>
+		}</tbody></table>`
+	return `<section class="card" id="passkeys" aria-labelledby="passkeys-title"><div class="card-head"><h2 id="passkeys-title">${
+		escapeHtml(text.title)
+	}</h2></div><div class="card-body">
 		<p>${escapeHtml(text.text)}</p>
 		${list}
-		<h3>${escapeHtml(text.addTitle)}</h3>
-		<form method="post" action="${PASSKEYS_PATH}"><input type="hidden" name="step" value="add">
-		<label for="passkey-label">${escapeHtml(text.label)}</label>
-		<input id="passkey-label" name="label" required maxlength="${MAX_PASSKEY_LABEL_LENGTH}" autocomplete="off">
-		<p>${escapeHtml(text.labelHint)}</p>
-		<button type="submit">${escapeHtml(text.add)}</button></form>`
+		<h3 class="subhead">${escapeHtml(text.addTitle)}</h3>
+		<form class="inline-form" method="post" action="${PASSKEYS_PATH}"><input type="hidden" name="step" value="add">
+		<label for="passkey-label">${escapeHtml(text.label)}
+		<input id="passkey-label" name="label" required maxlength="${MAX_PASSKEY_LABEL_LENGTH}" autocomplete="off" aria-describedby="passkey-label-hint"></label>
+		<button type="submit">${escapeHtml(text.add)}</button>
+		<p class="hint" id="passkey-label-hint">${escapeHtml(text.labelHint)}</p></form></div></section>`
 }
 
 /** The names the device page gives the console's command-line resources (`Console`, `Operations`), for a grant on them. */

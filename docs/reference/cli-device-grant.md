@@ -173,6 +173,7 @@ the request kicks, which runs with its own workload authority, and a `connect` i
 A grant is bound to the IAM session that approved it, and IAM mints nothing for it once that session has ended. Signing
 out ends it. So does an administrator revoking the session, or the person losing their access. The token can also be
 revoked at IAM's revocation endpoint (RFC 7009), which revokes the whole grant. The person lists every grant that acts
-as them, the command-line client's and each agent's, on IAM's account page (`<issuer>/auth/account`) and revokes any
-of them there; an administrator does the same from the user's page in the console. A revoked grant refuses its next
+as them, the command-line client's and each agent's, on IAM's account page (`<issuer>/auth/account`), grouped by the
+application each reaches with when it was allowed, when it last renewed its access and when it ends, and revokes any of
+them there after a confirmation; an administrator does the same from the user's page in the console. A revoked grant refuses its next
 refresh, and an agent's next exchange, so an issued access token stops working within 300 s.
