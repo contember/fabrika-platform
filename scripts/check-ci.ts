@@ -1,13 +1,9 @@
-// `bun run check:ci` runs locally what `.github/workflows/ci.yml` runs, in the same order, so a green run here is a
-// green CI run. `release.yml` calls that workflow as its `verify` job, so this is also the gate a tag must pass.
-//
-// Each job of the test matrix (PostgreSQL major × shard) gets its own throwaway PostgreSQL and SeaweedFS containers on
-// free loopback ports, as each CI job gets its own runner, and the jobs run concurrently, one per two available CPUs. A
-// backend the environment already names is used as it is, by one job at a time. What cannot run here — no docker, no
-// npm — is skipped and named in the summary, never silently.
+// `bun run check:ci` runs every step of `.github/workflows/ci.yml` locally, CI's jobs at once, so a green run here is a green
+// CI run; docs/reference/release-process.md ("The same gates locally") says in what order and why.
 // `scripts/__tests__/check-ci.test.ts` fails when these steps and `ci.yml` drift apart.
 
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 
@@ -87,12 +83,16 @@ export const PROXY_IMAGE_STEPS: readonly CiStep[] = [
 	},
 ]
 
-/** These need npm on PATH, as the CI job gets it from `setup-node`. */
-export const RELEASE_ARTIFACT_STEPS: readonly CiStep[] = [
-	{ job: 'release-artifacts', name: 'Pack public packages', run: 'bun run release:pack --tag=v0.0.0-ci.0' },
+/**
+ * These need npm on PATH, as the CI job gets it from `setup-node`. The pack walks the package directories; the others read
+ * its tarballs and committed files (manifests, tsconfigs), none of which a suite writes.
+ */
+export const RELEASE_PACK_STEP: CiStep = { job: 'release-artifacts', name: 'Pack public packages', run: 'bun run release:pack --tag=v0.0.0-ci.0' }
+export const RELEASE_CHECK_STEPS: readonly CiStep[] = [
 	{ job: 'release-artifacts', name: 'Test tarballs in an isolated consumer', run: 'bun run release:smoke --tag=v0.0.0-ci.0' },
 	{ job: 'release-artifacts', name: 'Verify npm publish inputs', run: 'bun run release:publish --tag=v0.0.0-ci.0 --dry-run' },
 ]
+export const RELEASE_ARTIFACT_STEPS: readonly CiStep[] = [RELEASE_PACK_STEP, ...RELEASE_CHECK_STEPS]
 
 /** The test job's PostgreSQL majors in the gate: the one Zerops runs. `ci.yml`'s nightly run adds 17, which this script does not run. */
 export const POSTGRES_MAJORS: readonly string[] = ['18']
@@ -293,10 +293,12 @@ export const startSeaweedfs = async (): Promise<Backend> => {
 	return { env: { ...S3_VALUES, FABRIKA_TEST_S3_ENDPOINT: `http://127.0.0.1:${await publishedPort(name, 9000)}` }, container: name }
 }
 
-const runStep = async (step: CiStep, label: string, env: Record<string, string | undefined>, results: StepResult[]): Promise<void> => {
-	console.info(`\n▸ ${label}\n  $ ${step.run}`)
+/** The install streams its output: it runs alone, before every lane. */
+const runInstall = async (env: Record<string, string | undefined>, results: StepResult[]): Promise<void> => {
+	const label = `${INSTALL_STEP.job}: ${INSTALL_STEP.name}`
+	console.info(`\n▸ ${label}\n  $ ${INSTALL_STEP.run}`)
 	const started = performance.now()
-	const child = Bun.spawn(['bash', '-eo', 'pipefail', '-c', step.run], { cwd: ROOT, env, stdout: 'inherit', stderr: 'inherit' })
+	const child = Bun.spawn(['bash', '-eo', 'pipefail', '-c', INSTALL_STEP.run], { cwd: ROOT, env, stdout: 'inherit', stderr: 'inherit' })
 	const exitCode = await child.exited
 	if (exitCode !== 0) throw new StepFailure(`"${label}" failed (exit ${exitCode})`)
 	results.push({ label, seconds: (performance.now() - started) / 1000 })
@@ -324,11 +326,52 @@ const testBackends = (docker: boolean, skipped: string[]): TestBackends => {
 	return { postgres, s3, concurrent: !postgresGiven && !s3Given }
 }
 
+/**
+ * The lanes beside the test matrix run below its priority: its suites have 5 s timeouts, and a typecheck or a build
+ * competing at the same priority pushed them past those. The lanes take what CPU the tests leave.
+ */
+const BACKGROUND_NICENESS = '10'
+
 /** Runs a step with its stdout and stderr captured together, so concurrent jobs do not interleave their output. */
-const captureStep = async (run: string, env: Record<string, string | undefined>): Promise<{ readonly exitCode: number; readonly output: string }> => {
-	const child = Bun.spawn(['bash', '-eo', 'pipefail', '-c', `exec 2>&1\n${run}`], { cwd: ROOT, env, stdout: 'pipe', stderr: 'inherit' })
+const captureStep = async (
+	run: string,
+	env: Record<string, string | undefined>,
+	priority: 'tests' | 'background',
+): Promise<{ readonly exitCode: number; readonly output: string }> => {
+	const shell = ['bash', '-eo', 'pipefail', '-c', `exec 2>&1\n${run}`]
+	const command = priority === 'tests' ? shell : ['nice', '-n', BACKGROUND_NICENESS, ...shell]
+	const child = Bun.spawn(command, { cwd: ROOT, env, stdout: 'pipe', stderr: 'inherit' })
 	const [exitCode, output] = await Promise.all([child.exited, new Response(child.stdout).text()])
 	return { exitCode, output }
+}
+
+/** Runs one step with its output captured; false when it failed, after printing its output. */
+const runCaptured = async (
+	run: string,
+	label: string,
+	env: Record<string, string | undefined>,
+	priority: 'tests' | 'background',
+	results: StepResult[],
+): Promise<boolean> => {
+	console.info(`▸ ${label}\n  $ ${run}`)
+	const started = performance.now()
+	const { exitCode, output } = await captureStep(run, env, priority)
+	if (exitCode !== 0) {
+		console.error(`\n✗ ${label} failed (exit ${exitCode}):\n${output}`)
+		return false
+	}
+	const seconds = (performance.now() - started) / 1000
+	results.push({ label, seconds })
+	console.info(`✓ ${label} (${seconds.toFixed(1)} s)`)
+	return true
+}
+
+/** A lane: CI jobs' steps in order, stopping at the first that fails, as one CI job does. */
+const runLane = async (steps: readonly CiStep[], env: Record<string, string | undefined>, results: StepResult[]): Promise<void> => {
+	for (const step of steps) {
+		const label = `${step.job}: ${step.name}`
+		if (!await runCaptured(step.run, label, env, 'background', results)) throw new StepFailure(`"${label}" failed`)
+	}
 }
 
 /** Runs one job of the test matrix on backends of its own; false when a step failed, after printing its output. */
@@ -348,17 +391,7 @@ const runTestJob = async (
 		for (const step of TEST_STEPS) {
 			if (step.onlyInShard !== undefined && step.onlyInShard !== job.shard) continue
 			const run = step.run.replaceAll(SHARD_PLACEHOLDER, String(job.shard))
-			const label = `${job.label}: ${step.name}`
-			console.info(`\n▸ ${label}\n  $ ${run}`)
-			const started = performance.now()
-			const { exitCode, output } = await captureStep(run, jobEnv)
-			if (exitCode !== 0) {
-				console.error(`\n✗ ${label} failed (exit ${exitCode}):\n${output}`)
-				return false
-			}
-			const seconds = (performance.now() - started) / 1000
-			results.push({ label, seconds })
-			console.info(`✓ ${label} (${seconds.toFixed(1)} s)`)
+			if (!await runCaptured(run, `${job.label}: ${step.name}`, jobEnv, 'tests', results)) return false
 		}
 		return true
 	} finally {
@@ -366,8 +399,35 @@ const runTestJob = async (
 	}
 }
 
-/** One test job per two CPUs the run may use: on 4 vCPU (2 cores), 4 jobs at once pushed tests past their 5 s timeouts. */
-export const testJobWorkers = (jobs: number): number => Math.max(1, Math.min(Math.floor(availableParallelism() / 2), jobs))
+/**
+ * The physical cores among the CPUs this process may run on: SMT siblings share one core, so they count once. Undefined
+ * where Linux's `/proc` and `/sys` do not say.
+ */
+export const availableCores = (): number | undefined => {
+	try {
+		const allowed = /^Cpus_allowed_list:\s*([\d,-]+)$/m.exec(readFileSync('/proc/self/status', 'utf8'))?.[1]
+		if (allowed === undefined) return undefined
+		const cores = new Set<string>()
+		for (const range of allowed.split(',')) {
+			const bounds = /^(\d+)(?:-(\d+))?$/.exec(range)
+			if (bounds?.[1] === undefined) return undefined
+			const first = Number(bounds[1])
+			const last = bounds[2] === undefined ? first : Number(bounds[2])
+			for (let cpu = first; cpu <= last; cpu += 1) {
+				cores.add(readFileSync(`/sys/devices/system/cpu/cpu${cpu}/topology/thread_siblings_list`, 'utf8').trim())
+			}
+		}
+		return cores.size
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * One test job per core the run may use: on 4 vCPU (2 cores), 4 jobs at once pushed tests past their 5 s timeouts. Without
+ * a topology to read, a core is taken to be two CPUs.
+ */
+export const testJobWorkers = (jobs: number): number => Math.max(1, Math.min(availableCores() ?? Math.floor(availableParallelism() / 2), jobs))
 
 const runTestMatrix = async (env: Record<string, string | undefined>, backends: TestBackends, results: StepResult[]): Promise<void> => {
 	const jobs = backends.postgres.flatMap((postgres) =>
@@ -396,24 +456,34 @@ const runTestMatrix = async (env: Record<string, string | undefined>, backends: 
 
 const run = async (results: StepResult[], skipped: string[]): Promise<void> => {
 	const env = { ...process.env }
-	await runStep(INSTALL_STEP, `quality: ${INSTALL_STEP.name}`, env, results)
-	for (const step of QUALITY_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
+	await runInstall(env, results)
+	const docker = await dockerAvailable()
+	const npm = Bun.which('npm') !== null
 
-	await runTestMatrix(env, testBackends(await dockerAvailable(), skipped), results)
+	// Every lane runs to its end, as CI's jobs do, so one run names every failure. A failure is recorded as it happens: a
+	// lane may fail while the run still waits for another phase.
+	const failures: string[] = []
+	const lane = (work: Promise<void>): Promise<void> =>
+		work.catch((error: unknown) => {
+			failures.push(error instanceof Error ? error.message : String(error))
+		})
 
-	for (const step of BUILD_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
+	// Each image is built from `git archive HEAD`, so it reads nothing the other jobs write; each is a job of its own.
+	const lanes = docker ? PROXY_IMAGE_STEPS.map((step) => lane(runLane([step], env, results))) : []
+	if (!docker) skipped.push(`the image jobs (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
+	if (!npm) skipped.push(`the release-artifacts job (${RELEASE_ARTIFACT_STEPS.map((step) => step.name).join(', ')}): npm is not on PATH`)
 
-	if (await dockerAvailable()) {
-		for (const step of PROXY_IMAGE_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
-	} else {
-		skipped.push(`the image jobs (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
-	}
+	// Suites write scratch files into the source tree, which the quality steps and the pack walk; these end before tests start.
+	const quality = lane(runLane(QUALITY_STEPS, env, results))
+	const pack = npm ? runLane([RELEASE_PACK_STEP], env, results) : undefined
+	await Promise.allSettled(pack === undefined ? [quality] : [quality, pack])
 
-	if (Bun.which('npm') === null) {
-		skipped.push(`the release-artifacts job (${RELEASE_ARTIFACT_STEPS.map((step) => step.name).join(', ')}): npm is not on PATH`)
-		return
-	}
-	for (const step of RELEASE_ARTIFACT_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
+	// The builds also follow the quality steps: the typecheck and the dashboard's build both rewrite its generated routes.
+	lanes.push(quality, lane(runTestMatrix(env, testBackends(docker, skipped), results)), lane(runLane(BUILD_STEPS, env, results)))
+	if (pack !== undefined) lanes.push(lane(pack.then(() => runLane(RELEASE_CHECK_STEPS, env, results))))
+
+	await Promise.all(lanes)
+	if (failures.length > 0) throw new StepFailure(failures.join('; '))
 }
 
 const printSummary = (results: readonly StepResult[], skipped: readonly string[], totalSeconds: number): void => {
