@@ -724,6 +724,19 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          A run that lost a build finds it by the image it builds and follows it. The tag is read after every build,
          whatever its status. Each start has a token of its own, so a start after a fast failure is a new build. At
          most two starts per image and run, and the first image to fail stops the other. The answer is each digest.
+       - **`platform install` and `platform upgrade`** (built, `installation/index.ts`, `options.ts`, `run.ts`, and the
+         operator's `guide.md`): the run over the operator's credentials from the standard variables, one
+         confirmation, and the options both take (the account, region, ranges, hosts and certificates, the release's
+         commit, the build's base image, MCP authoring), with how people sign in and the mail for an install alone.
+         The services' stack tells them apart: an install refuses an account that has one (a second install would
+         write over the operator's sign-in and make anew a key that was lost), an upgrade one that has none. The
+         credentials' account (STS `GetCallerIdentity`) must be the one named, checked before anything else. An
+         install records its choices (`installation/record.ts`, `/fabrika/platform/installation/record`); an upgrade
+         takes every choice it does not name from that record, refuses a changed network range (CloudFormation would
+         replace the VPC), host or environment name, and names a changed certificate or MCP switch before it asks.
+       - Still to come: `admin` and registering the console's schema with IAM (both reach IAM's public host),
+         requesting the certificates for exactly the hosts, the ECS service-linked role, and the sidecar workflow with
+         its GitHub OIDC role.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:

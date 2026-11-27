@@ -631,6 +631,7 @@
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/email": "workspace:*",
         "@fabrika/installation-init": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
