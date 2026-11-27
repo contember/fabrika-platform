@@ -6,11 +6,14 @@ admit the first administrator.
 
 ## What you need first
 
-1. **An AWS account and a region, and administrator access in that account.** The run creates IAM roles and
+1. **An AWS account of its own, a region, and administrator access in that account.** Give the installation an
+   account that holds nothing else: the workflow that upgrades it later may change what other workloads in the same
+   account run, which no permissions boundary prevents. The run creates IAM roles and
    policies (under `/fabrika/`), which is as much as an administrator's power, so a narrower policy buys nothing. It
    creates: two VPCs with their subnets and gateways, two load balancers, an RDS PostgreSQL instance, ECS clusters,
    services and task definitions, a Service Connect namespace (Cloud Map), CodeBuild projects, ECR repositories,
-   CloudWatch log groups, a Lambda function, S3 buckets, Parameter Store values, CloudFormation stacks, and the ECS
+   CloudWatch log groups, Lambda functions, S3 buckets, Parameter Store values, CloudFormation stacks (the ceilings
+   first: the permissions boundaries every platform role carries, which only your own credentials change), and the ECS
    service-linked role on a fresh account. Export your credentials as the standard variables:
    `eval "$(aws configure export-credentials --format env)"`. The run checks first that they are the account you name.
 2. **Four hosts, and access to their DNS**: IAM's, Control's (the console), Operations', and the applications'

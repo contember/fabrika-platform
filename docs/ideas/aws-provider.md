@@ -754,16 +754,30 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        - **The ECS service-linked role** (built, `src/aws/iam.ts`, called from `run.ts`): ensured on install and
          upgrade alike, once agreed and before the first stack; read first, made only when missing, one another caller
          made meanwhile read again.
+       - **The ceilings** (built, `installation/ceilings.ts`; decided 2026-11-27 with the deployer: the safeguards
+         hold): a stack only the operator's own credentials change, applied first by install and every upgrade, holding
+         the applications' ceiling (moved from the access stack, which an upgrade applies) and the platform's ceiling P.
+         P is the permissions boundary of every platform role and of the deployer, and it propagates: a role written
+         under it must carry P or the applications' ceiling. It allows everything but: a role write (create, inline or
+         managed policy, boundary) without one of the two ceilings; removing a boundary; re-trusting or tagging a role
+         outside `/fabrika/`; changing either ceiling, writing a policy outside `/fabrika/`; IAM on the deployer's role and
+         GitHub's provider; anything but reads on the ceilings' and the deployer's stacks; IAM users, groups and
+         long-lived credentials; identity providers (OIDC, SAML, Roles Anywhere, Identity Center, Cognito identity pools);
+         passing a role outside `/fabrika/` or to any service but ECS tasks, CodeBuild and Lambda (never a stack's
+         service role); `sts:AssumeRole`; the account and its organization. An upgrade the workflow runs whose release
+         changes a ceiling stops at that stack and names the operator's own run.
+         **The remaining reach**, which no IAM condition holds and the operator's guide states with the GitHub
+         Environment's protection (its branch and a person approving each run) and a dedicated account: a role under
+         `/fabrika/` created or re-trusted to someone outside, who gets P and no more; in an account shared with other
+         workloads, their existing roles, whose code the deployer could change and run; and a role made by hand under
+         `/fabrika/` without a ceiling.
        - **The deployer** (built, `installation/deployer.ts`, GitHub's provider in `src/aws/iam.ts`; decided
          2026-11-27: administrator access with safeguards): the role the sidecar workflow takes through GitHub's OIDC
-         provider, trusted by exactly one repository's jobs in one GitHub Environment (`sub`
-         `repo:<owner>/<name>:environment:<name>`, `aud` `sts.amazonaws.com`), holding `AdministratorAccess` inside a
-         boundary that denies: IAM on its own role, its boundary and the provider, and its own stack; IAM users and
-         long-lived credentials; making or changing identity providers; writing roles and policies outside `/fabrika/`;
-         `sts:AssumeRole`; the account and its organization. An upgrade's stacks create roles and policies, so a narrower
-         list would buy no safety: a role the deployer makes for a service carries no boundary, and the GitHub
-         Environment's protection (its branch, and a person approving each run, recommended) is what guards that reach.
-         The provider is ensured beside the stack, never owned by it, and an existing one is never changed.
+         provider, trusted by exactly one repository's jobs in one GitHub Environment, compared by GitHub's numeric ids (`sub`
+         `repository_owner_id:<id>:repository_id:<id>:environment:<name>`, the repository's claim customization `init`
+         sets; `aud` `sts.amazonaws.com`), holding `AdministratorAccess` inside P. An upgrade's stacks create roles and
+         policies, so a list of actions would buy brittleness and no safety; P is what holds. The provider is ensured
+         beside the stack, never owned by it, and an existing one is never changed.
        - Still to come: the sidecar workflow and `platform init`, which applies the deployer and writes the Environment.
 
     Control's role is scoped by the prefixes step 9 derives its names under,

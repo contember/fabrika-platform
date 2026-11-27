@@ -1,7 +1,6 @@
-// The deployer: a role only one repository's workflow in one GitHub Environment may take, with administrator access
-// inside a boundary whose denials hold on its own role, provider and stack, on users and long-lived credentials, on
-// identity providers, on roles and policies outside `/fabrika/`, on assuming a role and on the account. The boundary is
-// read by a small evaluator of explicit denials, so each test states what is refused and what an upgrade still does.
+// The deployer: a role only one repository's workflow in one GitHub Environment may take, compared by GitHub's
+// numeric ids, with administrator access inside the platform's ceiling (whose denials `ceilings.test.ts` reads), and
+// applied after GitHub's provider, its answer compared with the role it must be.
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
@@ -12,37 +11,20 @@ import {
 	AWS_ADMINISTRATOR_ACCESS,
 	AWS_DEPLOYER_SESSION_SECONDS,
 	AWS_DEPLOYER_STACK,
-	awsDeployerBoundaryStatements,
+	AWS_DEPLOYER_SUBJECT_CLAIMS,
 	awsDeployerRoleArn,
 	awsDeployerStack,
 } from '../deployer'
 
 const A = '123456789012'
-const INPUT = { accountId: A, repository: 'acme/fabrika-aws-production', environment: 'production' }
+const INPUT = {
+	accountId: A,
+	repository: 'acme/fabrika-aws-production',
+	repositoryOwnerId: '7654321',
+	repositoryId: '123456789',
+	environment: 'production',
+}
 const PROVIDER = `arn:aws:iam::${A}:oidc-provider/token.actions.githubusercontent.com`
-
-interface Statement {
-	readonly Effect: string
-	readonly Action: string | readonly string[]
-	readonly Resource?: string | readonly string[]
-	readonly NotResource?: readonly string[]
-}
-
-const listOf = (
-	value: string | readonly string[] | undefined,
-): readonly string[] => (value === undefined ? [] : typeof value === 'string' ? [value] : value)
-const glob = (pattern: string, value: string): boolean =>
-	new RegExp(`^${pattern.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\/]/g, '\\$&')).join('.*')}$`).test(value)
-
-/** Whether the boundary refuses `action` on `resource` by an explicit denial. */
-function denied(action: string, resource: string): boolean {
-	const statements: Statement[] = JSON.parse(JSON.stringify(awsDeployerBoundaryStatements(A)))
-	return statements.some((statement) => {
-		if (statement.Effect !== 'Deny' || !listOf(statement.Action).some((pattern) => glob(pattern, action))) return false
-		if (statement.NotResource !== undefined) return !statement.NotResource.some((pattern) => glob(pattern, resource))
-		return listOf(statement.Resource).some((pattern) => glob(pattern, resource))
-	})
-}
 
 /** The stack's resources, read as plain JSON. */
 function resources(): Record<string, { Type: string; Properties: Record<string, JsonValue> }> {
@@ -50,7 +32,7 @@ function resources(): Record<string, { Type: string; Properties: Record<string, 
 }
 
 describe('the deployer', () => {
-	test("one repository's workflow in one Environment alone takes the role, through GitHub's provider", () => {
+	test("one repository's workflow in one Environment alone takes the role, by GitHub's ids, through GitHub's provider", () => {
 		const role = resources()['DeployerRole']
 		expect(role?.Properties['AssumeRolePolicyDocument']).toEqual({
 			Version: '2012-10-17',
@@ -61,87 +43,36 @@ describe('the deployer', () => {
 				Condition: {
 					StringEquals: {
 						'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-						'token.actions.githubusercontent.com:sub': 'repo:acme/fabrika-aws-production:environment:production',
+						// A name a deleted repository's successor could take is not compared: the ids are.
+						'token.actions.githubusercontent.com:sub': 'repository_owner_id:7654321:repository_id:123456789:environment:production',
 					},
 				},
 			}],
 		})
+		expect(AWS_DEPLOYER_SUBJECT_CLAIMS).toEqual(['repository_owner_id', 'repository_id', 'context'])
 	})
 
-	test('administrator access inside its own boundary, under the platform path Control is denied', () => {
-		const { DeployerRole, DeployerBoundary } = resources()
+	test("administrator access inside the platform's ceiling, under the platform path Control is denied", () => {
+		const { DeployerRole } = resources()
 		expect(DeployerRole?.Properties).toMatchObject({
 			RoleName: 'fabrika-platform-deployer',
 			Path: '/fabrika/platform/',
 			ManagedPolicyArns: [AWS_ADMINISTRATOR_ACCESS],
-			PermissionsBoundary: { Ref: 'DeployerBoundary' },
+			PermissionsBoundary: `arn:aws:iam::${A}:policy/fabrika/platform/fabrika-platform-boundary`,
 			MaxSessionDuration: AWS_DEPLOYER_SESSION_SECONDS,
 		})
-		expect(DeployerBoundary?.Properties).toMatchObject({ ManagedPolicyName: 'fabrika-platform-deployer-boundary', Path: '/fabrika/platform/' })
-		expect(Object.keys(resources()).sort()).toEqual(['DeployerBoundary', 'DeployerRole'])
+		// The ceiling is the ceilings stack's, which the deployer may only read.
+		expect(Object.keys(resources())).toEqual(['DeployerRole'])
 		expect(awsDeployerRoleArn(A)).toBe(`arn:aws:iam::${A}:role/fabrika/platform/fabrika-platform-deployer`)
-	})
-
-	test('the boundary: the deployer can neither widen nor re-trust itself, nor leave another way in', () => {
-		const role = awsDeployerRoleArn(A)
-		const boundary = `arn:aws:iam::${A}:policy/fabrika/platform/fabrika-platform-deployer-boundary`
-		for (
-			const action of ['iam:UpdateAssumeRolePolicy', 'iam:AttachRolePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePermissionsBoundary', 'iam:DeleteRole']
-		) {
-			expect({ action, denied: denied(action, role) }).toEqual({ action, denied: true })
-		}
-		expect(denied('iam:CreatePolicyVersion', boundary)).toBe(true)
-		expect(denied('iam:AddClientIDToOpenIDConnectProvider', PROVIDER)).toBe(true)
-		expect(denied('cloudformation:UpdateStack', `arn:aws:cloudformation:eu-central-1:${A}:stack/${AWS_DEPLOYER_STACK}/1`)).toBe(true)
-		expect(denied('cloudformation:DeleteStack', `arn:aws:cloudformation:us-east-1:${A}:stack/${AWS_DEPLOYER_STACK}/1`)).toBe(true)
-		for (
-			const action of [
-				'iam:CreateUser',
-				'iam:CreateAccessKey',
-				'iam:CreateLoginProfile',
-				'iam:CreateServiceSpecificCredential',
-				'iam:UploadSSHPublicKey',
-			]
-		) {
-			expect({ action, denied: denied(action, `arn:aws:iam::${A}:user/someone`) }).toEqual({ action, denied: true })
-		}
-		expect(denied('iam:CreateOpenIDConnectProvider', `arn:aws:iam::${A}:oidc-provider/example.com`)).toBe(true)
-		expect(denied('iam:CreateSAMLProvider', `arn:aws:iam::${A}:saml-provider/corp`)).toBe(true)
-		// A role or policy outside `/fabrika/`, and assuming any role: no way past the boundary through one it made.
-		expect(denied('iam:CreateRole', `arn:aws:iam::${A}:role/backdoor`)).toBe(true)
-		expect(denied('iam:AttachRolePolicy', `arn:aws:iam::${A}:role/OrganizationAccountAccessRole`)).toBe(true)
-		expect(denied('iam:CreatePolicy', `arn:aws:iam::${A}:policy/admin`)).toBe(true)
-		expect(denied('sts:AssumeRole', `arn:aws:iam::${A}:role/fabrika/platform/fabrika-platform-control`)).toBe(true)
-		for (const action of ['organizations:LeaveOrganization', 'account:CloseAccount', 'iam:CreateAccountAlias', 'iam:UpdateAccountPasswordPolicy']) {
-			expect({ action, denied: denied(action, '*') }).toEqual({ action, denied: true })
-		}
-	})
-
-	test("the boundary leaves what an upgrade does: the platform's stacks, roles and policies, images, tasks and parameters", () => {
-		expect(denied('cloudformation:UpdateStack', `arn:aws:cloudformation:eu-central-1:${A}:stack/fabrika-platform-services/1`)).toBe(false)
-		expect(denied('iam:CreateRole', `arn:aws:iam::${A}:role/fabrika/platform/fabrika-platform-control`)).toBe(false)
-		expect(denied('iam:PutRolePolicy', `arn:aws:iam::${A}:role/fabrika/platform/fabrika-platform-iam-task`)).toBe(false)
-		expect(denied('iam:CreatePolicyVersion', `arn:aws:iam::${A}:policy/fabrika/fabrika-apps-boundary`)).toBe(false)
-		expect(denied('iam:PassRole', `arn:aws:iam::${A}:role/fabrika/platform/fabrika-platform-control`)).toBe(false)
-		expect(denied('iam:CreateServiceLinkedRole', `arn:aws:iam::${A}:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS`)).toBe(false)
-		expect(denied('iam:GetOpenIDConnectProvider', `arn:aws:iam::${A}:oidc-provider/example.com`)).toBe(false)
-		for (
-			const action of [
-				'codebuild:StartBuild',
-				'ecs:RunTask',
-				'ssm:PutParameter',
-				'ecr:DescribeImages',
-				'acm:DescribeCertificate',
-				'sts:GetCallerIdentity',
-			]
-		) {
-			expect({ action, denied: denied(action, '*') }).toEqual({ action, denied: false })
-		}
 	})
 
 	test('an input of another form is refused before anything is rendered: each lands in a trust condition', () => {
 		expect(() => awsDeployerStack({ ...INPUT, repository: 'acme/*' })).toThrow('not <owner>/<name>')
 		expect(() => awsDeployerStack({ ...INPUT, repository: 'acme' })).toThrow('not <owner>/<name>')
+		for (const id of ['', '0', '12a', '*', '1:2']) {
+			expect(() => awsDeployerStack({ ...INPUT, repositoryId: id })).toThrow("GitHub's ids are not numbers")
+			expect(() => awsDeployerStack({ ...INPUT, repositoryOwnerId: id })).toThrow("GitHub's ids are not numbers")
+		}
 		for (const environment of ['prod*', 'prod:ref:refs/heads/main', '', 'a b']) {
 			expect(() => awsDeployerStack({ ...INPUT, environment })).toThrow('GitHub Environment')
 		}
@@ -187,7 +118,9 @@ describe('the deployer', () => {
 		}
 		expect(await applyAwsDeployer(run)).toBe(awsDeployerRoleArn(A))
 		expect(calls).toEqual([`provider ${A}`, `create ${AWS_DEPLOYER_STACK}`])
-		expect(lines).toContain(`aws: the deployer role ${awsDeployerRoleArn(A)} trusts repo:acme/fabrika-aws-production:environment:production alone`)
+		expect(lines).toContain(
+			`aws: the deployer role ${awsDeployerRoleArn(A)} trusts acme/fabrika-aws-production's workflow in its production Environment alone`,
+		)
 		// Run again: the template it holds is the one rendered, so nothing is updated.
 		expect(await applyAwsDeployer(run)).toBe(awsDeployerRoleArn(A))
 		expect(calls).toEqual([`provider ${A}`, `create ${AWS_DEPLOYER_STACK}`, `provider ${A}`])

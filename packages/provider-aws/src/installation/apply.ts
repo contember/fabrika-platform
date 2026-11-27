@@ -3,10 +3,13 @@
 // idempotent, so an install that stopped part way (a stack still settling, a refused call) is resumed by running it
 // again, and an upgrade is the same run over a newer release.
 //
+// 0. The installation's ceilings (`ceilings.ts`): the boundary every platform role names, and the applications'. The
+//    sidecar workflow's role may only read that stack, so a release that changes a ceiling stops there, naming the
+//    operator's own run that applies it.
 // 1. The two networks, then the balancers over them (the platform's certificates already issued).
 // 2. The database's passwords, each written once: the master's is what the instance was created with, which the setup
 //    logs in with, so a later run never replaces it; a service's the setup sets, but nothing needs it to change.
-// 3. The database, the services' foundation (`runtime.ts`) and access (`access.ts`, Control's role and boundary).
+// 3. The database, the services' foundation (`runtime.ts`) and access (`access.ts`, Control's role).
 // 4. The images: their repositories and build project, then the release's two images, by digest (`images`).
 // 5. The database setup's stack, then its task, run in the platform's network and awaited: it exits 0 or the run stops.
 //    A setup an earlier run started and left running is awaited first, so two never race on one role. On an upgrade
@@ -31,6 +34,7 @@
 import type { CloudFormationClient } from '../aws/cloudformation'
 import { type EcsPlatformService, type EcsPlatformTasks, type EcsTaskRun, TASK_DEFINITION_ARN } from '../aws/ecs'
 import type { SsmPlatformSecrets } from '../aws/ssm'
+import { AwsError } from '../aws/transport'
 import { type AwsStack, ensureStack, readAgainLater, UNREAD } from '../stack'
 import { AWS_PLATFORM_CLUSTER, type AwsAccessInput, awsAccessStack } from './access'
 import {
@@ -41,6 +45,7 @@ import {
 	awsBalancersStack,
 	type AwsPlatformRecord,
 } from './balancers'
+import { AWS_CEILINGS_STACK, awsCeilingsStack } from './ceilings'
 import {
 	AWS_DATABASE_ADMIN_PASSWORD_PARAMETER,
 	AWS_DATABASE_SERVICES,
@@ -168,6 +173,17 @@ export async function applyAwsPlatform(input: AwsPlatformApplyInput): Promise<Aw
 			...(timeoutMs === undefined ? {} : { timeoutMs }),
 		})
 
+	// The ceilings first: every platform role names the platform's. Under the sidecar workflow's role an unchanged stack
+	// is only read; a release that changes a ceiling is refused there, and the operator applies it.
+	try {
+		await apply(awsCeilingsStack({ accountId: plan.accountId, region: plan.region }))
+	} catch (error) {
+		if (!(error instanceof AwsError && error.code === 'AccessDenied')) throw error
+		throw new Error(
+			`aws: this release changes the installation's ceilings (${AWS_CEILINGS_STACK}), which these credentials may not change: the sidecar `
+				+ "workflow's role never may. Run this upgrade once with your own administrator credentials; the workflow runs the next ones",
+		)
+	}
 	const apps = awsNetworkOutputs(await apply(awsNetworkStack(layouts.apps, 'apps')))
 	const platform = awsNetworkOutputs(await apply(awsNetworkStack(layouts.platform, 'platform')))
 	const balancers = awsBalancersOutputs(
