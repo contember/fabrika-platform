@@ -1,6 +1,7 @@
 import { Link } from '@buzola/router'
+import { waitingDeploySummary } from '../../lib/access-changes'
 import { type ApprovalDto } from '../../lib/api'
-import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
+import { fmtAgo, fmtDate } from '../../lib/format'
 import { Icon } from '../Icon'
 import { EmptyState, Table } from '../Table'
 
@@ -29,8 +30,7 @@ export function WaitingApprovals({ waiting }: { waiting: readonly ApprovalDto[] 
 					<tr key={approval.run.id}>
 						<td>{approval.run.env}</td>
 						<td>
-							Deploy of <code>{shortSha(approval.run.commitSha)}</code>: {approval.changes.length}{' '}
-							{approval.changes.length === 1 ? 'access change' : 'access changes'}
+							{waitingDeploySummary(approval)}
 						</td>
 						<td className="muted small nowrap" title={fmtDate(approval.run.createdAt)}>{fmtAgo(approval.run.createdAt)}</td>
 						<td>

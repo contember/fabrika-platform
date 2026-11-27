@@ -11,6 +11,7 @@ import {
 } from '@fabrika/control-contract'
 import { type Lamp, runLamp } from '../components/Status'
 import { changeWaits } from './environment-protection'
+import { shortSha } from './format'
 
 export type AccessEffect = AccessChangeDto['effect']
 
@@ -47,6 +48,14 @@ export function effectCounts(changes: readonly AccessChangeDto[]): string {
 		.filter(({ count }) => count > 0)
 		.map(({ count, word }) => `${count} ${word}`)
 		.join(', ')
+}
+
+/**
+ * One waiting deploy in one line, the same on every page that lists it: `Deploy of 35d7f69: 2 widening, 1 narrowing`.
+ */
+export function waitingDeploySummary(approval: Pick<ApprovalDto, 'run' | 'changes'>): string {
+	const counts = effectCounts(approval.changes)
+	return `Deploy of ${shortSha(approval.run.commitSha)}: ${counts === '' ? 'no access change' : counts}`
 }
 
 /** A note of what stands in front of an endpoint; one from a Control that sent text alone has no topic. */

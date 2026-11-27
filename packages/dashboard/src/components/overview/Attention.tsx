@@ -1,5 +1,6 @@
 import { Link } from '@buzola/router'
 import { type ReactNode, useState } from 'react'
+import { waitingDeploySummary } from '../../lib/access-changes'
 import { type EnvironmentState, needsDataAttention, stateLabel, stateLamp } from '../../lib/environment-state'
 import { fmtAgo, fmtDate } from '../../lib/format'
 import { runtimeHealth, unhealthyTelemetry } from '../../lib/health'
@@ -175,10 +176,7 @@ function attentionItems(data: OverviewData, states: ReadonlyMap<string, Environm
 			kind: 'delivery',
 			lamp: 'run',
 			title: 'A deploy needs your approval',
-			context: `${approval.run.appId} / ${approval.run.env} · ${
-				(approval.changes.find((change) => change.review === 'closer') ?? approval.changes.find((change) => change.effect === 'widens'))?.line
-					?? 'Access change awaiting review'
-			}`,
+			context: `${approval.run.appId} / ${approval.run.env} · ${waitingDeploySummary(approval)}`,
 			time: approval.run.startedAt ?? approval.run.createdAt,
 			action: 'Review change',
 			target: { to: 'approvals/detail', params: { id: approval.run.id } },

@@ -10,6 +10,8 @@ import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { z } from 'zod'
 import { environmentKey, useEnvironmentStatesAcross } from '../components/app/AppFrame'
+import { WaitingApprovals } from '../components/app/WaitingApprovals'
+import { InFlight } from '../components/overview/Activity'
 import { Applications } from '../components/overview/Applications'
 import { Attention } from '../components/overview/Attention'
 import { ApiError } from '../lib/api'
@@ -17,17 +19,21 @@ import type { ConsoleCaller } from '../lib/console-access'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import type { EnvironmentState } from '../lib/environment-state'
 import { loadOverview, type OverviewData } from '../lib/overview'
+import approvalPage from '../routes/approvals/detail'
 import dataPage from '../routes/apps/data'
 import appPage from '../routes/apps/detail'
 import appsPage, { ApplicationStates, environmentsFailure, type EnvironmentsRead } from '../routes/apps/index'
 import secretsPage from '../routes/apps/secrets'
 import healthPage from '../routes/operations/health/index'
+import runsPage from '../routes/runs/index'
 
 const pageRegistry = {
 	apps: appsPage.route,
 	'apps/detail': appPage.route,
 	'apps/data': dataPage.route,
 	'apps/secrets': secretsPage.route,
+	'approvals/detail': approvalPage.route,
+	runs: runsPage.route,
 	'operations/health': healthPage.route,
 }
 
@@ -311,5 +317,51 @@ describe("the overview's missing secrets", () => {
 
 		const failed = await loadOverview(caller, withSecrets([], 500))
 		expect(attention(failed, new Map())).toContain('Some checks could not be read')
+	})
+})
+
+const waiting = (appId: string, env: string) => ({
+	run: {
+		id: `run-${appId}-${env}`,
+		appId,
+		env,
+		ref: 'refs/heads/main',
+		commitSha: '35d7f69'.padEnd(40, '0'),
+		trigger: 'webhook',
+		actor: null,
+		status: 'awaiting_approval',
+		exitCode: null,
+		externalRunId: null,
+		logKey: null,
+		createdAt: 1,
+		startedAt: null,
+		finishedAt: null,
+		cancelRequestedAt: null,
+	},
+	changes: [
+		{ effect: 'widens', review: 'closer', line: 'Migration `0001_init.sql` declares function `trim`' },
+		{ effect: 'narrows', line: 'Endpoint `a` body limit changes' },
+	],
+})
+
+/** `fetchOverview` with one deploy of crm prod waiting for approval. */
+const withWaiting: RpcFetch = async (url, init) => {
+	const body = requestBody.parse(JSON.parse(String(init?.body)))
+	if (body.method === 'approvals.list') return Response.json({ result: { items: [waiting('crm', 'prod')] } })
+	return fetchOverview(url, init)
+}
+
+describe("the overview's waiting deploy", () => {
+	test('is summarized as the application page summarizes it, without a raw change line', async () => {
+		const data = await loadOverview(caller, withWaiting)
+		const html = attention(data, new Map())
+		expect(html).toContain('crm / prod · Deploy of 35d7f69: 1 widening, 1 narrowing')
+		expect(html).not.toContain('Migration')
+		expect(render(<WaitingApprovals waiting={data.approvals.data?.items ?? []} />)).toContain('Deploy of 35d7f69: 1 widening, 1 narrowing')
+	})
+
+	test('is not repeated under In flight', async () => {
+		const data = await loadOverview(caller, withWaiting)
+		expect(render(<InFlight data={data} />)).not.toContain('approval')
 	})
 })
