@@ -1761,24 +1761,6 @@ a.instrument:hover .instrument-label {
 	margin-top: 12px;
 }
 
-.ov-approval-foot {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	padding-top: 16px;
-	color: var(--ink-3);
-	font-size: var(--t-xs);
-}
-
-.ov-approval-foot svg {
-	color: var(--lamp-run);
-}
-
-.ov-approval-foot a {
-	margin-left: auto;
-	white-space: nowrap;
-}
-
 .ov-change {
 	display: grid;
 	grid-template-columns: 16px minmax(0, 1fr) auto;

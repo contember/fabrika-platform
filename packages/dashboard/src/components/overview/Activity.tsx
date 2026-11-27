@@ -1,7 +1,7 @@
 import { Link } from '@buzola/router'
 import { type ReactNode } from 'react'
 import { auditActorLabel } from '../../access/lib/audit-actors'
-import { auditActionLabel } from '../../access/lib/audit-labels'
+import { auditActionLabel, controlAuditSubject } from '../../access/lib/audit-labels'
 import { mayOpen } from '../../lib/console-access'
 import { fmtAgo, fmtDuration, shortRef, shortSha } from '../../lib/format'
 import { boundedCount, OVERVIEW_CHANGE_LIMIT, type OverviewData } from '../../lib/overview'
@@ -12,8 +12,8 @@ import { Panel } from './Panel'
 const ACTIVE_RUN_LIMIT = 6
 
 export function InFlight({ data }: { data: OverviewData }) {
+	// A deploy that waits for approval is listed in "Needs attention" and counted on the In flight tile, not here again.
 	const runs = data.activeRuns.data?.items ?? []
-	const awaiting = data.approvals.data?.items.length
 	return (
 		<Panel
 			title="In flight"
@@ -53,13 +53,6 @@ export function InFlight({ data }: { data: OverviewData }) {
 					Showing the latest {ACTIVE_RUN_LIMIT} active deploys. <Link to="runs">View all runs</Link>
 				</p>
 			)}
-			{awaiting !== undefined && awaiting > 0 && (
-				<div className="ov-approval-foot">
-					<Icon name="shield" size={15} />
-					<span>{awaiting} other {awaiting === 1 ? 'deploy awaits' : 'deploys await'} your approval</span>
-					<Link to="approvals">Review →</Link>
-				</div>
-			)}
 		</Panel>
 	)
 }
@@ -94,7 +87,7 @@ export function RecentChanges({ data }: { data: OverviewData }) {
 			title: (
 				<Link to="access/audit" params={{ requestId: event.requestId }} title={event.action}>{auditActionLabel(event.action, event.metadata)}</Link>
 			),
-			note: `${auditActorLabel(event, data.auditActors)} · ${event.resourceId ?? event.resourceType}`,
+			note: `${auditActorLabel(event, data.auditActors)} · ${controlAuditSubject(event) ?? event.resourceId ?? event.resourceType}`,
 		})
 	}
 	changes.sort((a, b) => b.time - a.time)
