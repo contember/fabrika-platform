@@ -1,10 +1,19 @@
 // The AWS installation's commands (`fabrika platform <command> --provider=aws`), which the CLI loads from
 // `@fabrika/provider-aws/installation` through the open installation contract.
 
-import { confirmations, describeArgument, UNATTENDED_FLAG } from '@fabrika/installation-init'
+import {
+	configureEnvironment,
+	confirmations,
+	describeArgument,
+	ghRepoExists,
+	scaffoldSidecarRepository,
+	triggerPlatformWorkflow,
+	UNATTENDED_FLAG,
+} from '@fabrika/installation-init'
 import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
 import { fileURLToPath } from 'node:url'
 import { awsAdmitFirstAdministrator, awsSchemaReconciler, parseAwsAdminArgs, runAwsAdmin } from './admin'
+import { consoleAction, ghAwsInitGithub, parseAwsInitArgs, runAwsInit } from './init'
 import { parseAwsInstallArgs, parseAwsUpgradeArgs } from './options'
 import { awsPlatformClients, environmentCredentials, runAwsPlatform } from './run'
 
@@ -17,6 +26,8 @@ Commands:
   fabrika platform install --provider=aws [options]
   fabrika platform upgrade --provider=aws [options]
   fabrika platform admin   --provider=aws --account-id=<12 digits> --region=<region> --email=<address> [--reissue]
+  fabrika platform init    --provider=aws --account-id=<12 digits> --region=<region> --repo=<owner/name>
+                           --tag=<published tag> --base-image=<image@sha256:...> [--checkout=<dir>] [--yes]
 
 \`install\` makes an installation in an AWS account and region that holds none, or finishes one that stopped
 before its services were created; \`upgrade\` moves an existing one to a release, and finishes an install that
@@ -58,11 +69,17 @@ Install only: --auth-methods=<oidc|password|oidc,password> (password unless name
 with IAM and admits the first administrator (FABRIKA_PLATFORM_ADMIN_EMAIL for --email). IAM's provisioning key is read
 from the installation itself, never given. An enrollment URL it prints is a credential: printed once, stored nowhere.
 
+\`init\` makes the sidecar repository whose GitHub workflow upgrades the installation from then on: the workflow,
+the deployer role it takes through GitHub's OIDC provider (no key stored anywhere), and the GitHub Environment,
+named after the installation's environment, with the role's ARN, the account, the region and the base image. It
+needs \`gh\` signed in with rights to create the repository. Add a required reviewer to that Environment, so a person
+approves every upgrade: init prints the command. Each step asks first.
+
 Credentials: the operator's own, as \`aws configure export-credentials --format env\` prints them
 (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN). They are never logged.
 `
 
-const COMMANDS: readonly InstallationCommand[] = ['install', 'upgrade', 'admin', 'guide']
+const COMMANDS: readonly InstallationCommand[] = ['install', 'upgrade', 'admin', 'init', 'guide']
 
 /** The operator's guide of this release, shipped beside this module. */
 export const readAwsInstallationGuide = (): Promise<string> => Bun.file(fileURLToPath(new URL('./guide.md', import.meta.url))).text()
@@ -115,6 +132,35 @@ export const installationCli: InstallationCli = {
 		}
 		if (command === 'install' || command === 'upgrade') {
 			await runPlatform(command, argv)
+			return
+		}
+		if (command === 'init') {
+			const options = parseAwsInitArgs(argv, process.env)
+			const clients = awsPlatformClients(options, environmentCredentials(process.env))
+			const log = (line: string): void => console.info(line)
+			await runAwsInit({
+				options,
+				sts: clients.sts,
+				cloudFormation: clients.cloudFormation,
+				secrets: clients.secrets,
+				iam: clients.githubIdentity,
+				github: ghAwsInitGithub({
+					repositoryExists: (repo) => ghRepoExists(repo),
+					scaffold: (input) => scaffoldSidecarRepository(input),
+					configureEnvironment: (config) => configureEnvironment(config),
+					triggerWorkflow: (repo) => triggerPlatformWorkflow(repo),
+				}),
+				confirmations: confirmations(
+					options.unattended,
+					process.stdin,
+					log,
+					"creates or pushes the sidecar repository, applies the deployer role and writes the sidecar's GitHub Environment",
+				),
+				signal: new AbortController().signal,
+				sleep,
+				log,
+				action: consoleAction,
+			})
 			return
 		}
 		if (command === 'admin') {

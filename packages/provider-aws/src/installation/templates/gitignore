@@ -1,0 +1,3 @@
+# `fabrika platform init --provider=aws` writes no credential to disk, and the workflow stores none: this entry exists so a
+# stray local .env can never be committed by accident.
+.env

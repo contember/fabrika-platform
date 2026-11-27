@@ -779,7 +779,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          sets; `aud` `sts.amazonaws.com`), holding `AdministratorAccess` inside P. An upgrade's stacks create roles and
          policies, so a list of actions would buy brittleness and no safety; P is what holds. The provider is ensured
          beside the stack, never owned by it, and an existing one is never changed.
-       - Still to come: the sidecar workflow and `platform init`, which applies the deployer and writes the Environment.
+       - **`platform init` and the sidecar** (built, `installation/init.ts`, `sidecar.ts`, `templates/`): run once by
+         the operator after `install`, each step asked first. In the named account holding an installation, its record
+         and its ceilings, it creates or refreshes the private sidecar repository (the workflow, its README,
+         `fabrika.ref`), customizes the repository's OIDC subject to its owner's and its own ids and the job's context,
+         applies the deployer with those ids, and writes the GitHub Environment (named after the installation's
+         environment) with four variables and no secret. It asks for a required reviewer on that Environment, with the
+         command, and states the remaining reach. The workflow installs the pinned release before it takes the role
+         (the credentials action pinned by commit, `allowed-account-ids` set) and runs `platform upgrade --yes` at the
+         tag's commit.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
@@ -983,7 +991,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     once the run made the role. For the deployer: that a GitHub Actions job in the Environment takes the role (the
     token's `sub` as the trust names it, and the session length granted), that a job of another repository, branch
     without the Environment or Environment is refused, and that the boundary refuses each of its denials (IAM Access
-    Analyzer's policy checks and a refused call apiece) while an upgrade run through it completes.
+    Analyzer's policy checks and a refused call apiece) while an upgrade run through it completes. For `init`: that
+    GitHub's `actions/oidc/customization/sub` takes the three claims and the token then carries
+    `repository_owner_id:<id>:repository_id:<id>:environment:<name>`, and that the sidecar's first run completes.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 

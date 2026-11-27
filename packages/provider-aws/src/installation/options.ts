@@ -78,6 +78,8 @@ const INSTALL_FLAGS = ['--auth-methods', OIDC_ISSUER_FLAG, OIDC_CLIENT_ID_FLAG, 
 /** A release's full commit, a Bun image by digest, an environment's name, a repository. */
 const COMMIT = /^[0-9a-f]{40}$/
 const IMAGE_BY_DIGEST = /^[a-z0-9.-]{1,255}(?::\d{1,5})?\/[a-z0-9._/-]{1,256}@sha256:[0-9a-f]{64}$/
+/** The base image's form, which `init` writes into the sidecar's Environment for the workflow's upgrades. */
+export const AWS_BASE_IMAGE_FORM: RegExp = IMAGE_BY_DIGEST
 const ENVIRONMENT = /^[a-z][a-z0-9-]{0,31}$/
 const REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
 
