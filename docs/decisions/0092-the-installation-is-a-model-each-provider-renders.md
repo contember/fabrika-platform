@@ -92,9 +92,9 @@ envelope ([ADR-0011](0011-static-provider-bundles.md): envelopes only where data
       upgrade never makes;
     - `bring-up`: the operator's choice at install, written once and never by a deploy (the sign-in methods, the mail
       transport);
-    - `derived`: computed by every deploy from the placement (where the installation answers) and the generated
-      values, and rewritten by it (`ISSUER`, the console table's digest, and the IAM proxy secret, which is derived
-      from the provisioning key and so is sensitive).
+    - `derived`: computed by every deploy from the placement (where the installation answers), the release it deploys
+      and the generated values, and rewritten by it (`ISSUER` from the placement, the console table's digest from the
+      release, and the IAM proxy secret from the provisioning key, which makes it sensitive).
       The model holds names, kinds, conditions and fixed values only. The values of the other kinds stay where they
       are produced today, in `installationServiceEnvironment` and `deployedServiceEnvironment`, and reach the services
       through the applier. A test holds the names of the kinds those two functions write (`data` outside its prefixes,
