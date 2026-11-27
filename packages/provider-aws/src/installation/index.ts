@@ -17,13 +17,21 @@ Commands:
   fabrika platform upgrade --provider=aws [options]
 
 \`install\` makes an installation in an AWS account and region that holds none, or finishes one that stopped
-part way; \`upgrade\` moves an existing one to a release. Both take the same options, and an install also how
-people sign in and the outbound mail. Each asks once before it writes anything; ${UNATTENDED_FLAG} answers yes for a
-run nobody watches.
+before its services were created; \`upgrade\` moves an existing one to a release, and finishes an install that
+stopped after. Both check first that the credentials are the named account's. An install names every choice
+below and records them in the account; an upgrade takes every choice it does not name from that record, refuses a
+changed network range, host or environment name, and names a changed certificate or MCP switch before it asks. Each
+asks once before it writes anything; ${UNATTENDED_FLAG} answers yes for a run nobody watches.
 
-Options (each also from the variable beside it):
+Both (each also from the variable beside it):
   --account-id=<12 digits>          FABRIKA_AWS_ACCOUNT_ID
   --region=<region>                 FABRIKA_AWS_REGION
+  --commit=<40 hex>                 the release's commit (FABRIKA_PLATFORM_COMMIT)
+  --repository=<owner/name>         contember/fabrika-platform unless named
+  --base-image=<image@sha256:...>   the Bun image applications build from (FABRIKA_AWS_BASE_IMAGE)
+  ${UNATTENDED_FLAG}
+
+The installation's choices (an install names each; an upgrade only what it changes):
   --iam-host, --control-host, --operations-host=<host>
                                     FABRIKA_PLATFORM_IAM_HOST, _CONTROL_HOST, _OPERATIONS_HOST
   --iam-certificate, --control-certificate, --operations-certificate=<ACM ARN>
@@ -31,13 +39,9 @@ Options (each also from the variable beside it):
   --apps-host=<host> --apps-certificate=<ACM ARN>
                                     the applications' listener's default (FABRIKA_AWS_APPS_HOST, _APPS_CERTIFICATE)
   --apps-vpc-cidr, --platform-vpc-cidr=<a /16>
-                                    10.80.0.0/16 and 10.81.0.0/16 unless named
+                                    an install's 10.80.0.0/16 and 10.81.0.0/16 unless named
   --environment=<name>              FABRIKA_PLATFORM_ENVIRONMENT
-  --commit=<40 hex>                 the release's commit (FABRIKA_PLATFORM_COMMIT)
-  --repository=<owner/name>         contember/fabrika-platform unless named
-  --base-image=<image@sha256:...>   the Bun image applications build from (FABRIKA_AWS_BASE_IMAGE)
-  --mcp-authoring=<on|off>          off unless named
-  ${UNATTENDED_FLAG}
+  --mcp-authoring=<on|off>          an install's off unless named
 
 Install only: --auth-methods=<oidc|password|oidc,password> (password unless named), --oidc-issuer and
 --oidc-client-id with FABRIKA_IAM_OIDC_CLIENT_SECRET in the environment, and --email-provider,
@@ -71,17 +75,21 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
 	})
 
 const runPlatform = async (kind: 'install' | 'upgrade', argv: readonly string[]): Promise<void> => {
-	const options = kind === 'install' ? parseAwsInstallArgs(argv, process.env) : parseAwsUpgradeArgs(argv, process.env)
 	const log = (line: string): void => console.info(line)
-	await runAwsPlatform({
-		kind,
-		options,
-		clients: awsPlatformClients(options.plan, environmentCredentials(process.env)),
+	const shared = (options: { readonly accountId: string; readonly region: string; readonly unattended: boolean }) => ({
+		clients: awsPlatformClients(options, environmentCredentials(process.env)),
 		confirmations: confirmations(options.unattended, process.stdin, log, `${kind}s the platform in an AWS account`),
 		signal: new AbortController().signal,
 		sleep,
 		log,
 	})
+	if (kind === 'install') {
+		const options = parseAwsInstallArgs(argv, process.env)
+		await runAwsPlatform({ kind, options, ...shared(options) })
+		return
+	}
+	const options = parseAwsUpgradeArgs(argv, process.env)
+	await runAwsPlatform({ kind, options, ...shared(options) })
 }
 
 export const installationCli: InstallationCli = {

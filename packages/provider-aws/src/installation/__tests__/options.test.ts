@@ -26,7 +26,7 @@ const ARGV = [
 describe("the AWS installation's options", () => {
 	test('an install: the plan, the release, password sign-in and no mail unless named', () => {
 		const options = parseAwsInstallArgs(ARGV, {})
-		expect(options.plan).toEqual({
+		expect(options.choices.plan).toEqual({
 			accountId: '123456789012',
 			region: 'eu-central-1',
 			vpcCidrs: { apps: '10.80.0.0/16', platform: '10.81.0.0/16' },
@@ -37,7 +37,8 @@ describe("the AWS installation's options", () => {
 		})
 		expect(options.release).toEqual({ repository: AWS_PLATFORM_REPOSITORY, commitSha: COMMIT })
 		expect(options.baseImage).toBe(BASE_IMAGE)
-		expect(options.mcpAuthoring).toBe(false)
+		expect(options.choices.mcpAuthoring).toBe(false)
+		expect(options.choices.environment).toBe('production')
 		expect(options.unattended).toBe(false)
 		expect(options.bringUp).toEqual({ authentication: { passwordEnabled: true }, email: { kind: 'none' } })
 	})
@@ -53,15 +54,15 @@ describe("the AWS installation's options", () => {
 				FABRIKA_AWS_PLATFORM_VPC_CIDR: '10.90.0.0/16',
 			},
 		)
-		expect(options.plan.region).toBe('eu-central-1')
-		expect(options.plan.vpcCidrs.platform).toBe('10.90.0.0/16')
+		expect(options.region).toBe('eu-central-1')
+		expect(options.choices.plan.vpcCidrs.platform).toBe('10.90.0.0/16')
 		expect(options.unattended).toBe(true)
 		expect(options.bringUp.authentication).toEqual({
 			passwordEnabled: false,
 			oidc: { issuer: 'https://login.example.com', clientId: 'fabrika', clientSecret: 'never-quoted' },
 		})
 		expect(() => parseAwsInstallArgs([...ARGV, '--auth-methods=oidc', '--oidc-issuer=https://login.example.com', '--oidc-client-id=x'], {})).toThrow(
-			'FABRIKA_IAM_OIDC_CLIENT_SECRET',
+			'FABRIKA_IAM_OIDC_CLIENT_SECRET is required in the environment (it has no flag)',
 		)
 	})
 
@@ -84,11 +85,35 @@ describe("the AWS installation's options", () => {
 		expect(refused([...ARGV, '--token=hidden'])).toContain('`--token` is not an argument of this command')
 		expect(refused([...ARGV, '--token=hidden'])).not.toContain('hidden')
 		expect(refused(ARGV.filter((arg) => !arg.startsWith('--account-id')))).toContain('--account-id')
+		// The account and the region are checked before any call is made with them.
+		expect(refused(swap('--account-id', '12345'))).toContain('--account-id is not an account id')
+		expect(refused(swap('--region', 'eu-central-1.evil'))).toContain('--region is not a region name')
 	})
 
-	test('an upgrade names no sign-in method and no mailer: they stay as the install or an operator set them', () => {
-		expect('bringUp' in parseAwsUpgradeArgs(ARGV, {})).toBe(false)
+	test('an upgrade names only what it changes; sign-in and mail are no arguments of it', () => {
+		const upgrade = parseAwsUpgradeArgs(['--account-id=123456789012', '--region=eu-central-1', `--commit=${COMMIT}`, `--base-image=${BASE_IMAGE}`], {})
+		expect(upgrade.named).toEqual({})
+		expect('bringUp' in upgrade).toBe(false)
+		const renewed = parseAwsUpgradeArgs(
+			[
+				'--account-id=123456789012',
+				'--region=eu-central-1',
+				`--commit=${COMMIT}`,
+				`--base-image=${BASE_IMAGE}`,
+				`--control-certificate=${certificate(9)}`,
+				'--iam-host=IAM.example.com',
+			],
+			{},
+		)
+		expect(renewed.named).toEqual({ controlCertificate: certificate(9), iamHost: 'iam.example.com' })
 		expect(() => parseAwsUpgradeArgs([...ARGV, '--auth-methods=password'], {})).toThrow('`--auth-methods` is not an argument of this command')
 		expect(() => parseAwsUpgradeArgs([...ARGV, '--email-provider=smtp'], {})).toThrow('`--email-provider` is not an argument of this command')
+	})
+
+	test("an install's choices are each required, a network's range alone taking its default", () => {
+		expect(() => parseAwsInstallArgs(ARGV.filter((arg) => !arg.startsWith('--iam-host')), {})).toThrow(
+			'--iam-host=<value> or FABRIKA_PLATFORM_IAM_HOST is required',
+		)
+		expect(() => parseAwsInstallArgs(ARGV.filter((arg) => !arg.startsWith('--environment')), {})).toThrow('--environment=<value>')
 	})
 })

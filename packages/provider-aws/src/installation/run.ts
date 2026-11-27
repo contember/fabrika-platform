@@ -1,20 +1,25 @@
 // `fabrika platform install --provider=aws` and `upgrade` (the AWS idea's checklist, step 11, the commands' step): the
 // one run of `apply.ts`, with the operator's own credentials, its images (`images-build.ts`) and its parameters
-// (`parameters.ts`) from the release and the hosts the operator names.
+// (`parameters.ts`) from the release and the installation's choices.
 //
+// - **The account the credentials belong to is the one named**, checked first (STS `GetCallerIdentity`): credentials
+//   of another account exported by mistake stop the run before it reads or writes anything there.
 // - **Install or upgrade, never mistaken for each other.** The services' stack is the last thing a run applies, so it
-//   tells them apart: `install` refuses an installation whose services' stack exists (a second install would write a
-//   sign-in method or a mailer over the operator's, and make anew a key that was lost), and resumes one that stopped
-//   before it; `upgrade` refuses one that has none.
-// - **One confirmation**, naming what the run does, before anything is written; `--yes` answers it for a run nobody
-//   watches.
+//   tells them apart: `install` refuses an account whose services' stack exists (a second install would be a second
+//   bring-up over the operator's choices), and resumes one that stopped before it; `upgrade` refuses one that has
+//   none. An install that stopped once its services' stack was created is finished by `upgrade`, which the refusal
+//   says.
+// - **The installation's choices from its record** (`record.ts`): an install writes them before its first stack and
+//   is resumed against them; an upgrade takes every choice the operator leaves out from it. A changed network range,
+//   host or environment name is refused; a changed certificate or MCP authoring is named before the one question.
+// - **One confirmation**, before anything is written; `--yes` answers it for a run nobody watches.
 // - **The operator's credentials** from the standard variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 //   `AWS_SESSION_TOKEN`), as `aws configure export-credentials --format env` prints them; never logged.
 //
 // UNVERIFIED: the whole run against an account; the live check (step 13) is its first.
 
 import type { Confirmations } from '@fabrika/installation-init'
-import { type CloudFormationClient, cloudFormationClient } from '../aws/cloudformation'
+import { cloudFormationClient } from '../aws/cloudformation'
 import { codeBuildClient } from '../aws/codebuild'
 import { ecrClient } from '../aws/ecr'
 import { ecsPlatformTasks } from '../aws/ecs'
@@ -22,13 +27,21 @@ import { CODEBUILD, ECR, ECS, SSM } from '../aws/json'
 import { CLOUDFORMATION } from '../aws/query'
 import { s3BucketOrigin, s3PartWriter } from '../aws/s3'
 import { type SsmPlatformSecrets, ssmPlatformSecrets } from '../aws/ssm'
+import { STS, type StsClient, stsClient } from '../aws/sts'
 import { type AwsClientOptions, type AwsCredentialSource, awsServiceOrigin } from '../aws/transport'
 import { awsSourcesBucket } from './access'
 import { applyAwsPlatform, type AwsPlatformApplied, type AwsPlatformApplyInput } from './apply'
 import { type AwsImagesBuildRun, buildAwsPlatformImages } from './images-build'
-import type { AwsInstallOptions, AwsPlatformOptions } from './options'
+import { awsChoicesFrom, type AwsCommonOptions, type AwsInstallOptions, type AwsUpgradeOptions } from './options'
 import { writeAwsParameters } from './parameters'
 import { awsPlatformManifest } from './platform-manifest'
+import {
+	AWS_INSTALLATION_RECORD,
+	awsChoiceChanges,
+	type AwsInstallationChoices,
+	encodeAwsInstallationRecord,
+	parseAwsInstallationRecord,
+} from './record'
 import { AWS_SERVICES_STACK } from './services'
 
 /** The operator's credentials from the environment, read per call; refused, by name, when a key is missing. */
@@ -48,6 +61,7 @@ export function environmentCredentials(env: Readonly<Record<string, string | und
 
 /** The clients a run makes its calls with. */
 export interface AwsPlatformClients {
+	readonly sts: Pick<StsClient, 'callerAccount'>
 	readonly cloudFormation: AwsPlatformApplyInput['cloudFormation']
 	readonly tasks: AwsPlatformApplyInput['tasks']
 	readonly secrets: SsmPlatformSecrets
@@ -57,30 +71,23 @@ export interface AwsPlatformClients {
 }
 
 /** Each client over the operator's credentials, at its service's endpoint in the installation's region. */
-export function awsPlatformClients(plan: AwsPlatformOptions['plan'], credentials: AwsCredentialSource): AwsPlatformClients {
-	const options = (service: { readonly service: string }): AwsClientOptions => ({
-		origin: awsServiceOrigin(service, plan.region),
-		region: plan.region,
-		credentials,
-	})
-	const bucket = awsSourcesBucket(plan.accountId)
+export function awsPlatformClients(where: Pick<AwsCommonOptions, 'accountId' | 'region'>, credentials: AwsCredentialSource): AwsPlatformClients {
+	const { region } = where
+	const options = (service: { readonly service: string }): AwsClientOptions => ({ origin: awsServiceOrigin(service, region), region, credentials })
+	const bucket = awsSourcesBucket(where.accountId)
 	return {
+		sts: stsClient(options(STS)),
 		cloudFormation: cloudFormationClient(options(CLOUDFORMATION)),
 		tasks: ecsPlatformTasks(options(ECS)),
 		secrets: ssmPlatformSecrets(options(SSM)),
 		codeBuild: codeBuildClient(options(CODEBUILD)),
 		ecr: ecrClient(options(ECR)),
 		manifestWriter: (key) =>
-			s3PartWriter(
-				{ origin: s3BucketOrigin(bucket, plan.region), region: plan.region, credentials },
-				{ bucket, region: plan.region, accountId: plan.accountId, key },
-			),
+			s3PartWriter({ origin: s3BucketOrigin(bucket, region), region, credentials }, { bucket, region, accountId: where.accountId, key }),
 	}
 }
 
-export interface AwsPlatformRunInput {
-	readonly kind: 'install' | 'upgrade'
-	readonly options: AwsPlatformOptions | AwsInstallOptions
+interface AwsPlatformRunShared {
 	readonly clients: AwsPlatformClients
 	readonly confirmations: Confirmations
 	readonly signal: AbortSignal
@@ -90,27 +97,66 @@ export interface AwsPlatformRunInput {
 	readonly apply?: (input: AwsPlatformApplyInput) => Promise<AwsPlatformApplied>
 }
 
-/** Whether the installation's services' stack exists: what tells an installation from one still to be made. */
-async function servicesExist(cloudFormation: Pick<CloudFormationClient, 'findStack'>, signal: AbortSignal): Promise<boolean> {
-	return (await cloudFormation.findStack(AWS_SERVICES_STACK, signal)) !== null
+export type AwsPlatformRunInput =
+	| (AwsPlatformRunShared & { readonly kind: 'install'; readonly options: AwsInstallOptions })
+	| (AwsPlatformRunShared & { readonly kind: 'upgrade'; readonly options: AwsUpgradeOptions })
+
+/** The installation's record, `null` when the account holds none. */
+async function readRecord(secrets: Pick<SsmPlatformSecrets, 'readSecret'>, signal: AbortSignal): Promise<AwsInstallationChoices | null> {
+	const text = await secrets.readSecret(AWS_INSTALLATION_RECORD, signal)
+	return text === null ? null : parseAwsInstallationRecord(text)
 }
 
-/** Installs or upgrades the platform: refuses the wrong one, asks once, then runs every stack in order. */
+/** The choices this run applies, refused where they would change what may not change; the changes it names. */
+function settledChoices(
+	input: AwsPlatformRunInput,
+	held: AwsInstallationChoices | null,
+): { readonly choices: AwsInstallationChoices; readonly named: readonly string[] } {
+	const { options } = input
+	if (input.kind === 'install') {
+		if (held === null) return { choices: input.options.choices, named: [] }
+		const changes = awsChoiceChanges(held, input.options.choices)
+		if (changes.refused.length > 0) {
+			throw new Error(`aws: an install that stopped part way is resumed with its own choices, and these differ: ${changes.refused.join('; ')}`)
+		}
+		return { choices: input.options.choices, named: changes.named }
+	}
+	if (held === null) {
+		throw new Error(`aws: the installation in account ${options.accountId}, ${options.region} has no record at ${AWS_INSTALLATION_RECORD}`)
+	}
+	const choices = awsChoicesFrom(options, input.options.named, held)
+	const changes = awsChoiceChanges(held, choices)
+	if (changes.refused.length > 0) {
+		throw new Error(`aws: an upgrade does not change ${changes.refused.join('; ')}; leave those flags out to keep the installation's own`)
+	}
+	return { choices, named: changes.named }
+}
+
+/** Installs or upgrades the platform: refuses the wrong account and the wrong command, asks once, then runs every stack. */
 export async function runAwsPlatform(input: AwsPlatformRunInput): Promise<AwsPlatformApplied | null> {
 	const { kind, options, clients, signal, log } = input
-	const { plan } = options
-	const exists = await servicesExist(clients.cloudFormation, signal)
+	const where = `account ${options.accountId}, ${options.region}`
+	const caller = await clients.sts.callerAccount(signal)
+	if (caller !== options.accountId) {
+		throw new Error(`aws: the credentials in the environment are account ${caller}'s, not account ${options.accountId}'s; export the named account's`)
+	}
+	const exists = (await clients.cloudFormation.findStack(AWS_SERVICES_STACK, signal)) !== null
 	if (kind === 'install' && exists) {
-		throw new Error(`aws: account ${plan.accountId} in ${plan.region} already holds an installation; \`platform upgrade\` moves it to a release`)
+		throw new Error(
+			`aws: ${where} already holds an installation; \`platform upgrade\` moves it to a release, and finishes an install that stopped once its services were created`,
+		)
 	}
-	if (kind === 'upgrade' && !exists) {
-		throw new Error(`aws: account ${plan.accountId} in ${plan.region} holds no installation yet; \`platform install\` makes one`)
-	}
-	const bringUp = 'bringUp' in options ? options.bringUp : undefined
-	const manifest = awsPlatformManifest(plan, { mcp: options.mcpAuthoring })
-	log(`aws: ${kind === 'install' ? 'installing' : 'upgrading'} the platform in account ${plan.accountId}, ${plan.region}`)
+	if (kind === 'upgrade' && !exists) throw new Error(`aws: ${where} holds no installation yet; \`platform install\` makes one`)
+	const held = await readRecord(clients.secrets, signal)
+	const { choices, named } = settledChoices(input, held)
+	const { plan } = choices
+	const bringUp = input.kind === 'install' ? input.options.bringUp : undefined
+	const manifest = awsPlatformManifest(plan, { mcp: choices.mcpAuthoring })
+	log(`aws: ${kind === 'install' ? 'installing' : 'upgrading'} the platform in ${where}`)
 	log(`aws: release ${options.release.repository} ${options.release.commitSha}`)
 	log(`aws: hosts ${plan.hosts.iam}, ${plan.hosts.control}, ${plan.hosts.operations}; applications' default ${plan.appsDefault.host}`)
+	log(`aws: networks ${plan.vpcCidrs.apps} (applications) and ${plan.vpcCidrs.platform} (platform); environment ${choices.environment}`)
+	for (const change of named) log(`aws: changing ${change}`)
 	const agreed = await input.confirmations.confirm(
 		kind === 'install'
 			? 'Create the networks, balancers, database, images and services of a new installation in this account?'
@@ -120,6 +166,8 @@ export async function runAwsPlatform(input: AwsPlatformRunInput): Promise<AwsPla
 		log('aws: nothing was changed')
 		return null
 	}
+	const recordText = encodeAwsInstallationRecord(choices)
+	if (held === null || encodeAwsInstallationRecord(held) !== recordText) await clients.secrets.putSecret(AWS_INSTALLATION_RECORD, recordText, signal)
 	const apply = input.apply ?? applyAwsPlatform
 	return apply({
 		plan,
@@ -141,7 +189,7 @@ export async function runAwsPlatform(input: AwsPlatformRunInput): Promise<AwsPla
 		parameters: (state) =>
 			writeAwsParameters({
 				state,
-				environment: options.environment,
+				environment: choices.environment,
 				...(bringUp === undefined ? {} : { bringUp }),
 				manifest: manifest.deployed,
 				release: options.release,

@@ -729,7 +729,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          confirmation, and the options both take (the account, region, ranges, hosts and certificates, the release's
          commit, the build's base image, MCP authoring), with how people sign in and the mail for an install alone.
          The services' stack tells them apart: an install refuses an account that has one (a second install would
-         write over the operator's sign-in and make anew a key that was lost), an upgrade one that has none.
+         write over the operator's sign-in and make anew a key that was lost), an upgrade one that has none. The
+         credentials' account (STS `GetCallerIdentity`) must be the one named, checked before anything else. An
+         install records its choices (`installation/record.ts`, `/fabrika/platform/installation/record`); an upgrade
+         takes every choice it does not name from that record, refuses a changed network range (CloudFormation would
+         replace the VPC), host or environment name, and names a changed certificate or MCP switch before it asks.
        - Still to come: `admin` and registering the console's schema with IAM (both reach IAM's public host),
          requesting the certificates for exactly the hosts, the ECS service-linked role, and the sidecar workflow with
          its GitHub OIDC role.
