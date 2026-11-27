@@ -665,17 +665,18 @@ main.workspace {
 	font-weight: 400;
 }
 
-.notice {
+/* An outcome at the top of the section it concerns, on a wash that stands out of the tile. */
+.card-body > .notice {
 	max-width: none;
-	margin: 0 0 1.5rem;
+	margin: 0 0 1rem;
 	padding: 0.75rem 1rem;
 	color: var(--ink);
-	background: var(--tile);
+	background: var(--blueprint-wash);
 	border-radius: var(--r-2);
 	font-size: 0.875rem;
 }
 
-.notice.error {
+.card-body > .notice.error {
 	background: var(--wash-stop);
 }
 
@@ -824,6 +825,7 @@ details {
 
 summary {
 	width: fit-content;
+	padding: 0.25rem 0;
 	color: var(--ink-3);
 	font-size: 0.75rem;
 	cursor: pointer;
@@ -937,6 +939,14 @@ dialog h2 {
 dialog p {
 	margin: 1.25rem 1.5rem 0;
 	font-size: 0.875rem;
+}
+
+/* One fact per line, a date never broken at its hyphens. */
+dialog .dialog-detail {
+	margin-top: 0.75rem;
+	color: var(--ink-3);
+	font-size: 0.8125rem;
+	white-space: pre;
 }
 
 .dialog-actions {

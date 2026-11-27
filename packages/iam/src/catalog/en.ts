@@ -174,11 +174,23 @@ export const en: Catalog = {
 			notRenewed: 'Not since approval',
 			lastActiveText: 'Last active is when it last renewed its access; while in use it renews it every five minutes.',
 			details: 'Details',
-			endpoints: 'Endpoints',
+			endpoints: 'Addresses it can call',
+			cliPreset: (preset, app) => {
+				const target = app ?? 'every application you may'
+				switch (preset) {
+					case 'read':
+						return `Reads ${target}, and changes nothing`
+					case 'deploy':
+						return `Reads and deploys ${target}`
+					case 'operate':
+						return `Deploys ${target}, and manages its secrets and settings`
+					case 'create':
+						return 'Registers applications, and changes or deletes any you may manage'
+				}
+			},
 			revokeLabel: (holder, reaches, allowed) => `Revoke ${holder} at ${reaches}, allowed ${allowed}`,
 			revokeTitle: 'Revoke this access?',
-			revokeConfirm: (holder, reaches, allowed) =>
-				`${holder}: access to ${reaches} ends within five minutes. What it already changed stays. Allowed ${allowed}.`,
+			revokeConfirm: (holder, reaches) => `${holder}: access to ${reaches} ends within five minutes. What it already changed stays.`,
 			cancel: 'Cancel',
 		},
 		passkeys: {

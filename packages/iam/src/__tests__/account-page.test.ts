@@ -190,7 +190,9 @@ for (const engine of engines) {
 			expect(html).toContain('The fabrika command-line client')
 			// The console's resources read as the device page names them, not as the console's app id: the group's name.
 			expect(html).toContain('<th colspan="5" scope="rowgroup">Console, Operations <span class="count">1</span></th>')
-			expect(html).toContain('<code class="chip">deploy:alpha</code>')
+			// A console preset reads in words; its name stays in the row's details.
+			expect(html).toContain('<span class="line">Reads and deploys alpha</span>')
+			expect(html).toContain('<dt>Scopes</dt><dd><code>deploy:alpha</code></dd>')
 			const listed = Object.entries(a.ids).filter(([, id]) => html.includes(id)).map(([name]) => name)
 			expect(listed).toEqual(['agent', 'cli'])
 			expect(html).not.toContain('not yours')
@@ -303,7 +305,34 @@ for (const engine of engines) {
 			expect(html.match(/scope="rowgroup">Console </g)).toHaveLength(1)
 			expect(html).toContain('<th colspan="5" scope="rowgroup">Console <span class="count">2</span></th>')
 			expect(html.indexOf(`value="${idleOne}"`)).toBeLessThan(html.indexOf(`value="${renewedOne}"`))
-			expect(row(a.ids.agent)).toMatch(new RegExp(`<details><summary>Details</summary><dl><dt>Endpoints</dt><dd><code>${a.agentOrigin}</code></dd>`))
+			expect(row(a.ids.agent)).toMatch(
+				new RegExp(`<details><summary>Details</summary><dl><dt>Addresses it can call</dt><dd><code>${a.agentOrigin}</code></dd>`),
+			)
+		})
+
+		test('a scope that is not a console preset shows as it is', async () => {
+			const a = await accountFixture(engine.repositories())
+			const odd = await grant(a.repositories, {
+				principal_id: a.person,
+				session_id: a.f.sessionId,
+				client_id: OAUTH_CLI_CLIENT_ID,
+				app: CONTROL_APP_ID,
+				resource: `https://console.example.test${CONTROL_RPC_PATH}`,
+				scopes: '["deploy:alpha","audit:<b>"]',
+			})
+			const html = await (await a.get()).text()
+			const start = html.lastIndexOf('<tr>', html.indexOf(`value="${odd}"`))
+			const row = html.slice(start, html.indexOf('</tr>', start))
+			expect(row).toContain('<span class="chips"><code class="chip">deploy:alpha</code><code class="chip">audit:&lt;b&gt;</code></span>')
+			expect(row).not.toContain('class="line"')
+		})
+
+		test('a revocation lands on the grants with its outcome there', async () => {
+			const a = await accountFixture(engine.repositories())
+			const response = await a.revoke(a.ids.agent)
+			expect(response.headers.get('location')).toBe(`${ACCOUNT_PATH}?done=revoked#connections`)
+			const html = await (await a.get(true, `${ACCOUNT_PATH}?done=revoked`)).text()
+			expect(html.indexOf('id="connections"')).toBeLessThan(html.indexOf('role="status"'))
 		})
 
 		test('asks before a revocation, names what it revokes, and puts the passkeys first', async () => {
@@ -313,7 +342,7 @@ for (const engine of engines) {
 			const when = `${new Date(allowed * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC`
 			const app = `notes-${a.tag}@prod`
 			expect(html).toContain(
-				`data-confirm="Agent “release bot”: access to ${app} ends within five minutes. What it already changed stays. Allowed ${when}."`,
+				`data-confirm="Agent “release bot”: access to ${app} ends within five minutes. What it already changed stays." data-confirm-detail="Allowed: ${when}\nLast active: Not since approval"`,
 			)
 			expect(html).toContain(`aria-label="Revoke Agent “release bot” at ${app}, allowed ${when}">Revoke</button>`)
 			expect(html).toContain('<dialog id="revoke-dialog"')

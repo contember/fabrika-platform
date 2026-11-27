@@ -3,6 +3,7 @@
 // translation fails the typecheck.
 
 import type { IamMailCatalog, Locale } from '@fabrika/auth-core'
+import type { ControlCliPreset } from '@fabrika/control-contract'
 import type { AuthFailure } from '../auth/failure'
 import type { PasswordProblem } from '../password-policy'
 import { cs } from './cs'
@@ -142,11 +143,13 @@ export interface PageText {
 		/** The disclosure of a grant's endpoints and raw scopes. */
 		readonly details: string
 		readonly endpoints: string
+		/** What a command-line grant's preset lets it do, in words; `app` is the application it is narrowed to, if any. */
+		readonly cliPreset: (preset: ControlCliPreset, app: string | null) => string
 		/** A grant's revoke button, named for a screen reader by what it revokes. */
 		readonly revokeLabel: (holder: string, reaches: string, allowed: string) => string
-		/** The confirmation a revocation asks first. */
+		/** The confirmation a revocation asks first; the dialog lists when the grant was allowed and last active under it. */
 		readonly revokeTitle: string
-		readonly revokeConfirm: (holder: string, reaches: string, allowed: string) => string
+		readonly revokeConfirm: (holder: string, reaches: string) => string
 		readonly cancel: string
 	}
 	/**

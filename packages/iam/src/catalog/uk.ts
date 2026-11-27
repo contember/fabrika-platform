@@ -175,11 +175,23 @@ export const uk: Catalog = {
 			notRenewed: 'Не з часу схвалення',
 			lastActiveText: 'Востаннє активний — це час, коли він востаннє поновив доступ; під час використання він поновлює його кожні п’ять хвилин.',
 			details: 'Подробиці',
-			endpoints: 'Адреси',
+			endpoints: 'Адреси, які він може викликати',
+			cliPreset: (preset, app) => {
+				const target = app ?? 'кожен застосунок, який вам дозволено'
+				switch (preset) {
+					case 'read':
+						return `Читає ${target} і нічого не змінює`
+					case 'deploy':
+						return `Читає та розгортає ${target}`
+					case 'operate':
+						return `Розгортає ${target} і керує його секретами та налаштуваннями`
+					case 'create':
+						return 'Реєструє застосунки та змінює або видаляє ті, якими ви можете керувати'
+				}
+			},
 			revokeLabel: (holder, reaches, allowed) => `Відкликати ${holder} – ${reaches}, дозволено ${allowed}`,
 			revokeTitle: 'Відкликати цей доступ?',
-			revokeConfirm: (holder, reaches, allowed) =>
-				`${holder}: доступ до ${reaches} завершиться протягом п’яти хвилин. Те, що він уже змінив, залишається. Дозволено ${allowed}.`,
+			revokeConfirm: (holder, reaches) => `${holder}: доступ до ${reaches} завершиться протягом п’яти хвилин. Те, що він уже змінив, залишається.`,
 			cancel: 'Скасувати',
 		},
 		passkeys: {

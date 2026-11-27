@@ -172,10 +172,23 @@ export const cs: Catalog = {
 			notRenewed: 'Od schválení ne',
 			lastActiveText: 'Naposledy aktivní je chvíle, kdy si naposledy obnovilo přístup; během používání ho obnovuje každých pět minut.',
 			details: 'Podrobnosti',
-			endpoints: 'Adresy',
+			endpoints: 'Adresy, které může volat',
+			cliPreset: (preset, app) => {
+				const target = app ?? 'každou aplikaci, kterou smíte'
+				switch (preset) {
+					case 'read':
+						return `Čte ${target} a nic nemění`
+					case 'deploy':
+						return `Čte a nasazuje ${target}`
+					case 'operate':
+						return `Nasazuje ${target} a spravuje její tajné hodnoty a nastavení`
+					case 'create':
+						return 'Registruje aplikace a mění nebo maže ty, které smíte spravovat'
+				}
+			},
 			revokeLabel: (holder, reaches, allowed) => `Odvolat ${holder} – ${reaches}, povoleno ${allowed}`,
 			revokeTitle: 'Odvolat tento přístup?',
-			revokeConfirm: (holder, reaches, allowed) => `${holder}: přístup k ${reaches} skončí do pěti minut. Co už změnilo, zůstává. Povoleno ${allowed}.`,
+			revokeConfirm: (holder, reaches) => `${holder}: přístup k ${reaches} skončí do pěti minut. Co už změnilo, zůstává.`,
 			cancel: 'Zrušit',
 		},
 		passkeys: {

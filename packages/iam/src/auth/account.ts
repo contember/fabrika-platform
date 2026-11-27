@@ -2,7 +2,7 @@
 // application included (ADR-0090), and its revocation. It lives here because the login cookie is IAM's (ADR-0023).
 
 import { AGENT_CLIENT_ID, agentScopeToken, OAUTH_CLI_CLIENT_ID, parseAppEnvironmentId } from '@fabrika/auth-core'
-import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
+import { CONTROL_APP_ID, CONTROL_CLI_PRESETS, CONTROL_CLI_RESOURCES, type ControlCliPreset } from '@fabrika/control-contract'
 import { ACCOUNT_PAGE_PATH, MAX_PASSKEY_LABEL_LENGTH } from '@fabrika/iam-contract'
 import { IAM_APP } from '../admin/router'
 import { storedAgentScope } from '../agent-resource'
@@ -77,7 +77,7 @@ export async function handleAccount(request: Request, services: Services, reques
 
 /** Back to the account page with an outcome, as a 303, so a reload of the page submits nothing again. */
 export function accountRedirect(notice: AccountNotice): Response {
-	const section = notice.startsWith('passkey_') ? '#passkeys' : ''
+	const section = notice.startsWith('passkey_') ? '#passkeys' : '#connections'
 	return new Response(null, { status: 303, headers: redirectHeaders(`${ACCOUNT_PATH}?${NOTICE_PARAM}=${notice}${section}`) })
 }
 
@@ -108,9 +108,11 @@ async function accountPage(request: Request, services: Services, login: CurrentL
 	const renewed = await services.repositories.oauth.lastRenewed(shown.map((grant) => grant.id))
 	const held = await services.repositories.passkeys.list(login.principal.id)
 	const passkeyLabels = new Map(held.map((passkey) => [passkey.credential_id, passkey.label]))
-	const status = notice === null
-		? ''
-		: `<p role="status" class="notice${REFUSALS.has(notice) ? ' error' : ''}">${escapeHtml(noticeText(catalog, notice))}</p>`
+	// Each outcome shows in the section it concerns, where its redirect lands.
+	const status = (section: 'passkeys' | 'connections') =>
+		notice === null || notice.startsWith('passkey_') !== (section === 'passkeys')
+			? ''
+			: `<p role="status" class="notice${REFUSALS.has(notice) ? ' error' : ''}">${escapeHtml(noticeText(catalog, notice))}</p>`
 	const grants = shown.map((grant) => describeGrant(catalog, grant, names.get(grant.app) ?? grant.app, renewed.get(grant.id) ?? null, passkeyLabels))
 	return htmlPage({
 		locale,
@@ -124,9 +126,8 @@ async function accountPage(request: Request, services: Services, login: CurrentL
 		} <span class="count">${held.length}</span></a><a href="#connections">${escapeHtml(text.connectionsTitle)} <span class="count">${
 			rows.length > ACCOUNT_GRANTS_SHOWN ? `${ACCOUNT_GRANTS_SHOWN}+` : shown.length
 		}</span></a></nav>
-		${status}
-		${passkeysSection(held, catalog)}
-		${grantsSection(catalog, grants, rows.length > ACCOUNT_GRANTS_SHOWN)}
+		${passkeysSection(held, catalog, status('passkeys'))}
+		${grantsSection(catalog, grants, rows.length > ACCOUNT_GRANTS_SHOWN, status('connections'))}
 		${revokeDialog(text)}`,
 		script: CONFIRM_SCRIPT,
 	})
@@ -140,11 +141,11 @@ const REFUSALS: ReadonlySet<Notice> = new Set(['passkey_refused', 'passkey_busy'
  * button. A browser without `<dialog>` posts at once, as the page did before it asked.
  */
 const CONFIRM_SCRIPT =
-	"var confirmDialog=document.getElementById('revoke-dialog');var confirming=null;if(confirmDialog&&typeof confirmDialog.showModal==='function'){document.querySelectorAll('form[data-confirm]').forEach(function(form){form.addEventListener('submit',function(event){event.preventDefault();confirming=form;document.getElementById('revoke-text').textContent=form.dataset.confirm;confirmDialog.returnValue='';confirmDialog.showModal();});});confirmDialog.addEventListener('close',function(){var form=confirming;confirming=null;if(confirmDialog.returnValue==='revoke'&&form)form.submit();});}"
+	"var confirmDialog=document.getElementById('revoke-dialog');var confirming=null;if(confirmDialog&&typeof confirmDialog.showModal==='function'){document.querySelectorAll('form[data-confirm]').forEach(function(form){form.addEventListener('submit',function(event){event.preventDefault();confirming=form;document.getElementById('revoke-text').textContent=form.dataset.confirm;document.getElementById('revoke-detail').textContent=form.dataset.confirmDetail;confirmDialog.returnValue='';confirmDialog.showModal();});});confirmDialog.addEventListener('close',function(){var form=confirming;confirming=null;if(confirmDialog.returnValue==='revoke'&&form)form.submit();});}"
 
 function revokeDialog(text: Catalog['pages']['account']): string {
 	return `<dialog id="revoke-dialog" aria-labelledby="revoke-title" aria-describedby="revoke-text"><form method="dialog">
-		<h2 id="revoke-title">${escapeHtml(text.revokeTitle)}</h2><p id="revoke-text"></p>
+		<h2 id="revoke-title">${escapeHtml(text.revokeTitle)}</h2><p id="revoke-text"></p><p id="revoke-detail" class="dialog-detail"></p>
 		<div class="dialog-actions"><button type="submit" value="cancel">${
 		escapeHtml(text.cancel)
 	}</button><button type="submit" value="revoke" class="danger strong">${escapeHtml(text.revoke)}</button></div></form></dialog>`
@@ -212,23 +213,38 @@ function describeGrant(
 	const agent = grant.client_id === AGENT_CLIENT_ID
 	const tokens = parseStoredPermissions(grant.scopes)
 	const scope = agent ? storedAgentScope(tokens) : null
+	const presets = grant.client_id === OAUTH_CLI_CLIENT_ID && grant.app === CONTROL_APP_ID ? cliPresets(tokens) : null
 	return {
 		grant,
 		holder: agent ? text.agent(grant.agent_label) : grant.client_id === OAUTH_CLI_CLIENT_ID ? text.commandLine : text.client(grant.client_id),
 		reaches: grant.app === CONTROL_APP_ID ? consoleLabel(grant) ?? appName : appName,
 		selfNamed: agent && grant.agent_label !== null,
 		renewed,
-		mode: scope === null ? null : text.mode(scope.mode),
-		scopes: scope === null ? tokens : scope.within === null ? [] : [agentScopeToken(scope)],
+		mode: scope !== null ? text.mode(scope.mode) : presets !== null ? presets.map(({ preset, app }) => text.cliPreset(preset, app)).join('; ') : null,
+		scopes: scope !== null ? scope.within === null ? [] : [agentScopeToken(scope)] : presets !== null ? [] : tokens,
 		confirmation: confirmation(text, grant, passkeyLabels),
 	}
+}
+
+/**
+ * A command-line grant's scopes as the console's presets (`deploy:<app>`, `create`), or null when any is not one: the
+ * page then shows the scope names as they are.
+ */
+function cliPresets(tokens: readonly string[]): { preset: ControlCliPreset; app: string | null }[] | null {
+	const presets = tokens.map((token) => {
+		const [name, app, ...rest] = token.split(':')
+		const preset = CONTROL_CLI_PRESETS.find((known) => known === name)
+		if (preset === undefined || rest.length > 0 || app === '') return null
+		return { preset, app: app ?? null }
+	})
+	return presets.length > 0 && presets.every((entry) => entry !== null) ? presets.filter((entry) => entry !== null) : null
 }
 
 /**
  * The grants, one group of rows per application they reach, in the order of each group's newest grant. A row leads with
  * what tells two similar grants apart (when each was allowed, last active and ends) and folds the endpoints away.
  */
-function grantsSection(catalog: Catalog, grants: readonly GrantView[], more: boolean): string {
+function grantsSection(catalog: Catalog, grants: readonly GrantView[], more: boolean, status: string): string {
 	const text = catalog.pages.account
 	const groups = new Map<string, GrantView[]>()
 	for (const view of grants) groups.set(view.reaches, [...(groups.get(view.reaches) ?? []), view])
@@ -248,7 +264,7 @@ function grantsSection(catalog: Catalog, grants: readonly GrantView[], more: boo
 	const words = grants.some((view) => view.selfNamed) ? ` ${text.agentWords}` : ''
 	return `<section class="card" id="connections" aria-labelledby="connections-title"><div class="card-head"><h2 id="connections-title">${
 		escapeHtml(text.connectionsTitle)
-	}</h2></div><div class="card-body">
+	}</h2></div><div class="card-body">${status}
 		<p>${escapeHtml(text.connectionsText)} ${escapeHtml(text.lastActiveText)}${escapeHtml(words)}</p>
 		${table}${more ? `<p>${escapeHtml(text.more(ACCOUNT_GRANTS_SHOWN))}</p>` : ''}</div></section>`
 }
@@ -257,6 +273,7 @@ function grantRow(catalog: Catalog, view: GrantView): string {
 	const text = catalog.pages.account
 	const { grant } = view
 	const allowed = utc(grant.created_at)
+	const lastActive = view.renewed === null ? text.notRenewed : utc(view.renewed)
 	const chips = view.scopes.length === 0
 		? ''
 		: `<span class="chips">${view.scopes.map((token) => `<code class="chip">${escapeHtml(token)}</code>`).join('')}</span>`
@@ -269,9 +286,11 @@ function grantRow(catalog: Catalog, view: GrantView): string {
 		view.mode === null ? '' : `<span class="line">${escapeHtml(view.mode)}</span>`
 	}${chips}${view.confirmation === null ? '' : `<span class="line">${escapeHtml(view.confirmation)}</span>`}${details}</td>
 		<td class="when" data-label="${escapeHtml(text.allowed)}">${allowed}</td>
-		<td class="when" data-label="${escapeHtml(text.lastActive)}">${view.renewed === null ? escapeHtml(text.notRenewed) : utc(view.renewed)}</td>
+		<td class="when" data-label="${escapeHtml(text.lastActive)}">${escapeHtml(lastActive)}</td>
 		<td class="when" data-label="${escapeHtml(text.ends)}">${utc(grant.expires_at)}</td>
-		<td class="act"><form method="post" action="${ACCOUNT_PATH}" data-confirm="${escapeHtml(text.revokeConfirm(view.holder, view.reaches, allowed))}">
+		<td class="act"><form method="post" action="${ACCOUNT_PATH}" data-confirm="${
+		escapeHtml(text.revokeConfirm(view.holder, view.reaches))
+	}" data-confirm-detail="${escapeHtml(`${text.allowed}: ${allowed}\n${text.lastActive}: ${lastActive}`)}">
 		<input type="hidden" name="grant" value="${escapeHtml(grant.id)}"><button type="submit" class="danger small" aria-label="${
 		escapeHtml(text.revokeLabel(view.holder, view.reaches, allowed))
 	}">${escapeHtml(text.revoke)}</button></form></td></tr>`
@@ -293,7 +312,7 @@ function confirmation(text: Catalog['pages']['account'], grant: OAuthGrantRow, p
  * The passkeys section, first on the page because registering one is what most people come for: the person's passkeys,
  * each with its removal (whose own page asks a passkey check first), and the form that adds one.
  */
-function passkeysSection(held: readonly PasskeyRow[], catalog: Catalog): string {
+function passkeysSection(held: readonly PasskeyRow[], catalog: Catalog, status: string): string {
 	const text = catalog.pages.passkeys
 	const list = held.length === 0
 		? `<p>${escapeHtml(text.none)}</p>`
@@ -315,7 +334,7 @@ function passkeysSection(held: readonly PasskeyRow[], catalog: Catalog): string 
 		}</tbody></table>`
 	return `<section class="card" id="passkeys" aria-labelledby="passkeys-title"><div class="card-head"><h2 id="passkeys-title">${
 		escapeHtml(text.title)
-	}</h2></div><div class="card-body">
+	}</h2></div><div class="card-body">${status}
 		<p>${escapeHtml(text.text)}</p>
 		${list}
 		<h3 class="subhead">${escapeHtml(text.addTitle)}</h3>
