@@ -420,7 +420,9 @@ describe('recovery', () => {
 	test('the confirmation states the effect of each resolution', () => {
 		const stuck = operation('0192f1aa-stuck', { kind: 'maintenance', step: 'restrict', targetMode: 'closed' })
 		const resume = renderToStaticMarkup(<RecoveryEffect operation={stuck} resolution="resume" />)
-		expect(resume).toContain('Afterwards the maintenance operation carries on where it stopped, and the environment serves the data it leaves.')
+		expect(resume).toContain(
+			'Afterwards the maintenance carries on where it stopped, and the environment ends up serving nothing but Control&#x27;s ops requests.',
+		)
 		expect(resume).toContain('<code>closed</code>')
 		expect(resume).toContain('resumes')
 		expect(resume).toContain('<code>restrict</code>')
@@ -440,6 +442,14 @@ describe('recovery', () => {
 		expect(rollback).toContain('deploys the last succeeded commit again, as a new run')
 		expect(rollback).toContain('when the data still holds the migration, the recovery stops')
 		expect(rollback).toContain('The migration operation <code>-migrate</code> stays failed')
+
+		const openPastRewound = renderToStaticMarkup(<RecoveryEffect operation={{ ...failed, rewound: true }} resolution="open" />)
+		expect(openPastRewound).toContain('Control refuses this open: the migration was rewound')
+		expect(openPastRewound).not.toContain('serves requests again')
+		const openPastMigrated = renderToStaticMarkup(<RecoveryEffect operation={{ ...failed, rewound: false }} resolution="open" />)
+		expect(openPastMigrated).toContain('serves requests again with the version whose migration failed, on its data as the migration left it')
+		const resumeRestore = renderToStaticMarkup(<RecoveryEffect operation={{ ...stuck, kind: 'restore' }} resolution="resume" />)
+		expect(resumeRestore).toContain('the environment ends as that operation leaves it')
 	})
 })
 
@@ -740,7 +750,7 @@ describe('backups', () => {
 
 	test('without a data channel no backup runs, so none is promised and the schedule is not offered', () => {
 		const html = markup(holding(['data.manage']), { kind: 'no-channel' }, undefined, backupPage([]))
-		expect(html).toContain('Daily backups do not run here, and neither does the backup before a migration: Control cannot reach this environment')
+		expect(html).toContain('Daily backups do not run here.')
 		expect(html).not.toContain('Turn off daily backups')
 		expect(html).not.toContain('Daily backups <')
 		expect(html).not.toContain('the next daily backup')

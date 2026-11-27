@@ -76,6 +76,7 @@ describe('the surface in the console', () => {
 	test('a machine endpoint reads "machines" only when no signed-in person may call it', () => {
 		const machineOnly = { ...GET, id: 'api.sync', callers: ['machine'] }
 		expect(surfaceSummary([GET, machineOnly])).toBe('1 for machines and signed-in people · 1 for machines')
+		expect(surfaceSummary([machineOnly, GET])).toBe('1 for machines and signed-in people · 1 for machines')
 		const markup = section(environment('prod', [GET, machineOnly]))
 		expect(markup).toContain('<span class="chip">machines and signed-in people</span>')
 		expect(markup).toContain('<span class="chip">machines</span>')

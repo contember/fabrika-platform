@@ -87,8 +87,8 @@ brief): its personas and tasks are approved by a person, and a screen is judged 
   opens prod, else the first environment.
 - **An application's page offers an IAM administrator "Grant me Admin" per environment** (`lib/self-admin.ts`,
   `components/app-detail/AdminAccessSection.tsx`): an ordinary `grants.create` of the built-in `admin` to the caller,
-  no expiry by default (8 hours or 7 days selectable). A held Admin is revoked in place: `grants.delete` of every grant
-  that gives it. It is offered where IAM knows the environment, it is not an
+  no expiry by default (8 hours or 7 days selectable). A held Admin is revoked in place: `grants.delete` of its one
+  grant. It is offered where IAM knows the environment, it is not an
   installation app, and the caller's `me` administers its people; IAM decides again on the write. At a contract
   application that grant holds the declared actions (ADR-0022 rule 6). The section is absent when IAM does not answer.
 - **An IAM application reads as its display name** (`src/access/lib/app-names.tsx`). The Access layout reads

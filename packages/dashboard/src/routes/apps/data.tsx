@@ -825,7 +825,11 @@ export function RecoveryEffect({ operation, resolution }: { operation: DataOpera
 			return (
 				<>
 					<p>
-						<strong>Afterwards the {operation.kind} operation carries on where it stopped, and the environment serves the data it leaves.</strong>
+						<strong>
+							{operation.kind === 'maintenance'
+								? `Afterwards the maintenance carries on where it stopped, and the environment ends up serving ${modeEffect(operation.targetMode)}.`
+								: `Afterwards the ${operation.kind} operation carries on where it stopped, and the environment ends as that operation leaves it.`}
+						</strong>
 					</p>
 					<ClosedFence />
 					<p>
@@ -838,9 +842,7 @@ export function RecoveryEffect({ operation, resolution }: { operation: DataOpera
 			return (
 				<>
 					<p>
-						<strong>
-							Afterwards the environment serves requests again, on its data as the stopped {operation.kind} operation left it.
-						</strong>
+						<strong>{openOutcome(operation)}</strong>
 					</p>
 					<ClosedFence />
 					<p>
@@ -850,6 +852,19 @@ export function RecoveryEffect({ operation, resolution }: { operation: DataOpera
 				</>
 			)
 	}
+}
+
+/** What "Recover and open" leaves the environment serving; past a rewound migration the object refuses it (ADR-0070 §9). */
+function openOutcome(operation: DataOperationDto): string {
+	if (operation.kind !== 'migrate') {
+		return `Afterwards the environment serves requests again, on its data as the stopped ${operation.kind} operation left it.`
+	}
+	if (operation.rewound) return 'Control refuses this open: the migration was rewound, so only "Roll back and open" opens the environment again.'
+	return 'Afterwards the environment serves requests again with the version whose migration failed, on its data as the migration left it.'
+}
+
+function modeEffect(mode: MaintenanceMode): string {
+	return MAINTENANCE_MODES.find((entry) => entry.mode === mode)?.effect ?? mode
 }
 
 function ClosedFence() {
@@ -1187,7 +1202,7 @@ export function BackupsSection(
 				)
 				: (
 					<p className="section-note">
-						Daily backups do not run here, and neither does the backup before a migration: Control cannot reach this environment's data.
+						Daily backups do not run here.
 					</p>
 				)}
 			{reachable && schedule.kind === 'ok' && (

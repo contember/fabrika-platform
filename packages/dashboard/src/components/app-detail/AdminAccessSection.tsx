@@ -5,7 +5,6 @@ import { api } from '../../access/lib/api'
 import { fmtDate } from '../../lib/format'
 import {
 	ADMIN_ROLE,
-	revokeSelfAdmin,
 	SELF_ADMIN_EXPIRIES,
 	selfAdminExpiresAt,
 	type SelfAdminExpiry,
@@ -107,7 +106,7 @@ function SelfAdminRow({ principalId, target, onDone }: { principalId: string; ta
 					}
 					onClose={() => setConfirmingRevoke(false)}
 					onConfirm={async () => {
-						const request = await revokeSelfAdmin(held, (id) => api.grants.delete({ id }))
+						const request = pendingOf(await api.grants.delete({ id: held.grantId }))
 						setPending(request)
 						if (request === null) onDone()
 					}}
