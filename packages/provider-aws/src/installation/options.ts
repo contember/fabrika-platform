@@ -66,6 +66,10 @@ const CHOICE_FLAGS = {
 } satisfies Record<string, readonly [string, string]>
 type CommonKey = keyof typeof COMMON_FLAGS
 type ChoiceKey = keyof typeof CHOICE_FLAGS
+/** Every choice, in the order the usage names them. */
+export const AWS_CHOICE_KEYS: readonly ChoiceKey[] = Object.keys(CHOICE_FLAGS).filter((name): name is ChoiceKey => name in CHOICE_FLAGS)
+/** The flag a choice is named by. */
+export const awsChoiceFlag = (key: ChoiceKey): string => CHOICE_FLAGS[key][0]
 /** The flags an install takes beyond the choices: how people sign in, and the mail. */
 const INSTALL_FLAGS = ['--auth-methods', OIDC_ISSUER_FLAG, OIDC_CLIENT_ID_FLAG, ...EMAIL_FLAGS]
 
@@ -134,7 +138,7 @@ function readCommon(argv: readonly string[], env: Env): AwsCommonOptions {
 /** The choices the operator names, each checked as the run takes it: hosts lower-case, MCP `on` or `off`. */
 function readNamedChoices(argv: readonly string[], env: Env): Partial<Record<ChoiceKey, string>> {
 	const named: Partial<Record<ChoiceKey, string>> = {}
-	for (const key of Object.keys(CHOICE_FLAGS).filter((name): name is ChoiceKey => name in CHOICE_FLAGS)) {
+	for (const key of AWS_CHOICE_KEYS) {
 		const [flag] = CHOICE_FLAGS[key]
 		let value = read(argv, env, CHOICE_FLAGS[key])
 		if (value === undefined) continue

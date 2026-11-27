@@ -734,9 +734,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          install records its choices (`installation/record.ts`, `/fabrika/platform/installation/record`); an upgrade
          takes every choice it does not name from that record, refuses a changed network range (CloudFormation would
          replace the VPC), host or environment name, and names a changed certificate or MCP switch before it asks.
-       - Still to come: `admin` and registering the console's schema with IAM (both reach IAM's public host),
-         requesting the certificates for exactly the hosts, the ECS service-linked role, and the sidecar workflow with
-         its GitHub OIDC role.
+       - **`platform admin`** (built, `installation/admin.ts`): once the hosts point at the platform balancer, it
+         registers the console (its vocabulary and its return origin) and IAM's own vocabulary with IAM, and admits the
+         first administrator through `installation-init`'s mechanics, as on Zerops. The hosts come from the record and
+         IAM's provisioning key from the installation's Parameter Store, the account checked first; the key is never
+         typed, printed or logged. `upgrade` registers both again after the services roll, since a release may change
+         them. The console's schema is rendered into this package by `@fabrika/platform-artifacts`, as the manifest is.
+         A lost record is written back by an upgrade that names every choice, its ranges checked against the networks.
+       - Still to come: requesting the certificates for exactly the hosts, the ECS service-linked role, and the sidecar
+         workflow with its GitHub OIDC role.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:

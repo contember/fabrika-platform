@@ -15,7 +15,7 @@
 import { type Artifact, assertArtifactMatchesSchema, generatedArtifacts } from '@fabrika/provider-zerops/installation/topology'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { platformConsoleSchemaArtifact } from './console-schema'
+import { AWS_PLATFORM_CONSOLE_SCHEMA_PATH, platformConsoleSchemaArtifact } from './console-schema'
 import { AWS_PLATFORM_PROXY_MANIFEST_PATH, platformProxyManifestArtifact } from './proxy-manifest'
 
 /** Repository root, from this file's own location. */
@@ -46,6 +46,7 @@ export const renderZeropsInstallation = (check: boolean): void => {
 		platformProxyManifestArtifact(),
 		platformProxyManifestArtifact(AWS_PLATFORM_PROXY_MANIFEST_PATH),
 		platformConsoleSchemaArtifact(),
+		platformConsoleSchemaArtifact(AWS_PLATFORM_CONSOLE_SCHEMA_PATH),
 	]
 	const stale: string[] = []
 	for (const artifact of artifacts) {

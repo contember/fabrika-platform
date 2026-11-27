@@ -630,8 +630,10 @@
       "version": "0.9.0-dev.51",
       "dependencies": {
         "@fabrika/app": "workspace:*",
+        "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/email": "workspace:*",
+        "@fabrika/iam-contract": "workspace:*",
         "@fabrika/installation-init": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",

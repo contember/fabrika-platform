@@ -4,12 +4,17 @@
 // nothing written when the operator declines; the bring-up's values reaching the parameters on an install alone; the
 // operator's credentials from the environment; and the module the CLI loads.
 
-import type { Confirmations } from '@fabrika/installation-init'
+import { ReconcileSchemaError } from '@fabrika/auth'
+import { IAM_APP_ID } from '@fabrika/iam-contract'
+import { type Confirmations, platformProxyAppFor } from '@fabrika/installation-init'
+import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { isInstallationCli } from '@fabrika/provider-contract/installation'
 import { describe, expect, test } from 'bun:test'
 import type { StackStatus } from '../../aws/cloudformation'
 import type { SsmPlatformSecrets } from '../../aws/ssm'
+import { AWS_PROVISIONING_KEY_PARAMETER, AwsIamUnreachableError } from '../admin'
 import type { AwsPlatformApplied, AwsPlatformApplyInput } from '../apply'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../generated/platform-proxy-manifest'
 import { installationCli, readAwsInstallationGuide } from '../index'
 import { parseAwsInstallArgs, parseAwsUpgradeArgs } from '../options'
 import { awsPlatformManifest } from '../platform-manifest'
@@ -42,6 +47,8 @@ interface FakeAccount {
 	services: StackStatus | null
 	callerAccount: string
 	readonly calls: string[]
+	/** The range each network stack holds. */
+	readonly networks: { readonly apps: string; readonly platform: string }
 }
 
 function fakeAccount(): FakeAccount {
@@ -49,8 +56,11 @@ function fakeAccount(): FakeAccount {
 	for (const service of ['iam', 'control', 'operations']) {
 		store.set(`/fabrika/platform/database/${service}-password`, `${service.padEnd(8, 'x')}${'P'.repeat(32)}`)
 	}
-	return { store, services: null, callerAccount: '123456789012', calls: [] }
+	store.set(AWS_PROVISIONING_KEY_PARAMETER, PROVISIONING_KEY)
+	return { store, services: null, callerAccount: '123456789012', calls: [], networks: { apps: '10.80.0.0/16', platform: '10.81.0.0/16' } }
 }
+
+const PROVISIONING_KEY = 'px_provisioning-never-logged'
 
 function clientsOf(account: FakeAccount): AwsPlatformClients {
 	const unexpected = async (): Promise<never> => {
@@ -79,9 +89,14 @@ function clientsOf(account: FakeAccount): AwsPlatformClients {
 		cloudFormation: {
 			findStack: async (name) => {
 				account.calls.push(`find ${name}`)
+				if (name === 'fabrika-platform-network-apps' || name === 'fabrika-platform-network-platform') return { stackId: name, status: 'CREATE_COMPLETE' }
 				return account.services !== null && name === 'fabrika-platform-services' ? { stackId: 'x', status: account.services } : null
 			},
-			describeStack: unexpected,
+			describeStack: async (id) => ({
+				stackId: id,
+				status: 'CREATE_COMPLETE',
+				outputs: { VpcCidr: id === 'fabrika-platform-network-apps' ? account.networks.apps : account.networks.platform },
+			}),
 			getTemplate: unexpected,
 			createStack: unexpected,
 			updateStack: unexpected,
@@ -96,8 +111,15 @@ function clientsOf(account: FakeAccount): AwsPlatformClients {
 
 const yes: Confirmations = { confirm: async () => true }
 
-function run(kind: 'install' | 'upgrade', argv: readonly string[], account: FakeAccount, confirmations: Confirmations = yes) {
+function run(
+	kind: 'install' | 'upgrade',
+	argv: readonly string[],
+	account: FakeAccount,
+	confirmations: Confirmations = yes,
+	answer: (call: SchemaReconcileInput) => Promise<void> = async () => {},
+) {
 	const applied: AwsPlatformApplyInput[] = []
+	const registered: SchemaReconcileInput[] = []
 	const lines: string[] = []
 	const shared = {
 		clients: clientsOf(account),
@@ -109,11 +131,15 @@ function run(kind: 'install' | 'upgrade', argv: readonly string[], account: Fake
 			applied.push(input)
 			return { ...platformState(), images: { services: `sha256:${'1'.repeat(64)}`, proxy: `sha256:${'2'.repeat(64)}` } }
 		},
+		reconcile: async (call: SchemaReconcileInput) => {
+			await answer(call)
+			registered.push(call)
+		},
 	}
 	const result = kind === 'install'
 		? runAwsPlatform({ kind, options: parseAwsInstallArgs(argv, {}), ...shared })
 		: runAwsPlatform({ kind, options: parseAwsUpgradeArgs(argv, {}), ...shared })
-	return { result, applied, lines }
+	return { result, applied, lines, registered }
 }
 
 describe("the AWS installation's commands", () => {
@@ -189,6 +215,83 @@ describe("the AWS installation's commands", () => {
 		expect(parseAwsInstallationRecord(account.store.get(AWS_INSTALLATION_RECORD) ?? '').mcpAuthoring).toBe(true)
 	})
 
+	test('an upgrade registers the console and IAM with the key read from the installation; an install names that next step', async () => {
+		const account = fakeAccount()
+		account.services = 'CREATE_COMPLETE'
+		account.store.set(AWS_INSTALLATION_RECORD, RECORD)
+		const upgrade = run('upgrade', WHERE, account)
+		await upgrade.result
+		expect(upgrade.registered.map((call) => [call.url, call.app, call.returnOrigins, call.adminKey])).toEqual([
+			[
+				'https://iam.example.com',
+				platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control').id,
+				['https://control.example.com'],
+				PROVISIONING_KEY,
+			],
+			['https://iam.example.com', IAM_APP_ID, undefined, PROVISIONING_KEY],
+		])
+		expect(upgrade.lines.join('\n')).not.toContain(PROVISIONING_KEY)
+		const install = run('install', INSTALL, fakeAccount())
+		await install.result
+		expect(install.registered).toEqual([])
+		expect(install.lines.some((line) => line.includes('`platform admin --provider=aws`'))).toBe(true)
+	})
+
+	test('an upgrade whose IAM gives no answer names `admin` and succeeds; an answer from IAM that refuses fails it', async () => {
+		const account = fakeAccount()
+		account.services = 'CREATE_COMPLETE'
+		account.store.set(AWS_INSTALLATION_RECORD, RECORD)
+		// The hosts point nowhere yet: an upgrade that finishes a stopped install.
+		const unreachable = run('upgrade', WHERE, account, yes, async (call) => {
+			throw new AwsIamUnreachableError(call.url, 'Unable to connect')
+		})
+		expect(await unreachable.result).not.toBeNull()
+		expect(unreachable.applied).toHaveLength(1)
+		expect(unreachable.lines).toContain(
+			"aws: IAM at https://iam.example.com gave no answer (Unable to connect); the release is applied, but the console and IAM's vocabulary are not registered",
+		)
+		expect(unreachable.lines.some((line) => line.includes('`platform admin --provider=aws` registers them'))).toBe(true)
+		const refused = run('upgrade', WHERE, account, yes, async () => {
+			throw new ReconcileSchemaError('PUT /admin/apps/console/schema failed (401): unauthorized', 401)
+		})
+		await expect(refused.result).rejects.toThrow('failed (401)')
+	})
+
+	test('a lost record is written back by an upgrade that names every choice, each checked against what the installation holds', async () => {
+		const account = fakeAccount()
+		account.services = 'CREATE_COMPLETE'
+		// What the last run wrote: the hosts in Control's parameters, the environment's name in IAM's.
+		account.store.set(
+			'/fabrika/platform/control/FABRIKA_AWS_INSTALLATION_HOSTS',
+			'iam.example.com,control.example.com,operations.example.com,apps.example.com',
+		)
+		account.store.set('/fabrika/platform/iam/ENVIRONMENT', 'production')
+		const partial = run('upgrade', [...WHERE, '--iam-host=iam.example.com'], account)
+		await expect(partial.result).rejects.toThrow("restore it from the keys' backup, or name every choice to write it back (missing: --apps-vpc-cidr")
+		// MCP authoring is a choice like the rest: never defaulted to off on the way back.
+		const withoutMcp = [...INSTALL, '--apps-vpc-cidr=10.80.0.0/16', '--platform-vpc-cidr=10.81.0.0/16']
+		await expect(run('upgrade', withoutMcp, account).result).rejects.toThrow('(missing: --mcp-authoring)')
+		const everything = [...withoutMcp, '--mcp-authoring=off']
+		const swap = (flag: string, value: string) => everything.map((arg) => (arg.startsWith(`${flag}=`) ? `${flag}=${value}` : arg))
+		// A range the network does not hold is refused, even with the record gone.
+		const wrong = run('upgrade', swap('--platform-vpc-cidr', '10.90.0.0/16'), account)
+		await expect(wrong.result).rejects.toThrow('the platform network holds 10.81.0.0/16, not the 10.90.0.0/16 named')
+		expect(wrong.applied).toEqual([])
+		// So is a host or an environment the installation does not have: a typo would move the balancer's rule.
+		const typo = run('upgrade', swap('--iam-host', 'iam.exmaple.com'), account)
+		await expect(typo.result).rejects.toThrow(
+			'the installation holds iam.example.com,control.example.com,operations.example.com,apps.example.com as the hosts',
+		)
+		const staging = run('upgrade', swap('--environment', 'staging'), account)
+		await expect(staging.result).rejects.toThrow("the installation holds production as the environment's name")
+		expect([...typo.applied, ...staging.applied]).toEqual([])
+		expect(account.store.has(AWS_INSTALLATION_RECORD)).toBe(false)
+		const rebuilt = run('upgrade', everything, account)
+		await rebuilt.result
+		expect(rebuilt.lines).toContain('aws: changing the installation record, written back from the choices named')
+		expect(account.store.get(AWS_INSTALLATION_RECORD)).toBe(RECORD)
+	})
+
 	test('a declined confirmation changes nothing, the record included', async () => {
 		const account = fakeAccount()
 		const declined = run('install', INSTALL, account, { confirm: async () => false })
@@ -237,8 +340,8 @@ describe("the AWS installation's commands", () => {
 	test('the module the CLI loads: install, upgrade and the guide', async () => {
 		expect(isInstallationCli(installationCli)).toBe(true)
 		expect(installationCli.provider).toBe('aws')
-		expect([...installationCli.commands]).toEqual(['install', 'upgrade', 'guide'])
+		expect([...installationCli.commands]).toEqual(['install', 'upgrade', 'admin', 'guide'])
 		expect(await readAwsInstallationGuide()).toContain('# Installing Fabrika on AWS')
-		await expect(installationCli.run('admin', [])).rejects.toThrow('does not support `platform admin`')
+		await expect(installationCli.run('deploy', [])).rejects.toThrow('does not support `platform deploy`')
 	})
 })

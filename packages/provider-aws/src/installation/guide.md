@@ -1,8 +1,8 @@
 # Installing Fabrika on AWS
 
 **Under construction.** No installation has run this yet; the first run against an account is the provider's live
-check. The commands below make an installation's infrastructure and services. Admitting the first administrator and
-registering the console's schema with IAM come in a later release.
+check. The commands below make an installation's infrastructure and services, register the console with IAM and
+admit the first administrator.
 
 ## What you need first
 
@@ -47,6 +47,19 @@ The run ends by naming the platform balancer's DNS name. Point IAM's, Control's 
 or an alias record in Route 53). The applications' hosts go to the applications' balancer, named in the CloudFormation
 stack `fabrika-platform-balancers`'s outputs.
 
+## Admit the first administrator
+
+Once the hosts resolve to the balancer:
+
+```bash
+fabrika platform admin --provider=aws --account-id=<12 digits> --region=<region> --email=<address>
+```
+
+It registers the console and IAM's own vocabulary with IAM, then admits the address as the first administrator. IAM's
+provisioning key is read from the installation, never typed. Without a mail service it prints an enrollment URL that
+sets the first password: a credential, printed once and stored nowhere, to hand to that person yourself. Running it
+again admits nobody twice; `--reissue` replaces an enrollment that expired unopened.
+
 ## Keep the keys
 
 The installation's generated keys exist only in Parameter Store, under `/fabrika/platform/<service>/`. Losing
@@ -72,7 +85,14 @@ fabrika platform upgrade --provider=aws --account-id=<12 digits> --region=<regio
 ```
 
 It builds the release's images (or finds them built), runs the database setup before any service moves, rewrites what
-the release derives, and rolls the services. A sign-in method or a mailer you changed by hand stays as you set it.
+the release derives, rolls the services, and registers the console's vocabulary with IAM again, since a release may
+change it. An upgrade that finishes an install whose hosts point nowhere yet cannot reach IAM: it says so and names
+`platform admin`, which registers both once they do. An answer from IAM that refuses fails the run.
+
+The record (`/fabrika/platform/installation/record`) is in the keys' backup above. If it is lost, restore it from
+there, or run the upgrade naming every choice the install named, `--mcp-authoring` included: it writes the record
+back. The ranges must be the networks' own, and the hosts and the environment's name the ones the installation holds,
+or it refuses. A sign-in method or a mailer you changed by hand stays as you set it.
 Name a certificate (`--control-certificate=<ARN>`, after renewing it under a new ARN) or `--mcp-authoring` to change
 it; the run names the change before it asks. A changed network range, host or environment name is refused: those
 would replace the networks or rewrite what every service derives.
