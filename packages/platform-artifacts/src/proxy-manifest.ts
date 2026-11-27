@@ -123,6 +123,11 @@ export const platformProxyManifestTemplate = (): PlatformProxyManifestTemplate =
 
 /** Repo-relative path of the committed template. */
 export const PLATFORM_PROXY_MANIFEST_PATH = 'packages/provider-zerops/src/installation/generated/platform-proxy-manifest.ts'
+/**
+ * The same template, committed into the AWS provider too: its installation resolves the platform proxy's manifest from
+ * it, and no provider bundle imports another's.
+ */
+export const AWS_PLATFORM_PROXY_MANIFEST_PATH = 'packages/provider-aws/src/installation/generated/platform-proxy-manifest.ts'
 
 /**
  * Distinct, legal stand-in hosts, used only to prove the template resolves. A failure under these is the
@@ -248,7 +253,7 @@ const assertDeclaredActions = (template: PlatformProxyManifestTemplate): void =>
 }
 
 /** The committed template, as a typed module: `typecheck` then proves the artifact still fits its type. */
-export const platformProxyManifestArtifact = (): Artifact => {
+export const platformProxyManifestArtifact = (path: string = PLATFORM_PROXY_MANIFEST_PATH): Artifact => {
 	const template = platformProxyManifestTemplate()
 	// Refuse to commit a template the proxy's own parser would reject.
 	resolvePlatformProxyManifest(template, { scheme: 'https', placement: CHECK_PLACEMENT, mcp: false })
@@ -267,5 +272,5 @@ export const platformProxyManifestArtifact = (): Artifact => {
 		'}',
 		'',
 	].join('\n')
-	return { path: PLATFORM_PROXY_MANIFEST_PATH, content }
+	return { path, content }
 }

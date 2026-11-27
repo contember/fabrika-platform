@@ -16,7 +16,7 @@ import { type Artifact, assertArtifactMatchesSchema, generatedArtifacts } from '
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { platformConsoleSchemaArtifact } from './console-schema'
-import { platformProxyManifestArtifact } from './proxy-manifest'
+import { AWS_PLATFORM_PROXY_MANIFEST_PATH, platformProxyManifestArtifact } from './proxy-manifest'
 
 /** Repository root, from this file's own location. */
 export const REPO_ROOT = resolve(import.meta.dir, '../../..')
@@ -41,7 +41,12 @@ export const renderZeropsInstallation = (check: boolean): void => {
 	for (const document of zeropsDocuments) {
 		assertArtifactMatchesSchema(document)
 	}
-	const artifacts = [...zeropsDocuments, platformProxyManifestArtifact(), platformConsoleSchemaArtifact()]
+	const artifacts = [
+		...zeropsDocuments,
+		platformProxyManifestArtifact(),
+		platformProxyManifestArtifact(AWS_PLATFORM_PROXY_MANIFEST_PATH),
+		platformConsoleSchemaArtifact(),
+	]
 	const stale: string[] = []
 	for (const artifact of artifacts) {
 		if (!check) {

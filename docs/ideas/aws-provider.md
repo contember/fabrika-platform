@@ -713,7 +713,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          people sign in and the mail are the install's, written once, so an operator's change survives an upgrade.
          What a deploy derives is rewritten when it differs. The console's table digest and OAuth configuration come
          from the platform proxy's manifest, which the images' piece resolves.
-       - What the images are built from comes next, its own change.
+       - **The platform proxy's manifest** (built, `installation/platform-manifest.ts`): the platform's three apps on
+         the installation's hosts, from the template `@fabrika/platform-artifacts` renders into this package too (no
+         provider bundle imports another's), dialled at their Service Connect names, OAuth under IAM's public origin.
+         Its digest is part of the proxy image's tag; the console's table digest and the OAuth configuration go to the
+         parameters in the same run.
+       - **The release's two images** (built, `installation/images-build.ts`): an image its tag already holds is read,
+         not built. Otherwise the proxy's manifest is written beside the release in the sources bucket and both builds
+         start, each with an idempotency token derived from its tag, so a run that lost a build finds and follows it.
+         A build that ends without its image is started once more; the answer is each image's digest.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
