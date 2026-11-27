@@ -1,6 +1,7 @@
 // The console's sample data on top of `local:smoke`: a second Notes environment, secrets in each, a changed policy on
-// `prod` and a deploy waiting for a person. It writes through Control (as the signed-in person, the machine key for the
-// namespace, the GitHub webhook for the parked deploy); a rerun adds nothing that is already there.
+// `prod`, a deploy waiting for a person and a plan of the same change waiting for one. It writes through Control (as the
+// signed-in person, the machine key for the namespace and the plan, the GitHub webhook for the parked deploy); a rerun
+// adds nothing that is already there.
 
 import { type ApprovalPolicy, type ApprovalSettings, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
 import { randomUUID } from 'node:crypto'
@@ -12,6 +13,7 @@ import { LOCAL_SOURCE_FIXTURE_DIRECTORY } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
 import {
+	controlRequest,
 	ensureNamespace,
 	envValue,
 	type LocalNamespace,
@@ -53,6 +55,7 @@ const environmentsSchema = z.object({
 const namedValuesSchema = z.object({ items: z.array(z.object({ name: z.string(), env: z.string().nullable() })) })
 const approvalsSchema = z.object({ items: z.array(z.object({ run: z.object({ appId: z.string(), env: z.string() }) })) })
 const runSchema = z.object({ id: z.string() })
+const plansSchema = z.object({ items: z.array(z.object({ appId: z.string(), env: z.string(), commitSha: z.string() })) })
 
 const main = async (): Promise<void> => {
 	const fixtures = await loadLocalSourceFixtures(resolve(STATE_DIR, LOCAL_SOURCE_FIXTURE_DIRECTORY))
@@ -100,7 +103,16 @@ const main = async (): Promise<void> => {
 		const parked = await waitForParkOrProvider(machineKey, runId)
 		if (parked.status !== 'awaiting_approval') throw new Error(`the agent change deploy ${runId} did not wait for approval: ${String(parked.status)}`)
 	}
-	console.info('Console seed: Notes has prod and test, secrets in each, a changed approval policy on prod and a deploy waiting for approval')
+
+	// The key plans the same change, as an agent asks ahead of its deploy; a person decides it in the console.
+	const plans = plansSchema.parse(await asPerson('approvals.plans.list', undefined)).items
+	const planned = { appId: NOTES_APP_ID, env: 'prod', commitSha: fixtures.agentChange.commitSha }
+	if (!plans.some((plan) => isDeepStrictEqual({ appId: plan.appId, env: plan.env, commitSha: plan.commitSha }, planned))) {
+		await controlRequest('approvals.plans.create', machineKey, planned)
+	}
+	console.info(
+		'Console seed: Notes has prod and test, secrets in each, a changed approval policy on prod, a deploy and a plan waiting for approval',
+	)
 }
 
 if (import.meta.main) {
