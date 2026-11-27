@@ -345,7 +345,7 @@ const resolvePlacement = (input: PlatformDeployInput, proxyEnv: LiveServiceEnv):
  * IAM's key that seals TOTP secrets. The install generates it; an installation from before it gets one from its next
  * deploy, and never another: a new value would open nothing the old one sealed.
  */
-const IAM_DATA_KEY_VARIABLE = 'FABRIKA_IAM_DATA_KEY'
+export const IAM_DATA_KEY_VARIABLE = 'FABRIKA_IAM_DATA_KEY'
 
 /**
  * The credentials this command writes, sensitive, so they cannot be compared: the derived proxy secret on every deploy,
@@ -363,7 +363,7 @@ const withGeneratedKeys = (hostname: PlatformDeployService, keys: ReadonlyMap<st
  *
  * The namespace source default comes from the verified snapshot. Values are compared but never logged.
  */
-const desiredServiceEnv = (
+export const desiredServiceEnv = (
 	environment: string,
 	projectId: string,
 	placement: PlatformPlacement,

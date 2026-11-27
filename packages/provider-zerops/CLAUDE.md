@@ -415,8 +415,13 @@ Layout (under `src/installation/`):
 - `admin.ts` + `admin-options.ts` — the first administrator. `machine-key.ts` — the block `admin` and `init` end with.
 - `hosts.ts` — the Zerops subdomain placement. `log.ts` — progress, with no secret-taking helper.
 - `checker-release.ts` — the npm lookup of `@fabrika/check` at this checkout's version.
-- `topology/` — `setups.ts` (typed setups), `topology.ts` + `invariants.ts`, `artifacts.ts` (every
-  generated artifact, as values), `installation-schemas.ts` + `validate.ts` (static schemas).
+- `topology/` — `model.ts` (the installation model with Control's Zerops entry points, which store each tier's data
+  services hold, Control's `FABRIKA_ZEROPS_*` variables with their kinds, and the `run` and readiness a setup takes from
+  the model; [ADR-0092](../../docs/decisions/0092-the-installation-is-a-model-each-provider-renders.md)),
+  `setups.ts` (typed setups: the build recipes, probe timings and the proxy's own pieces), `topology.ts` +
+  `invariants.ts`, `artifacts.ts` (every generated artifact, as values), `installation-schemas.ts` + `validate.ts`
+  (static schemas). A change to the model must leave the generated files as they are, or say in its commit how an
+  existing installation converges.
 - `generated/` — the proxy manifest template and the console schema, as DATA. Never hand-edit: the
   private [`@fabrika/platform-artifacts`](../platform-artifacts/CLAUDE.md) writes them, the root
   `zerops.yaml` and the import YAMLs (`gen`, `gen:check`, `check:schemas`).
