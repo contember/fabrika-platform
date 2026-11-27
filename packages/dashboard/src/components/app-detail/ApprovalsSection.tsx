@@ -41,6 +41,7 @@ import {
 	protectionStepUp,
 	protectionToggle,
 	requestTtl,
+	saveStatus,
 	setEnvironmentProtection,
 } from '../../lib/environment-protection'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -148,7 +149,10 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 				{check !== null && (
 					<PasskeyCheckPrompt
 						check={check}
-						onDone={onDone}
+						onDone={() => {
+							setCheck(null)
+							onDone()
+						}}
 						onCancel={() => setCheck(null)}
 						describeFailure={(cause) => protectionChangeFailure(cause, env.env, 'webauthn')}
 					/>
@@ -415,31 +419,40 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 				onSettings={setSettings}
 				onTtl={chooseTtl}
 			/>
-			<div className="save-bar">
-				<span className="muted">
-					{changes === 0 ? 'No changes' : `${changes} ${changes === 1 ? 'change' : 'changes'} to save`}
-				</span>
-				<span className="spacer" />
-				<button type="button" onClick={changes === 0 ? onCancel : discard} disabled={locked}>
-					{changes === 0 ? 'Back' : 'Discard'}
-				</button>
-				<button type="button" className="primary" disabled={changes === 0 || ttl === null || locked} onClick={() => void apply()}>
-					Save approvals
-				</button>
-			</div>
-			{error !== null && (
-				<div className="error-text small" role="alert">
-					<DecisionFailureText failure={error} />
+			{/* The passkey check stays beside Save, in view while the rules scroll. */}
+			<div className="save-dock">
+				{check !== null && (
+					<PasskeyCheckPrompt
+						check={check}
+						onDone={() => {
+							setCheck(null)
+							onDone()
+						}}
+						onCancel={() => setCheck(null)}
+						describeFailure={(cause) => protectionChangeFailure(cause, env.env, 'webauthn')}
+					/>
+				)}
+				{error !== null && (
+					<div className="error-text small" role="alert">
+						<DecisionFailureText failure={error} />
+					</div>
+				)}
+				<div className="save-bar">
+					<span className={check === null ? 'muted' : 'warn-text'}>{saveStatus(changes, check !== null)}</span>
+					<span className="spacer" />
+					<button type="button" onClick={changes === 0 ? onCancel : discard} disabled={locked}>
+						{changes === 0 ? 'Back' : 'Discard'}
+					</button>
+					<button
+						type="button"
+						className={check === null ? 'primary' : undefined}
+						disabled={changes === 0 || ttl === null || locked}
+						onClick={() => void apply()}
+					>
+						Save approvals
+					</button>
 				</div>
-			)}
-			{check !== null && (
-				<PasskeyCheckPrompt
-					check={check}
-					onDone={onDone}
-					onCancel={() => setCheck(null)}
-					describeFailure={(cause) => protectionChangeFailure(cause, env.env, 'webauthn')}
-				/>
-			)}
+			</div>
 			{confirming && (
 				<ConfirmDialog
 					title="Approve less"

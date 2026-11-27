@@ -33,6 +33,7 @@ import {
 	protectionToggle,
 	requesterBlocks,
 	requestTtl,
+	saveStatus,
 	setEnvironmentProtection,
 } from '../lib/environment-protection'
 
@@ -474,6 +475,13 @@ describe('a change that weakens a passkey on deciding', () => {
 			message: 'A deploy of prod is running. Approvals change between deploys: try again when it finishes.',
 			noPasskey: false,
 		})
+	})
+
+	test("the editor's save bar never reads as saved while a change waits for its passkey", () => {
+		expect(saveStatus(0, false)).toBe('No changes')
+		expect(saveStatus(1, false)).toBe('1 change to save')
+		expect(saveStatus(2, false)).toBe('2 changes to save')
+		expect(saveStatus(1, true)).toBe('Not saved yet: the change waits for your passkey')
 	})
 })
 

@@ -284,7 +284,18 @@ export function RequestDecision({ request, me, now, onDone }: {
 				)}
 				<StepUpHint stepUp={request.stepUp} item="request" />
 				{check !== null
-					? <PasskeyCheckPrompt check={check} onDone={onDone} onCancel={() => setCheck(null)} />
+					? (
+						<PasskeyCheckPrompt
+							check={check}
+							onDone={() => {
+								// As after a decision without a passkey: nothing to decide again while the page refetches.
+								setBusy(true)
+								setCheck(null)
+								onDone()
+							}}
+							onCancel={() => setCheck(null)}
+						/>
+					)
 					: (
 						<div className="row-actions">
 							{!request.described
