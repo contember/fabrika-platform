@@ -224,6 +224,7 @@ function dataContext(c: RequestExecutionContext, execution: RequestExecution): D
 		...(c.maintenance === undefined ? {} : { lock: c.maintenance.lock, ops: c.maintenance.ops }),
 		...(c.deploys === undefined ? {} : { deploys: c.deploys }),
 		held: heldOperation(execution),
+		admission: c.admission,
 	}
 }
 

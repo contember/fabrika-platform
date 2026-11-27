@@ -2,6 +2,7 @@ import type { OpsMode } from '@fabrika/auth-core'
 import type { AppEnvDto } from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { ProviderNamespaceError } from '@fabrika/provider-contract'
+import { requirePersonToResume } from '../../approval/human'
 import { type HeldOperation, type OpsTransport, recordedMaintenance, startMaintenance } from '../../data-operations'
 import type { AppEnvRow } from '../../db'
 import { dataOperationResult } from '../data-operation-result'
@@ -35,6 +36,7 @@ export async function suspendAppEnvUseCase(c: SuspensionUseCaseContext, appId: s
 /** Undo `suspendAppEnvUseCase`: the proxy routes the environment again, or the object returns to the mode it was in. */
 export async function resumeAppEnvUseCase(c: SuspensionUseCaseContext, appId: string, env: string): Promise<AppEnvDto> {
 	const row = await requireAppEnv(c, appId, env)
+	requirePersonToResume(c.auth, c.admission, row)
 	if (c.provider.namespaces?.republish !== undefined) return toAppEnvDto(await resumeBehindProxy(c, row))
 	return toAppEnvDto(await resumeObject(c, row))
 }

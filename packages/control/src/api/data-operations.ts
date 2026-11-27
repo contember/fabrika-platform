@@ -4,6 +4,7 @@
 import type { AuthContext } from '@fabrika/auth'
 import { CONTROL_ACTIONS, type DataOperationDto, type RecoverDataOperationInput, type StartDataOperationInput } from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
+import { type ConsoleAdmission, requirePersonWhileSuspended } from '../approval/human'
 import {
 	type DataOperationDeps,
 	type HeldOperation,
@@ -30,11 +31,14 @@ export interface DataUseCaseContext {
 	readonly deploys?: () => Promise<OperationDeploys>
 	/** An approved request's execution: the operation is its operation, under the lease it holds. */
 	readonly held?: HeldOperation
+	/** The request a console call arrived on: a suspended protected environment's operations are a person's. */
+	readonly admission?: ConsoleAdmission
 }
 
 export async function startDataOperationUseCase(c: DataUseCaseContext, input: StartDataOperationInput): Promise<DataOperationDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
 	if (input.kind === 'backup') fail(501, 'backups are not available in this release')
+	await requireSuspensionKept(c, input.appId, input.env, input.kind === 'maintenance' && input.mode === 'closed')
 	const held = c.held === undefined ? {} : { held: c.held }
 	if (input.kind === 'restore') {
 		const deps = await restoreDeps(c)
@@ -49,8 +53,15 @@ export async function startDataOperationUseCase(c: DataUseCaseContext, input: St
 /** A recovery may resume a restore, which deploys, so it carries the restore's deploys where the composition has them. */
 export async function recoverDataOperationUseCase(c: DataUseCaseContext, input: RecoverDataOperationInput): Promise<DataOperationDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
+	await requireSuspensionKept(c, input.appId, input.env, false)
 	const deps = c.deploys === undefined ? operationDeps(c) : await restoreDeps(c)
 	return dataOperationResult(await startRecovery(deps, { ...input, actor: runActor(c.auth), ...(c.held === undefined ? {} : { held: c.held }) }))
+}
+
+async function requireSuspensionKept(c: DataUseCaseContext, appId: string, env: string, keepsOffline: boolean): Promise<void> {
+	const row = await c.repositories.registry.getAppEnv(appId, env)
+	if (row === null) fail(404, 'app env not found')
+	requirePersonWhileSuspended(c.auth, c.admission, row, keepsOffline)
 }
 
 function operationDeps(c: DataUseCaseContext): { repositories: ControlRepositories; lock: DeployLocks; ops: OpsTransport } {

@@ -87,6 +87,13 @@ in the console is their own evidence, as before:
 | `grants`         | a person's own console grant, grant edit or revocation in IAM (§4)                                                                                                                                            | `off`    |
 | `agent-write`    | a `write` grant a person approves on IAM's device page for an agent to act as them at the environment (ADR-0090 §5); modes `off` and `refuse` only                                                            | `off`    |
 
+A resume of a protected environment is a person's under every `data` mode, as deleting one is: it puts back online
+what a person may have taken offline in an incident. It takes `app.manage`, not the `access.approve` a delete takes,
+since it changes no protection. Under `off` a non-person's resume is refused (403); under `person` the request waits,
+and the person who approves it resumes the environment. While a protected environment is suspended, the same holds for
+`data.start` and `data.recover`, which could open its object again: a non-person may only keep it `closed`. A suspend
+stays open to a key under `off`.
+
 `agent-write` is no action of Control's and has no pending item: the device page is already a person's decision on
 exactly that grant, so `plan` and `person` do not apply, and it takes no approvers. IAM judges it from Control's mirror
 (§4), when the person approves and at every exchange: `refuse` serves `read` grants only, and `off` serves `write`,

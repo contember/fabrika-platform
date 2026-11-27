@@ -194,7 +194,9 @@ their reason. Beside them, an agent's grant and a key an agent asks for, which I
   `apps.update`, suspend and resume, `data.backups.setSchedule`, `data.start` and `data.recover` on a protected
   environment, or on the all-environments layer when any environment is protected, is judged by the environment's mode
   for its category before it runs ([`route.ts`](../../packages/control/src/approval/requests/route.ts)
-  `gateDirectWrite`). `off` applies it with the bearer's own authority; `refuse` answers 403 naming the category;
+  `gateDirectWrite`). `off` applies it with the bearer's own authority, except a resume, which only a person makes
+  (403), and on a suspended environment `data.start` and `data.recover`, but maintenance `closed`; `refuse` answers
+  403 naming the category;
   `person` creates the request exactly as `approvals.requests.create` would and answers 409 of type
   `approval_requested`, whose message names the link and whose data is `{ id, url, state }` and a secret's fingerprint.
   Nothing applies, and no write that did not apply answers 200. An environment that starts protected but does not
