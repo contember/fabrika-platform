@@ -4,6 +4,7 @@
 import { confirmations, describeArgument, UNATTENDED_FLAG } from '@fabrika/installation-init'
 import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
 import { fileURLToPath } from 'node:url'
+import { awsAdmitFirstAdministrator, awsSchemaReconciler, parseAwsAdminArgs, runAwsAdmin } from './admin'
 import { parseAwsInstallArgs, parseAwsUpgradeArgs } from './options'
 import { awsPlatformClients, environmentCredentials, runAwsPlatform } from './run'
 
@@ -15,6 +16,7 @@ Commands:
   fabrika platform guide   --provider=aws
   fabrika platform install --provider=aws [options]
   fabrika platform upgrade --provider=aws [options]
+  fabrika platform admin   --provider=aws --account-id=<12 digits> --region=<region> --email=<address> [--reissue]
 
 \`install\` makes an installation in an AWS account and region that holds none, or finishes one that stopped
 before its services were created; \`upgrade\` moves an existing one to a release, and finishes an install that
@@ -47,11 +49,15 @@ Install only: --auth-methods=<oidc|password|oidc,password> (password unless name
 --oidc-client-id with FABRIKA_IAM_OIDC_CLIENT_SECRET in the environment, and --email-provider,
 --email-from, --email-from-name with the provider's own variables.
 
+\`admin\` comes last, once the hosts point at the platform's balancer: it registers the console and IAM's vocabulary
+with IAM and admits the first administrator (FABRIKA_PLATFORM_ADMIN_EMAIL for --email). IAM's provisioning key is read
+from the installation itself, never given. An enrollment URL it prints is a credential: printed once, stored nowhere.
+
 Credentials: the operator's own, as \`aws configure export-credentials --format env\` prints them
 (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN). They are never logged.
 `
 
-const COMMANDS: readonly InstallationCommand[] = ['install', 'upgrade', 'guide']
+const COMMANDS: readonly InstallationCommand[] = ['install', 'upgrade', 'admin', 'guide']
 
 /** The operator's guide of this release, shipped beside this module. */
 export const readAwsInstallationGuide = (): Promise<string> => Bun.file(fileURLToPath(new URL('./guide.md', import.meta.url))).text()
@@ -104,6 +110,22 @@ export const installationCli: InstallationCli = {
 		}
 		if (command === 'install' || command === 'upgrade') {
 			await runPlatform(command, argv)
+			return
+		}
+		if (command === 'admin') {
+			const options = parseAwsAdminArgs(argv, process.env)
+			const clients = awsPlatformClients(options, environmentCredentials(process.env))
+			await runAwsAdmin({
+				options,
+				sts: clients.sts,
+				secrets: clients.secrets,
+				reconcile: awsSchemaReconciler,
+				admit: awsAdmitFirstAdministrator,
+				signal: new AbortController().signal,
+				log: (line) => console.info(line),
+				// stdout alone, on a line of its own: the enrollment URL.
+				print: (line) => process.stdout.write(`${line}\n`),
+			})
 			return
 		}
 		throw new Error(`the AWS installation does not support \`platform ${command}\`\n\n${USAGE}`)

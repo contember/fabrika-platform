@@ -12,6 +12,8 @@ import type { Artifact } from '@fabrika/provider-zerops/installation/topology'
 
 /** Repo-relative path of the committed schema. */
 export const PLATFORM_CONSOLE_SCHEMA_PATH = 'packages/provider-zerops/src/installation/generated/platform-console-schema.ts'
+/** The same schema in the AWS provider, whose installation registers the console too; no provider imports another's. */
+export const AWS_PLATFORM_CONSOLE_SCHEMA_PATH = 'packages/provider-aws/src/installation/generated/platform-console-schema.ts'
 
 const HEADER = [
 	'// GENERATED FILE — DO NOT EDIT BY HAND.',
@@ -41,7 +43,7 @@ const renderRole = (roleKey: string, role: RoleDef): string[] => [
 ]
 
 /** The committed schema, as a typed module: `typecheck` then proves the artifact still fits `AppSchema`. */
-export const platformConsoleSchemaArtifact = (): Artifact => {
+export const platformConsoleSchemaArtifact = (path: string = PLATFORM_CONSOLE_SCHEMA_PATH): Artifact => {
 	const schema: AppSchema = controlSchema
 	const content = [
 		HEADER,
@@ -63,5 +65,5 @@ export const platformConsoleSchemaArtifact = (): Artifact => {
 		'}',
 		'',
 	].join('\n')
-	return { path: PLATFORM_CONSOLE_SCHEMA_PATH, content }
+	return { path, content }
 }

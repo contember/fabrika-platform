@@ -9,13 +9,14 @@ import { PLATFORM_CONSOLE_APP_SCHEMA } from '@fabrika/provider-zerops/installati
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { platformConsoleSchemaArtifact } from '../console-schema'
+import { AWS_PLATFORM_CONSOLE_SCHEMA_PATH, platformConsoleSchemaArtifact } from '../console-schema'
 import { REPO_ROOT } from '../render'
 
 describe('the committed console schema', () => {
-	test('is what the declaration produces', () => {
-		const artifact = platformConsoleSchemaArtifact()
-		expect(readFileSync(resolve(REPO_ROOT, artifact.path), 'utf8')).toBe(artifact.content)
+	test('is what the declaration produces, in the Zerops provider and the AWS provider alike', () => {
+		for (const artifact of [platformConsoleSchemaArtifact(), platformConsoleSchemaArtifact(AWS_PLATFORM_CONSOLE_SCHEMA_PATH)]) {
+			expect(readFileSync(resolve(REPO_ROOT, artifact.path), 'utf8')).toBe(artifact.content)
+		}
 	})
 
 	test('is `controlSchema`, vocabulary for vocabulary', () => {

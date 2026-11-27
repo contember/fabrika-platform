@@ -19,6 +19,7 @@
 // UNVERIFIED: the whole run against an account; the live check (step 13) is its first.
 
 import type { Confirmations } from '@fabrika/installation-init'
+import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { cloudFormationClient } from '../aws/cloudformation'
 import { codeBuildClient } from '../aws/codebuild'
 import { ecrClient } from '../aws/ecr'
@@ -29,10 +30,13 @@ import { s3BucketOrigin, s3PartWriter } from '../aws/s3'
 import { type SsmPlatformSecrets, ssmPlatformSecrets } from '../aws/ssm'
 import { STS, type StsClient, stsClient } from '../aws/sts'
 import { type AwsClientOptions, type AwsCredentialSource, awsServiceOrigin } from '../aws/transport'
+import { readStackOutputs } from '../stack'
 import { awsSourcesBucket } from './access'
+import { awsProvisioningKey, awsSchemaReconciler, registerAwsPlatformApps } from './admin'
 import { applyAwsPlatform, type AwsPlatformApplied, type AwsPlatformApplyInput } from './apply'
 import { type AwsImagesBuildRun, buildAwsPlatformImages } from './images-build'
-import { awsChoicesFrom, type AwsCommonOptions, type AwsInstallOptions, type AwsUpgradeOptions } from './options'
+import { AWS_NETWORK_STACKS, type AwsNetworkSide } from './network'
+import { AWS_CHOICE_KEYS, awsChoiceFlag, awsChoicesFrom, type AwsCommonOptions, type AwsInstallOptions, type AwsUpgradeOptions } from './options'
 import { writeAwsParameters } from './parameters'
 import { awsPlatformManifest } from './platform-manifest'
 import {
@@ -95,6 +99,8 @@ interface AwsPlatformRunShared {
 	readonly log: (line: string) => void
 	/** The run itself; `applyAwsPlatform` but in a test. */
 	readonly apply?: (input: AwsPlatformApplyInput) => Promise<AwsPlatformApplied>
+	/** IAM's provisioning surface; `@fabrika/auth`'s but in a test. */
+	readonly reconcile?: SchemaReconciler
 }
 
 export type AwsPlatformRunInput =
@@ -107,11 +113,37 @@ async function readRecord(secrets: Pick<SsmPlatformSecrets, 'readSecret'>, signa
 	return text === null ? null : parseAwsInstallationRecord(text)
 }
 
+/**
+ * An upgrade's choices when the record is gone: every one named, none defaulted, and the two ranges the ones the network
+ * stacks hold, so a lost record is written back without a range the installation does not have.
+ */
+async function rebuiltChoices(input: AwsPlatformRunInput & { readonly kind: 'upgrade' }): Promise<AwsInstallationChoices> {
+	const { options, clients, signal } = input
+	const named = input.options.named
+	const missing = AWS_CHOICE_KEYS.filter((key) => key !== 'mcpAuthoring' && named[key] === undefined)
+	if (missing.length > 0) {
+		throw new Error(
+			`aws: the installation in account ${options.accountId}, ${options.region} has no record at ${AWS_INSTALLATION_RECORD}; restore it from the keys' backup, or name every choice to write it back (missing: ${
+				missing.map(awsChoiceFlag).join(', ')
+			})`,
+		)
+	}
+	const choices = awsChoicesFrom(options, named)
+	for (const side of ['apps', 'platform'] satisfies AwsNetworkSide[]) {
+		const outputs = await readStackOutputs(clients.cloudFormation, AWS_NETWORK_STACKS[side], signal)
+		const held = outputs?.['VpcCidr']
+		if (held !== choices.plan.vpcCidrs[side]) {
+			throw new Error(`aws: the ${side} network holds ${held ?? 'no range'}, not the ${choices.plan.vpcCidrs[side]} named; name the range it holds`)
+		}
+	}
+	return choices
+}
+
 /** The choices this run applies, refused where they would change what may not change; the changes it names. */
-function settledChoices(
+async function settledChoices(
 	input: AwsPlatformRunInput,
 	held: AwsInstallationChoices | null,
-): { readonly choices: AwsInstallationChoices; readonly named: readonly string[] } {
+): Promise<{ readonly choices: AwsInstallationChoices; readonly named: readonly string[] }> {
 	const { options } = input
 	if (input.kind === 'install') {
 		if (held === null) return { choices: input.options.choices, named: [] }
@@ -121,9 +153,7 @@ function settledChoices(
 		}
 		return { choices: input.options.choices, named: changes.named }
 	}
-	if (held === null) {
-		throw new Error(`aws: the installation in account ${options.accountId}, ${options.region} has no record at ${AWS_INSTALLATION_RECORD}`)
-	}
+	if (held === null) return { choices: await rebuiltChoices(input), named: [`the installation record, written back from the choices named`] }
 	const choices = awsChoicesFrom(options, input.options.named, held)
 	const changes = awsChoiceChanges(held, choices)
 	if (changes.refused.length > 0) {
@@ -148,7 +178,7 @@ export async function runAwsPlatform(input: AwsPlatformRunInput): Promise<AwsPla
 	}
 	if (kind === 'upgrade' && !exists) throw new Error(`aws: ${where} holds no installation yet; \`platform install\` makes one`)
 	const held = await readRecord(clients.secrets, signal)
-	const { choices, named } = settledChoices(input, held)
+	const { choices, named } = await settledChoices(input, held)
 	const { plan } = choices
 	const bringUp = input.kind === 'install' ? input.options.bringUp : undefined
 	const manifest = awsPlatformManifest(plan, { mcp: choices.mcpAuthoring })
@@ -169,7 +199,7 @@ export async function runAwsPlatform(input: AwsPlatformRunInput): Promise<AwsPla
 	const recordText = encodeAwsInstallationRecord(choices)
 	if (held === null || encodeAwsInstallationRecord(held) !== recordText) await clients.secrets.putSecret(AWS_INSTALLATION_RECORD, recordText, signal)
 	const apply = input.apply ?? applyAwsPlatform
-	return apply({
+	const applied = await apply({
 		plan,
 		cloudFormation: clients.cloudFormation,
 		tasks: clients.tasks,
@@ -202,4 +232,18 @@ export async function runAwsPlatform(input: AwsPlatformRunInput): Promise<AwsPla
 		sleep: input.sleep,
 		log,
 	})
+	if (kind === 'upgrade') {
+		// A release may change the console's vocabulary or IAM's: registered once the services it describes serve.
+		await registerAwsPlatformApps({
+			plan,
+			provisioningKey: await awsProvisioningKey(clients.secrets, signal),
+			reconcile: input.reconcile ?? awsSchemaReconciler,
+			signal,
+			log,
+		})
+	} else {
+		log(`aws: next, point the hosts at ${applied.balancers.platformBalancerDnsName}, then \`platform admin --provider=aws\` registers the console and`)
+		log('aws: admits the first administrator')
+	}
+	return applied
 }
