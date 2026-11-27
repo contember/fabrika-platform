@@ -15,6 +15,8 @@
 // - **The certificates first** (`certificates.ts`): each exactly its host's, in the account and region, and issued. An
 //   install finds or, after a question of its own, requests the ones not named, and stops, printing the DNS records,
 //   until every one is issued; an upgrade requests none and refuses one not issued.
+// - **The account's ECS service-linked role** (`../aws/iam.ts`) is ensured after the confirmation and before any
+//   stack, on install and upgrade alike: ECS places every service's tasks with it, and no stack may own it.
 // - **One confirmation**, before any stack or parameter is written; `--yes` answers it for a run nobody watches.
 // - **The operator's credentials** from the standard variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 //   `AWS_SESSION_TOKEN`), as `aws configure export-credentials --format env` prints them; never logged.
@@ -28,6 +30,7 @@ import { cloudFormationClient } from '../aws/cloudformation'
 import { codeBuildClient } from '../aws/codebuild'
 import { ecrClient } from '../aws/ecr'
 import { ecsPlatformTasks } from '../aws/ecs'
+import { AWS_IAM_ORIGIN, AWS_IAM_SIGNING_REGION, ECS_SERVICE_LINKED_ROLE, type IamServiceLinkedRoles, iamServiceLinkedRoles } from '../aws/iam'
 import { CODEBUILD, ECR, ECS, SSM } from '../aws/json'
 import { CLOUDFORMATION } from '../aws/query'
 import { s3BucketOrigin, s3PartWriter } from '../aws/s3'
@@ -92,6 +95,7 @@ export function environmentCredentials(env: Readonly<Record<string, string | und
 export interface AwsPlatformClients {
 	readonly sts: Pick<StsClient, 'callerAccount'>
 	readonly acm: Pick<AcmPlatformCertificates, 'describeCertificate' | 'findCertificates' | 'requestCertificate'>
+	readonly iam: IamServiceLinkedRoles
 	readonly cloudFormation: AwsPlatformApplyInput['cloudFormation']
 	readonly tasks: AwsPlatformApplyInput['tasks']
 	readonly secrets: SsmPlatformSecrets
@@ -108,6 +112,8 @@ export function awsPlatformClients(where: Pick<AwsCommonOptions, 'accountId' | '
 	return {
 		sts: stsClient(options(STS)),
 		acm: acmPlatformCertificates(options(ACM)),
+		// IAM is global: one endpoint, signed for its own region whatever the installation's.
+		iam: iamServiceLinkedRoles({ origin: AWS_IAM_ORIGIN, region: AWS_IAM_SIGNING_REGION, credentials }),
 		cloudFormation: cloudFormationClient(options(CLOUDFORMATION)),
 		tasks: ecsPlatformTasks(options(ECS)),
 		secrets: ssmPlatformSecrets(options(SSM)),
@@ -311,6 +317,13 @@ export async function runAwsPlatform(input: AwsPlatformRunInput): Promise<AwsPla
 	}
 	const recordText = encodeAwsInstallationRecord(choices)
 	if (held === null || encodeAwsInstallationRecord(held) !== recordText) await clients.secrets.putSecret(AWS_INSTALLATION_RECORD, recordText, signal)
+	// Before any service: ECS places every service's tasks with it, Control's included, and no stack may own it.
+	const role = await clients.iam.ensureEcsServiceLinkedRole(signal)
+	log(
+		role === 'created'
+			? `aws: created the account's ECS service-linked role (${ECS_SERVICE_LINKED_ROLE})`
+			: `aws: the account's ECS service-linked role (${ECS_SERVICE_LINKED_ROLE}) exists`,
+	)
 	const apply = input.apply ?? applyAwsPlatform
 	const applied = await apply({
 		plan,

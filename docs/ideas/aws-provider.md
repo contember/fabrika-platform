@@ -613,7 +613,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        `UpdateAssumeRolePolicy`), so a misused Control could write a bounded role another account may take; step 13
        adds IAM Access Analyzer's external access findings on `role/fabrika/apps/*` and `role/fabrika/namespaces/*` to
        detect one. The ECS service-linked role is ensured by the commands (a stack cannot create one that may already
-       exist).
+       exist; built, `src/aws/iam.ts`: `GetRole`, and `CreateServiceLinkedRole` for `ecs.amazonaws.com` only when it is
+       missing, after the confirmation and before any stack, the role's path checked to be ECS's own).
     4. **The database** (built, `installation/database.ts`): one RDS PostgreSQL 17 instance (`db.t4g.micro`, 20 GiB
        gp3 growing to 100, encrypted, seven days of backups with point-in-time recovery, deletion-protected, a final
        snapshot on delete) that IAM, Control and Operations share, each as a user of its own (`fabrika_iam`,
@@ -750,7 +751,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          client alone), or asks and requests one validated by DNS under a token derived from the host; until every one
          is issued it prints the records and stops, and run again it finds them. A resumed install takes the record's.
          An upgrade requests none, and refuses one no longer issued until another is named.
-       - Still to come: the ECS service-linked role, and the sidecar workflow with its GitHub OIDC role.
+       - **The ECS service-linked role** (built, `src/aws/iam.ts`, called from `run.ts`): ensured on install and
+         upgrade alike, once agreed and before the first stack; read first, made only when missing, one another caller
+         made meanwhile read again.
+       - Still to come: the sidecar workflow with its GitHub OIDC role.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
@@ -947,7 +951,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     certificates: that `DescribeCertificate` answers `SubjectAlternativeNames` and `Type` for every certificate, a
     fresh request included (the client refuses one without them), `ListCertificates`' summary fields (`Type`, `CreatedAt`, the alternative names) as the operator's
     client reads them, that a fresh request names its DNS record within the minute the run reads it again, and that a
-    certificate requested again for a host whose record is already in DNS is issued without touching DNS.
+    certificate requested again for a host whose record is already in DNS is issued without touching DNS. For the ECS
+    service-linked role: IAM's `GetRole` and `CreateServiceLinkedRole` answers and error codes as the client reads them
+    (signed for `us-east-1` at `iam.amazonaws.com`), and that a fresh account's first services stack places its tasks
+    once the run made the role.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 

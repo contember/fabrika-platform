@@ -112,6 +112,12 @@ function clientsOf(account: FakeAccount): AwsPlatformClients {
 				return account.callerAccount
 			},
 		},
+		iam: {
+			ensureEcsServiceLinkedRole: async () => {
+				account.calls.push('ensure the ECS service-linked role')
+				return 'created'
+			},
+		},
 		acm: {
 			describeCertificate: async (arn) => account.certificates.get(arn) ?? null,
 			findCertificates: async (host) =>
@@ -180,6 +186,7 @@ function run(
 		log: (line: string) => lines.push(line),
 		apply: async (input: AwsPlatformApplyInput): Promise<AwsPlatformApplied> => {
 			applied.push(input)
+			account.calls.push('apply')
 			return { ...platformState(), images: { services: `sha256:${'1'.repeat(64)}`, proxy: `sha256:${'2'.repeat(64)}` } }
 		},
 		reconcile: async (call: SchemaReconcileInput) => {
@@ -429,6 +436,27 @@ describe("the AWS installation's commands", () => {
 		expect(declined.applied).toEqual([])
 		expect(account.store.has(AWS_INSTALLATION_RECORD)).toBe(false)
 		expect(declined.lines.at(-1)).toBe('aws: nothing was changed')
+		expect(account.calls).not.toContain('ensure the ECS service-linked role')
+	})
+
+	test("the account's ECS service-linked role is ensured once agreed, before any stack, on install and upgrade alike", async () => {
+		const account = fakeAccount()
+		const install = run('install', INSTALL, account)
+		await install.result
+		expect(account.calls.filter((call) => call === 'ensure the ECS service-linked role')).toHaveLength(1)
+		expect(install.lines).toContain("aws: created the account's ECS service-linked role (AWSServiceRoleForECS)")
+		// After the record, before the stacks.
+		const ensured = account.calls.indexOf('ensure the ECS service-linked role')
+		expect(ensured).toBeGreaterThan(account.calls.indexOf(`put ${AWS_INSTALLATION_RECORD}`))
+		expect(ensured).toBeLessThan(account.calls.indexOf('apply'))
+		account.services = 'CREATE_COMPLETE'
+		await run('upgrade', WHERE, account).result
+		expect(account.calls.filter((call) => call === 'ensure the ECS service-linked role')).toHaveLength(2)
+		// An install that stops for its certificates ensures nothing.
+		const waiting = fakeAccount()
+		waiting.certificates.clear()
+		await run('install', INSTALL.filter((arg) => !arg.includes('-certificate=')), waiting).result
+		expect(waiting.calls).not.toContain('ensure the ECS service-linked role')
 	})
 
 	test("an install's sign-in reaches the parameters; an upgrade's run writes none of it", async () => {
