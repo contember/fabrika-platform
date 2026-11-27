@@ -21,7 +21,8 @@ const VALUES: AwsSidecarValues = {
 describe("the AWS sidecar's files", () => {
 	test('the workflow takes the role by OIDC in the Environment, reads no secret, and upgrades at the pinned commit', async () => {
 		const workflow = await renderAwsSidecarWorkflow(VALUES)
-		expect(workflow).not.toContain('{{')
+		// Every placeholder replaced; GitHub's own `${{ … }}` expressions stay.
+		expect(workflow).not.toMatch(/(?<!\$)\{\{/)
 		expect(workflow).not.toContain('secrets.')
 		expect(workflow).toContain('  id-token: write')
 		expect(workflow).toContain('    environment: production')
