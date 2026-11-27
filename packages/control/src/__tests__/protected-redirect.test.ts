@@ -178,6 +178,16 @@ for (const backend of backends) {
 			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 1, trigger_ref: null })
 		})
 
+		test('a person registers an app whose environment starts protected with a domain', async () => {
+			const f = await open()
+			const registered = await rpcResult(
+				rpcRequest('register', { id: 'app', repoUrl: 'github.com/acme/app', env: 'prod', triggerRef: null, domain: 'app.example.com', ...envelopes }),
+				f.as(manager),
+			)
+			expect(registered.status).toBe(200)
+			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 1, domain: 'app.example.com' })
+		})
+
 		test("a person's own key is a key: with a bearer, the person cannot redirect a protected environment", async () => {
 			const f = await open()
 			await f.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', buildCmd: 'bun run build' })
