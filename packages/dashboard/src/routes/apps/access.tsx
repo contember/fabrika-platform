@@ -15,11 +15,11 @@ export default createPage()
 	.loader(async ({ params }) => {
 		const [frame, session] = await Promise.all([loadAppFrame(params.id), consoleSession()])
 		const peopleApps = session.peopleApps ?? []
-		// One IAM read per environment opened, and only for a caller who administers its people, which IAM records.
+		// One IAM read per environment opened, which IAM records: for an IAM administrator, or one of the environment's people.
 		const shown = frame.envs.some((env) => env.env === params.env) ? appEnvironmentId(params.id, params.env) : null
 		const [selfAdmin, holders] = await Promise.all([
 			readSelfAdmin(params.id, frame.envs.map((env) => env.env), session),
-			shown !== null && peopleApps.includes(shown) ? readRoleHolders(shown) : null,
+			shown !== null && (session.iam !== false || peopleApps.includes(shown)) ? readRoleHolders(shown) : null,
 		])
 		return { ...frame, selfAdmin, peopleApps, holders }
 	})

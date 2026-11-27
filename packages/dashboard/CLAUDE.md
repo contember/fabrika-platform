@@ -84,8 +84,9 @@ brief): its personas and tasks are approved by a person, and a screen is judged 
   environment's state on its own after the page (`lib/environment-state.ts`): a lamp never blocks a row. The Data tab is
   `/apps/:id/data/:env`; a data reader without `app.manage` gets it without the frame, and the old
   `/apps/:id/environments/:env/data` redirects to it. The Access tab is `/apps/:id/access/:env`, and `/apps/:id/access`
-  opens prod, else the first environment. Its roles show how many hold each one (`lib/role-holders.ts`) to a caller who
-  administers that environment's people: one `appPeople.holders` read per environment opened, which IAM records.
+  opens prod, else the first environment. Its roles show how many hold each one (`lib/role-holders.ts`) to an IAM
+  administrator or a caller who administers that environment's people: one `appPeople.holders` read per environment
+  opened, which IAM records.
 - **An application's page offers an IAM administrator "Grant me Admin" per environment** (`lib/self-admin.ts`,
   `components/app-detail/AdminAccessSection.tsx`): an ordinary `grants.create` of the built-in `admin` to the caller,
   no expiry by default (8 hours or 7 days selectable). A held Admin is revoked in place: `grants.delete` of its one

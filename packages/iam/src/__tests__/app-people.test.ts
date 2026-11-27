@@ -3,6 +3,7 @@
 // through IAM's administration API and audited by IAM, with no installation admin involved.
 
 import type { AppSchema } from '@fabrika/auth-core'
+import { IAM_APP_ID } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { AuditWriter } from '../db'
 import { prop } from '../json'
@@ -425,5 +426,28 @@ describe('how many hold each role of the application', () => {
 		expect((await consoleRpc(f, both.id, 'appPeople.holders', { app: APP })).status).toBe(200)
 		const rows = await f.repositories.audit.listAuditEvents({ action: 'iam.admin.access', principalId: both.id, limit: 10 })
 		expect(rows.map((row) => row.resource_id)).toEqual(['/admin/rpc#appPeople.holders'])
+	})
+
+	test('an IAM administrator reads the counts of an application whose people it does not administer, or that declares none', async () => {
+		const f = await people(NOTES_SCHEMA)
+		const iamAdmin = await f.person('iam-admin')
+		await f.repositories.grants.createGrant({ principalId: iamAdmin.id, roleKey: 'admin' })
+		await holding(f, 'staff', 'staff')
+		const read = await consoleRpc(f, iamAdmin.id, 'appPeople.holders', { app: APP })
+		expect([read.status, result(read.body)]).toEqual([200, { app: APP, roles: [{ role: 'staff', holders: 1 }] }])
+		// A user administrator too: its reads are installation-wide (ADR-0058).
+		const userAdmin = await f.person('user-admin')
+		await f.repositories.grants.createGrant({
+			principalId: userAdmin.id,
+			app: IAM_APP_ID,
+			permissions: ['iam.users.manage'],
+			scopeType: 'app',
+			scopeValue: 'other@prod',
+		})
+		expect((await consoleRpc(f, userAdmin.id, 'appPeople.holders', { app: APP })).status).toBe(200)
+		for (const caller of [iamAdmin, userAdmin]) {
+			const rows = await f.repositories.audit.listAuditEvents({ action: 'iam.admin.access', principalId: caller.id, limit: 10 })
+			expect(rows.map((row) => row.resource_id)).toEqual(['/admin/rpc#appPeople.holders'])
+		}
 	})
 })

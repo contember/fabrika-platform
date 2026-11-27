@@ -5,8 +5,8 @@ import type { RoleHolders } from '../../lib/role-holders'
 import { AccessMapView } from '../AccessMap'
 
 /**
- * One environment's published access read by role, and, when the caller administers its people, who holds each role:
- * `holders` counts them, null when IAM gave no count.
+ * One environment's published access read by role: `holders` counts who holds each role (null when IAM gave no count),
+ * and a caller who administers its people (`people`) gets the link to them.
  */
 export function AccessMapSection({ env, people, holders = null }: { env: AppEnvDto; people: boolean; holders?: RoleHolders | null }) {
 	const map = env.accessMap

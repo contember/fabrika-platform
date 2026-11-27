@@ -162,16 +162,19 @@ export async function listAppPeople(ctx: IamAppContext, input: AppPeopleInput): 
 }
 
 /**
- * How many hold each role of the application, in one read. It is recorded once per call: `adminRpcAuth` already wrote
- * the access row of an IAM administrator, so only an application's own administrator is recorded here, after the check.
+ * How many hold each role of the application, in one read, recorded once per call. An IAM administrator already reads
+ * every principal's grants (`principals.get`), so it reads any application's counts, and `adminRpcAuth` recorded the call.
+ * Anyone else is an application's own administrator, held to `appPeople.list`'s check and recorded here after it.
  */
 export async function listRoleHolders(ctx: IamAppContext, input: AppInput): Promise<RoleHoldersDto> {
+	const { membership } = ctx.services.repositories
+	if (ctx.admin !== null && administrationOf(ctx.admin) !== null) {
+		return { app: input.app, roles: await membership.countAppRoleHolders(input.app) }
+	}
 	const admin = await administrator(ctx)
 	const administered = await requireAdministered(admin, input.app)
-	if (administrationOf(admin.resolved) === null) {
-		await recordAdminAccess(admin.services, admin.resolved, admin.requestId, { method: 'POST', route: '/admin/rpc', procedure: 'appPeople.holders' })
-	}
-	return { app: administered.app, roles: await admin.services.repositories.membership.countAppRoleHolders(administered.app) }
+	await recordAdminAccess(admin.services, admin.resolved, admin.requestId, { method: 'POST', route: '/admin/rpc', procedure: 'appPeople.holders' })
+	return { app: administered.app, roles: await membership.countAppRoleHolders(administered.app) }
 }
 
 export async function grantAppRole(ctx: IamAppContext, input: GrantAppRoleRequest): Promise<GrantAppRoleResponse> {
