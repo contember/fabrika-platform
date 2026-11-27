@@ -854,13 +854,13 @@ export function RecoveryEffect({ operation, resolution }: { operation: DataOpera
 	}
 }
 
-/** What "Recover and open" leaves the environment serving; past a rewound migration the object refuses it (ADR-0070 §9). */
+/** What "Recover and open" leaves serving. It deploys nothing, so past a migration it names no version (ADR-0070 §9). */
 function openOutcome(operation: DataOperationDto): string {
 	if (operation.kind !== 'migrate') {
 		return `Afterwards the environment serves requests again, on its data as the stopped ${operation.kind} operation left it.`
 	}
-	if (operation.rewound) return 'Control refuses this open: the migration was rewound, so only "Roll back and open" opens the environment again.'
-	return 'Afterwards the environment serves requests again with the version whose migration failed, on its data as the migration left it.'
+	return 'Afterwards the environment admits every request again, with the version and data the migration left in place. Control refuses the open while '
+		+ 'the data was rewound and no rollback has settled, because the failed version would migrate it again.'
 }
 
 function modeEffect(mode: MaintenanceMode): string {
