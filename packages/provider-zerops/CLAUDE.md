@@ -200,7 +200,7 @@ bun test
   and the step then refuses rather than reset a field. It only raises.
 - **`size-database` sizes each process's database connections before a version is reserved (ADR-0043).** Pure in
   `src/database-budget.ts`: `max_connections` follows the database's minimum RAM step and profile; 7 are never an
-  application role's and 1 is one container's init commands (they open one connection at a time: measured locally 2026-11-21, on Zerops 2026-11-27);
+  application role's and 1 is one container's init commands (they open one connection at a time, measured locally 2026-11-21);
   the rest is shared by twice the deploy service's maximum
   container count (10 when it reads none) and one process per crontab job (`zeropsJobProcesses`, the same list the
   crontab is rendered from), at most 10 each. Below 2 the step raises the application's OWN database through the same

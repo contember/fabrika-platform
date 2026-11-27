@@ -1599,8 +1599,10 @@ So `ZEROPS_START_MIN_RAM_GB` is 0.25 GB: the started container holds about half 
 is vertical autoscaling's, which reacted within its 10–20 s while swap absorbed the growth. `ZEROPS_START_CONNECTIONS`
 is 1: the init commands open one connection at a time (measured locally, 2026-11-21, on 0.9.0-dev.22: `migrate`
 opens the provisioning connection, closes it, then the migration role's; `codegen --verify` one), and every release's
-init commands the platform renders run only those two, so no release in the support window holds more at start. The
-serving process holds its pool and nothing else, which the holders already count.
+init commands the platform renders run only those two (read in the code of v0.4.0 through 0.9: each opens at most one
+connection, one after the other), so no release in the support window holds more at start. The
+serving process holds its pool and nothing else, which the holders already count. Not measured: the CRM example's
+serving process on Zerops, and a scanning application's.
 
 **An existing installation.** Both constants are Control's code, so `fabrika platform upgrade` and an application's
 next deploy apply them; no application update is needed. Neither step ever lowers a minimum RAM:
@@ -1611,7 +1613,7 @@ next deploy apply them; no application update is needed. Neither step ever lower
   instead (observed 2026-11-27: the minimum fell to 0.125 GB and the container range to 1–10), the same reset as the
   OpenAPI's `…Nullable` keys above; check the container range after any change.
 - An application's database keeps the minimum RAM a deploy raised it to. The next deploy sizes each process from
-  that limit with 4 more connections to share (`FABRIKA_APP_DATABASE_CONNECTIONS` rises, never above 10), and raises
+  that limit with 4 more connections to share (`FABRIKA_APP_DATABASE_CONNECTIONS` may rise, never above 10), and raises
   no database a smaller step now fits. fabrika never lowers a database's minimum RAM, and Zerops is not known to
   (UNVERIFIED); to return a database to a smaller step, create a new service and restore a backup into it.
 

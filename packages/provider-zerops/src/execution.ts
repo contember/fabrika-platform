@@ -52,7 +52,7 @@ export const ZEROPS_SCAN_MIN_RAM_GB = 2
 /**
  * The RAM in GB a container of an application with a database starts with. Zerops' 0.125 GB floor is below what the
  * started container holds: the Notes example's held 115 MiB anonymous at rest on Zerops (2026-11-27), its init
- * commands about 40 MiB before it. Load beyond the start is vertical autoscaling's.
+ * commands about 40 MiB before it (measured locally, 2026-11-21). Load beyond the start is vertical autoscaling's.
  */
 export const ZEROPS_START_MIN_RAM_GB = 0.25
 

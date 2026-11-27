@@ -133,7 +133,7 @@ fail a deploy although every check passed.
 **A container starts with the memory it holds once started.** A Zerops runtime starts at 0.125 GB, and vertical
 autoscaling reacts in 10–20 s. When the init commands also ran the isolation tests, their run peaked at 161 MiB of
 anonymous memory for the Notes example within about 1.5 s, and the platform killed it on 2 of 3 first deploys
-(measured 2026-10-15). Today's init commands (`migrate`, `codegen --verify`) peak at about 40 MiB, and the started
+(measured 2026-10-15). Today's init commands (`migrate`, `codegen --verify`) peak at about 40 MiB (measured locally, 2026-11-21), and the started
 Notes container holds about 115 MiB at rest, so 0.25 GB starts it with room; a burst above it is autoscaling's, which
 absorbed the heaviest measured one at that floor (measured 2026-11-27, [platform facts](../reference/zerops-platform.md)).
 Each deploy therefore raises the deploy
@@ -389,6 +389,6 @@ execution document carries the generated `run` and `build`.
 - **pgBouncer on `portTls`.** Rejected: it refuses every role fabrika creates (measured 2026-10-15).
 - **A `CONNECTION LIMIT` on the runtime role.** Rejected: it turns too many connections into failed requests instead
   of preventing them.
-- **Give every application's database 1 GB.** Rejected: one container with up to 2 jobs fits the 0.25 GB floor.
+- **Give every application's database 1 GB.** Rejected: two containers with up to 2 jobs fit the 0.25 GB floor.
 - **Retry the whole `bun test` run on a refused connection.** Rejected: a refusal inside a case reads as a failed
   assertion, not as a refusal; the test kit opens its pools before the first case and waits there instead.
