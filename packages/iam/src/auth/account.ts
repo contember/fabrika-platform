@@ -141,7 +141,7 @@ const REFUSALS: ReadonlySet<Notice> = new Set(['passkey_refused', 'passkey_busy'
  * button. A browser without `<dialog>` posts at once, as the page did before it asked.
  */
 const CONFIRM_SCRIPT =
-	"var confirmDialog=document.getElementById('revoke-dialog');var confirming=null;if(confirmDialog&&typeof confirmDialog.showModal==='function'){document.querySelectorAll('form[data-confirm]').forEach(function(form){form.addEventListener('submit',function(event){event.preventDefault();confirming=form;document.getElementById('revoke-text').textContent=form.dataset.confirm;document.getElementById('revoke-detail').textContent=form.dataset.confirmDetail;confirmDialog.returnValue='';confirmDialog.showModal();});});confirmDialog.addEventListener('close',function(){var form=confirming;confirming=null;if(confirmDialog.returnValue==='revoke'&&form)form.submit();});}"
+	"var confirmDialog=document.getElementById('revoke-dialog');var confirming=null;if(confirmDialog&&typeof confirmDialog.showModal==='function'){document.querySelectorAll('form[data-confirm]').forEach(function(form){form.addEventListener('submit',function(event){event.preventDefault();confirming=form;document.getElementById('revoke-text').textContent=form.dataset.confirm;var detail=document.getElementById('revoke-detail');detail.replaceChildren();form.dataset.confirmDetail.split('\\n').forEach(function(line){var fact=document.createElement('span');var value=document.createElement('span');var at=line.indexOf(': ');fact.className='fact';value.className='value';fact.append(at<0?'':line.slice(0,at+2));value.textContent=at<0?line:line.slice(at+2);fact.append(value);detail.append(fact);});confirmDialog.returnValue='';confirmDialog.showModal();});});confirmDialog.addEventListener('close',function(){var form=confirming;confirming=null;if(confirmDialog.returnValue==='revoke'&&form)form.submit();});}"
 
 function revokeDialog(text: Catalog['pages']['account']): string {
 	return `<dialog id="revoke-dialog" aria-labelledby="revoke-title" aria-describedby="revoke-text"><form method="dialog">
@@ -246,16 +246,22 @@ function cliPresets(tokens: readonly string[]): { preset: ControlCliPreset; app:
  */
 function grantsSection(catalog: Catalog, grants: readonly GrantView[], more: boolean, status: string): string {
 	const text = catalog.pages.account
-	const groups = new Map<string, GrantView[]>()
-	for (const view of grants) groups.set(view.reaches, [...(groups.get(view.reaches) ?? []), view])
+	// Keyed by application id: two applications may share a name.
+	const groups = new Map<string, { reaches: string; views: GrantView[] }>()
+	for (const view of grants) {
+		const key = `${view.grant.app}\n${view.reaches}`
+		const group = groups.get(key) ?? { reaches: view.reaches, views: [] }
+		group.views.push(view)
+		groups.set(key, group)
+	}
 	const table = grants.length === 0
 		? `<p>${escapeHtml(text.none)}</p>`
 		: `<table class="stack"><thead><tr><th class="grow" scope="col">${escapeHtml(text.holder)}</th><th scope="col">${
 			escapeHtml(text.allowed)
-		}</th><th scope="col">${escapeHtml(text.lastActive)}</th><th scope="col">${escapeHtml(text.ends)}</th><th scope="col"><span hidden>${
+		}</th><th scope="col">${escapeHtml(text.lastActive)}</th><th scope="col">${escapeHtml(text.ends)}</th><th scope="col"><span class="sr-only">${
 			escapeHtml(text.revoke)
 		}</span></th></tr></thead>${
-			[...groups].map(([reaches, views]) =>
+			[...groups.values()].map(({ reaches, views }) =>
 				`<tbody><tr><th colspan="5" scope="rowgroup">${escapeHtml(reaches)} <span class="count">${views.length}</span></th></tr>${
 					views.map((view) => grantRow(catalog, view)).join('')
 				}</tbody>`
@@ -318,7 +324,9 @@ function passkeysSection(held: readonly PasskeyRow[], catalog: Catalog, status: 
 		? `<p>${escapeHtml(text.none)}</p>`
 		: `<table class="stack"><thead><tr><th class="grow" scope="col">${escapeHtml(text.label)}</th><th scope="col">${
 			escapeHtml(text.added)
-		}</th><th scope="col">${escapeHtml(text.lastUsed)}</th><th scope="col"><span hidden>${escapeHtml(text.remove)}</span></th></tr></thead><tbody>${
+		}</th><th scope="col">${escapeHtml(text.lastUsed)}</th><th scope="col"><span class="sr-only">${
+			escapeHtml(text.remove)
+		}</span></th></tr></thead><tbody>${
 			held.map((passkey) =>
 				`<tr><td><strong>${escapeHtml(passkey.label)}</strong></td><td class="when" data-label="${escapeHtml(text.added)}">${
 					utc(passkey.created_at)

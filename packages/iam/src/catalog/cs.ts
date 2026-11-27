@@ -170,7 +170,7 @@ export const cs: Catalog = {
 			holder: 'Agent nebo zařízení',
 			lastActive: 'Naposledy aktivní',
 			notRenewed: 'Od schválení ne',
-			lastActiveText: 'Naposledy aktivní je chvíle, kdy si naposledy obnovilo přístup; během používání ho obnovuje každých pět minut.',
+			lastActiveText: 'Naposledy aktivní je chvíle posledního obnovení přístupu; během používání se obnovuje každých pět minut.',
 			details: 'Podrobnosti',
 			endpoints: 'Adresy, které může volat',
 			cliPreset: (preset, app) => {
@@ -188,7 +188,7 @@ export const cs: Catalog = {
 			},
 			revokeLabel: (holder, reaches, allowed) => `Odvolat ${holder} – ${reaches}, povoleno ${allowed}`,
 			revokeTitle: 'Odvolat tento přístup?',
-			revokeConfirm: (holder, reaches) => `${holder}: přístup k ${reaches} skončí do pěti minut. Co už změnilo, zůstává.`,
+			revokeConfirm: (holder, reaches) => `${holder}: přístup k ${reaches} skončí do pěti minut. Co už bylo změněno, zůstává.`,
 			cancel: 'Zrušit',
 		},
 		passkeys: {

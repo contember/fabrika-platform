@@ -353,6 +353,25 @@ for (const engine of engines) {
 			expect(html).toContain('<main class="workspace">')
 		})
 
+		test("escapes an agent's own name in the confirmation and the button's name", async () => {
+			const a = await accountFixture(engine.repositories())
+			const id = await grant(a.repositories, {
+				principal_id: a.person,
+				session_id: a.f.sessionId,
+				client_id: AGENT_CLIENT_ID,
+				app: `notes-${a.tag}@prod`,
+				resource: a.agentOrigin,
+				scopes: '["read"]',
+				agent_label: '"><b>x</b>',
+			})
+			const html = await (await a.get()).text()
+			const start = html.lastIndexOf('<tr>', html.indexOf(`value="${id}"`))
+			const row = html.slice(start, html.indexOf('</tr>', start))
+			expect(row).toContain('data-confirm="Agent “&quot;&gt;&lt;b&gt;x&lt;/b&gt;”: access to')
+			expect(row).toContain('aria-label="Revoke Agent “&quot;&gt;&lt;b&gt;x&lt;/b&gt;” at')
+			expect(row).not.toContain('<b>x</b>')
+		})
+
 		test("the person's own language wins over the browser's", async () => {
 			const a = await accountFixture(engine.repositories())
 			await a.repositories.principals.setLocale(a.person, 'cs')

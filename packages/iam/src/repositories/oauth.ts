@@ -156,6 +156,7 @@ export class OAuthRepository {
 	 */
 	async lastRenewed(grantIds: readonly string[]): Promise<Map<string, number>> {
 		if (grantIds.length === 0) return new Map()
+		// One bind per id: D1 allows 100, and the account page passes at most ACCOUNT_GRANTS_SHOWN (50).
 		const { results } = await this.db.prepare(`SELECT grant_id, MAX(used_at) AS used_at FROM oauth_refresh_tokens
 			WHERE grant_id IN (${grantIds.map(() => '?').join(', ')}) AND used_at IS NOT NULL GROUP BY grant_id`)
 			.bind(...grantIds).all<{ grant_id: string; used_at: number }>()

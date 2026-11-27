@@ -78,7 +78,7 @@ browserTest(
 		await step('the account page lists the grant, and revoking it removes it', {
 			intent: "the person's own page shows what acts as them and ends it",
 			manual:
-				'Open /auth/account on IAM. Under "Connected agents and devices", choose "Revoke" in the row of "The fabrika command-line client", then "Revoke" in the dialog that asks.',
+				'Open /auth/account on IAM. Under "Connected agents and devices", choose "Revoke" in the row of "The fabrika command-line client", then "Cancel" in the dialog that asks; the row stays. Choose "Revoke" again, then "Revoke" in the dialog.',
 		}, async () => {
 			await getPage().goto(`${IAM_URL}/auth/account`)
 			await expectOnIam('/auth/account')
@@ -88,7 +88,13 @@ browserTest(
 			await expect(items.first()).toBeVisible()
 			listedBefore = await items.count()
 			// The row's button names what it revokes; the dialog asks before anything is posted.
-			await items.first().getByRole('button', { name: /^Revoke The fabrika command-line client at / }).click()
+			const revoke = items.first().getByRole('button', { name: /^Revoke The fabrika command-line client at / })
+			// Cancel posts nothing: the row stays.
+			await revoke.click()
+			await getPage().getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click()
+			await expect(getPage().getByRole('dialog')).toBeHidden()
+			await expect(items).toHaveCount(listedBefore)
+			await revoke.click()
 			await getPage().getByRole('dialog').getByRole('button', { name: 'Revoke', exact: true }).click()
 			await expect(getPage().getByRole('status')).toHaveText('Access revoked. It stops within five minutes.')
 			await expect(items).toHaveCount(listedBefore - 1)

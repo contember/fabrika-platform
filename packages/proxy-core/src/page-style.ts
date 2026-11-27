@@ -665,6 +665,19 @@ main.workspace {
 	font-weight: 400;
 }
 
+/* Read by a screen reader, not shown: a column header whose cells are self-explaining buttons. */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
 /* An outcome at the top of the section it concerns, on a wash that stands out of the tile. */
 .card-body > .notice {
 	max-width: none;
@@ -941,12 +954,19 @@ dialog p {
 	font-size: 0.875rem;
 }
 
-/* One fact per line, a date never broken at its hyphens. */
+/* One fact per line; a value (a date) never breaks inside. */
 dialog .dialog-detail {
 	margin-top: 0.75rem;
 	color: var(--ink-3);
 	font-size: 0.8125rem;
-	white-space: pre;
+}
+
+dialog .dialog-detail .fact {
+	display: block;
+}
+
+dialog .dialog-detail .value {
+	white-space: nowrap;
 }
 
 .dialog-actions {
