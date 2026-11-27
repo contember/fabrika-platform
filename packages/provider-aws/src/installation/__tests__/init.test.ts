@@ -3,7 +3,13 @@
 // ids, the Environment written with four variables and no secret, a required reviewer asked for with its command, and
 // the first run started; each step stopped by a declined question; and the arguments refused by name.
 
-import type { Confirmations, EnvironmentConfig } from '@fabrika/installation-init'
+import {
+	type Confirmations,
+	type EnvironmentConfig,
+	INITIAL_SCAFFOLD_COMMIT_MESSAGE,
+	type ProtectionOutcome,
+	REFRESH_SCAFFOLD_COMMIT_MESSAGE,
+} from '@fabrika/installation-init'
 import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -40,16 +46,35 @@ interface World {
 	readonly stacks: Map<string, { body: string; status: StackStatus }>
 	readonly store: Map<string, string>
 	caller: string
-	environments: EnvironmentConfig[]
+	environments: Omit<EnvironmentConfig, 'onProtection'>[]
 	pin: string
+	branch: ProtectionOutcome
+	policy: ProtectionOutcome
 }
+
+const APPLIED: ProtectionOutcome = { applied: true, command: 'gh api …' }
+const PLAN_LIMITED = (command: string): ProtectionOutcome => ({
+	applied: false,
+	// The words installation-init's `unavailableReason` gives a plan's refusal.
+	reason: 'HTTP 403: not offered on this plan for a private repository',
+	command,
+})
 
 function world(): World {
 	const stacks = new Map<string, { body: string; status: StackStatus }>([
 		[AWS_SERVICES_STACK, { body: '', status: 'CREATE_COMPLETE' }],
 		[AWS_CEILINGS_STACK, { body: '', status: 'CREATE_COMPLETE' }],
 	])
-	return { calls: [], stacks, store: new Map([[AWS_INSTALLATION_RECORD, RECORD]]), caller: A, environments: [], pin: 'v0.9.0' }
+	return {
+		calls: [],
+		stacks,
+		store: new Map([[AWS_INSTALLATION_RECORD, RECORD]]),
+		caller: A,
+		environments: [],
+		pin: 'v0.9.0',
+		branch: APPLIED,
+		policy: APPLIED,
+	}
 }
 
 async function init(w: World, dir: string, answers: readonly boolean[] = [], argv: readonly string[] = ARGV) {
@@ -61,15 +86,16 @@ async function init(w: World, dir: string, answers: readonly boolean[] = [], arg
 			w.calls.push(`scaffold ${input.repo}`)
 			await input.materialize(dir)
 			if (w.pin !== 'v0.9.0') await Bun.write(join(dir, 'fabrika.ref'), `${w.pin}\n`)
-			return { dir, created: true }
+			return { dir, created: true, branchProtection: w.branch }
 		},
 		repositoryIds: async () => ({ ownerId: '7654321', repositoryId: '123456789' }),
 		setSubjectClaims: async (repo, claims) => {
 			w.calls.push(`subject ${repo} ${claims.join(',')}`)
 		},
-		configureEnvironment: async (config) => {
+		configureEnvironment: async ({ onProtection, ...config }) => {
 			w.calls.push(`environment ${config.environment}`)
 			w.environments.push(config)
+			onProtection?.(w.policy)
 		},
 		triggerWorkflow: async (repo) => {
 			w.calls.push(`trigger ${repo}`)
@@ -193,6 +219,29 @@ describe('platform init on AWS', () => {
 			expect((await init(declinedRun, dir, [true, true, true, false])).result).toMatchObject({ triggered: false })
 			expect(declinedRun.calls).not.toContain('trigger acme/fabrika-aws')
 		})
+	})
+
+	test('what of the protection is missing stands beside the reviewer, with the plan that offers no reviewer named', async () => {
+		await inTemp(async (dir) => {
+			const protectedWorld = world()
+			const reviewer = (actions: { title: string; lines: readonly string[] }[]) =>
+				actions.find((entry) => entry.title.includes('approve every upgrade'))?.lines ?? []
+			const full = reviewer((await init(protectedWorld, dir)).actions)
+			expect(full.some((line) => line.includes('NOT'))).toBe(false)
+			const free = world()
+			free.branch = PLAN_LIMITED('protect main')
+			free.policy = PLAN_LIMITED('restrict the Environment')
+			const limited = reviewer((await init(free, dir)).actions)
+			expect(limited).toContain('protect main')
+			expect(limited).toContain('restrict the Environment')
+			expect(limited.some((line) => line.includes('nor a required reviewer'))).toBe(true)
+		})
+	})
+
+	test("init's own push starts no run: the scaffold's commits skip the workflow its push path would fire", () => {
+		// The workflow runs on a push to main touching its own file, which every scaffold that creates or changes it is.
+		expect(INITIAL_SCAFFOLD_COMMIT_MESSAGE).toContain('[skip ci]')
+		expect(REFRESH_SCAFFOLD_COMMIT_MESSAGE).toContain('[skip ci]')
 	})
 
 	test("a sidecar pinning another tag keeps the operator's pin and starts no run", async () => {

@@ -785,9 +785,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          `fabrika.ref`), customizes the repository's OIDC subject to its owner's and its own ids and the job's context,
          applies the deployer with those ids, and writes the GitHub Environment (named after the installation's
          environment) with four variables and no secret. It asks for a required reviewer on that Environment, with the
-         command, and states the remaining reach. The workflow installs the pinned release before it takes the role
-         (the credentials action pinned by commit, `allowed-account-ids` set) and runs `platform upgrade --yes` at the
-         tag's commit.
+         command, and states the remaining reach. Every step of the workflow's job can request the OIDC token, so
+         every action is pinned by commit, a value from the repository reaches a script only through `env:`, and the
+         install runs no dependency's script (`--ignore-scripts`). It takes the role (`allowed-account-ids` set) and
+         runs `platform upgrade --yes` at the tag's commit.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:

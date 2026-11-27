@@ -32,35 +32,38 @@ concurrency:
   group: platform-upgrade
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  # The OIDC token the deployer role is taken with; nothing else.
-  id-token: write
+# Nothing at the workflow's level: the one job below holds what it needs, and no other job inherits it.
+permissions: {}
 
+# EVERY STEP OF THE JOB CAN TAKE THE ROLE: `id-token: write` gives each one, and each action it runs, the
+# means to request the OIDC token AWS trades for the role. So every action is pinned by commit, and no
+# value read from the repository reaches a shell other than through an environment variable.
 jobs:
   upgrade:
     runs-on: ubuntu-latest
     # An upgrade that builds both images and rolls every service; the role's session lasts three hours.
     timeout-minutes: 170
     environment: {{ENVIRONMENT}}
+    permissions:
+      contents: read
+      # The OIDC token the deployer role is taken with; nothing else.
+      id-token: write
     steps:
       - name: Checkout this repository (the pinned ref and this workflow)
-        uses: actions/checkout@v5
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
 
       - name: Resolve the pinned fabrika tag
         id: ref
-        # A published TAG, never a branch, selects the release.
+        # A published TAG, never a branch, selects the release: the shape `init` checks (installation-init's
+        # `assertPinnedTag`), so nothing a shell would read as more than a name.
         run: |
           ref="$(tr -d '[:space:]' < fabrika.ref)"
-          case "$ref" in
-            v[0-9]*) ;;
-            *)
-              echo "fabrika.ref must pin a published tag such as v0.1.0, not '$ref'." >&2
-              exit 1
-              ;;
-          esac
+          if ! printf '%s' "$ref" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "fabrika.ref must pin a published tag such as v0.1.0." >&2
+            exit 1
+          fi
           echo "fabrika=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Checkout contember/fabrika-platform@${{ steps.ref.outputs.fabrika }}
@@ -89,20 +92,23 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ steps.bun.outputs.version }}
 
-      # Installed before the role is taken: no dependency's script ever runs with AWS credentials.
+      # No dependency's script runs at all: the tag's lockfile, frozen, and `--ignore-scripts` (fabrika needs
+      # none). Running before the role is taken does not keep a script from requesting the token itself.
       - name: Install fabrika
         working-directory: fabrika-platform
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Put the fabrika workspace bin on PATH
         working-directory: fabrika-platform
+        env:
+          PINNED_REF: ${{ steps.ref.outputs.fabrika }}
         run: |
           if [ ! -x node_modules/.bin/fabrika ]; then
-            echo "fabrika-platform@${{ steps.ref.outputs.fabrika }} installed no \`fabrika\` binary." >&2
+            echo "fabrika-platform@$PINNED_REF installed no \`fabrika\` binary." >&2
             exit 1
           fi
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
@@ -134,11 +140,15 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          PINNED_REF: ${{ steps.ref.outputs.fabrika || '(unresolved)' }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit || '(unresolved)' }}
+          UPGRADE_OUTCOME: ${{ steps.platform.outcome || 'not run' }}
         run: |
           {
             echo "### platform upgrade (aws)"
             echo ""
-            echo "- fabrika tag: \`${{ steps.ref.outputs.fabrika || '(unresolved)' }}\`"
-            echo "- source commit: \`${{ steps.source.outputs.commit || '(unresolved)' }}\`"
-            echo "- platform upgrade: \`${{ steps.platform.outcome || 'not run' }}\`"
+            echo "- fabrika tag: \`$PINNED_REF\`"
+            echo "- source commit: \`$SOURCE_COMMIT\`"
+            echo "- platform upgrade: \`$UPGRADE_OUTCOME\`"
           } >> "$GITHUB_STEP_SUMMARY"

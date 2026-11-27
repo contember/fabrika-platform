@@ -23,13 +23,16 @@
 import {
 	action,
 	assertPinnedTag,
+	branchProtectionCommand,
 	capture,
 	CHECKOUT_FLAG,
 	type CommandEnv,
 	type Confirmations,
 	describeArgument,
 	type EnvironmentConfig,
+	environmentPolicyCommand,
 	environmentReviewerCommand,
+	type ProtectionOutcome,
 	readFlag,
 	requiredSetting,
 	run,
@@ -167,6 +170,8 @@ export async function runAwsInit(input: AwsInitRun): Promise<AwsInitResult | nul
 		return null
 	}
 	const roleArn = awsDeployerRoleArn(options.accountId)
+	// The scaffold's commits carry `[skip ci]` (installation-init's `scaffold.ts`), so this push, which touches the
+	// workflow's own path, starts no run: only the operator's answer below does.
 	const scaffolded = await input.github.scaffold({
 		repo: options.repo,
 		dir: options.checkoutDir,
@@ -214,11 +219,21 @@ export async function runAwsInit(input: AwsInitRun): Promise<AwsInitResult | nul
 		log('aws: the Environment holds nothing yet, so the workflow cannot run. Run init again when ready')
 		return null
 	}
-	await input.github.configureEnvironment({ repo: options.repo, environment, secrets: {}, vars })
+	let policy: ProtectionOutcome | undefined
+	await input.github.configureEnvironment({
+		repo: options.repo,
+		environment,
+		secrets: {},
+		vars,
+		onProtection: (outcome) => {
+			policy = outcome
+		},
+	})
 	input.action('OPERATOR ACTION: require a person to approve every upgrade', [
 		`The workflow's role is an administrator of the account inside the installation's ceiling. Add yourself as a required reviewer of the`,
 		`${environment} Environment, so no run takes the role before a person approves it:`,
 		environmentReviewerCommand(options.repo, environment),
+		...awsProtectionLines(options.repo, environment, scaffolded.branchProtection, policy),
 		'Whoever can run the workflow there can still do what the platform stacks can; a role it makes may trust someone outside the',
 		'account, who then gets the ceiling and no more. Keep this account for the installation alone.',
 	])
@@ -233,6 +248,39 @@ export async function runAwsInit(input: AwsInitRun): Promise<AwsInitResult | nul
 	}
 	log('aws: from now on, bump fabrika.ref to a newer tag and push to upgrade; a release that changes the ceilings asks for your own run once')
 	return { roleArn, environment, triggered }
+}
+
+/**
+ * What of the sidecar's protection is missing, for the block beside the reviewer's command: `main`'s rule (without it the
+ * Environment's branch policy admits every branch), the Environment's branch policy, and, where GitHub's plan refused
+ * a rule, that the same plan offers no required reviewer either. Nothing when both are in place.
+ */
+export function awsProtectionLines(
+	repo: string,
+	environment: string,
+	branch: ProtectionOutcome | undefined,
+	policy: ProtectionOutcome | undefined,
+): string[] {
+	const lines: string[] = []
+	if (branch?.applied !== true) {
+		lines.push(
+			`main is NOT protected (${branch?.reason ?? 'not checked'}); until it is, the Environment's branch policy admits every branch:`,
+			branch?.command ?? branchProtectionCommand(repo),
+		)
+	}
+	if (policy?.applied !== true) {
+		lines.push(
+			`The ${environment} Environment is NOT restricted to main (${policy?.reason ?? 'not set'}):`,
+			policy?.command ?? environmentPolicyCommand(repo, environment),
+		)
+	}
+	if ([branch, policy].some((outcome) => outcome?.reason?.includes('not offered on this plan') === true)) {
+		lines.push(
+			"GitHub's plan does not offer these rules on a private repository, nor a required reviewer: there, whoever can push to main or",
+			'start the workflow takes the role unapproved. Move the sidecar to a plan that offers them before relying on it.',
+		)
+	}
+	return lines
 }
 
 const ANCHOR = process.cwd()
