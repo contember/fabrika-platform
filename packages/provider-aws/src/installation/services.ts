@@ -40,6 +40,7 @@
 // UNVERIFIED: the resources' properties follow the CloudFormation and ECS references, and that the services image's
 // Alpine base carries BusyBox's `wget` for the health checks; none was checked against an account.
 
+import { staticEnvironment } from '@fabrika/installation-init'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { TARGET_GROUP_ARN } from '../aws/ecs'
 import type { AwsStack } from '../stack'
@@ -48,6 +49,7 @@ import type { AwsBalancersOutputs } from './balancers'
 import { AWS_DATABASE_ADMIN_PASSWORD_PARAMETER, AWS_DATABASE_SERVICES, type AwsDatabaseOutputs, awsDatabasePasswordParameter } from './database'
 import { AWS_DATABASE_SETUP_VARIABLES, awsDatabaseSetupPasswordVariable } from './database-setup-main'
 import { AWS_PLATFORM_PROXY_REPOSITORY, AWS_SERVICES_REPOSITORY } from './images'
+import { awsInstallationModel, awsJobInterval } from './model'
 import type { AwsNetworkOutputs } from './network'
 import {
 	AWS_ACCOUNT_ID_FORM,
@@ -89,40 +91,29 @@ export const AWS_PLATFORM_TASK_SIZES: Readonly<Record<AwsPlatformTask, { readonl
 	setup: { cpu: 256, memory: 512 },
 }
 
-/** Each service's commands in the services image (`platform.Dockerfile`, `WORKDIR /app`), and its scheduled job. */
-const SERVICE_COMMANDS: Readonly<
-	Record<AwsPlatformServiceTask, { readonly migrate: string; readonly server: string; readonly job: string; readonly everySeconds: number }>
-> = {
-	iam: {
-		migrate: 'packages/iam/src/node/migrate.ts',
-		server: 'packages/iam/src/node/server.ts',
-		job: 'packages/iam/src/node/prune.ts',
-		everySeconds: 86_400,
-	},
-	control: {
-		migrate: 'packages/control/src/aws/migrate.ts',
-		server: 'packages/control/src/aws/server.ts',
-		job: 'packages/control/src/aws/cron.ts',
-		everySeconds: 300,
-	},
-	operations: {
-		migrate: 'packages/operations/src/node/migrate.ts',
-		server: 'packages/operations/src/node/server.ts',
-		job: 'packages/operations/src/node/cron.ts',
-		everySeconds: 60,
-	},
+/**
+ * Each service's commands in the services image (`platform.Dockerfile`, `WORKDIR /app`), its scheduled job and the
+ * job's interval: the installation model's (ADR-0092), with Control's AWS composition root.
+ */
+function serviceCommands(
+	task: AwsPlatformServiceTask,
+): { readonly migrate: string; readonly server: string; readonly job: string; readonly everySeconds: number } {
+	const { entry, jobs } = awsInstallationModel.services[task]
+	const [job, ...more] = jobs
+	if (entry?.migrate === undefined || job === undefined || more.length > 0) {
+		throw new Error(`aws: the ${task} service's task runs a migration, a server and one job beside it, which the model does not give`)
+	}
+	return { migrate: entry.migrate, server: entry.server, job: job.command, everySeconds: awsJobInterval(job.schedule) }
 }
 
-/** The plain variables the template itself sets: fixed addresses and paths, never an installation's value. */
+/**
+ * The plain variables the template itself sets: fixed addresses and paths, never an installation's value. The
+ * installation model's `fixed` and `address` variables; a Service Connect name is the task's, as the model's host is.
+ */
 const FIXED_VARIABLES: Readonly<Record<AwsPlatformTask, Readonly<Record<string, string>>>> = {
-	iam: { PORT: String(AWS_PLATFORM_SERVICE_PORT), FABRIKA_CONTROL_URL: `http://control:${AWS_PLATFORM_SERVICE_PORT}` },
-	control: {
-		PORT: String(AWS_PLATFORM_SERVICE_PORT),
-		FABRIKA_CONTROL_ASSETS_DIR: 'packages/dashboard/dist',
-		FABRIKA_IAM_RPC_URL: `http://iam:${AWS_PLATFORM_SERVICE_PORT}`,
-		FABRIKA_OPERATIONS_URL: `http://operations:${AWS_PLATFORM_SERVICE_PORT}`,
-	},
-	operations: { PORT: String(AWS_PLATFORM_SERVICE_PORT), FABRIKA_IAM_RPC_URL: `http://iam:${AWS_PLATFORM_SERVICE_PORT}` },
+	iam: Object.fromEntries(staticEnvironment(awsInstallationModel, 'iam')),
+	control: Object.fromEntries(staticEnvironment(awsInstallationModel, 'control')),
+	operations: Object.fromEntries(staticEnvironment(awsInstallationModel, 'operations')),
 	proxy: {},
 	setup: {},
 }
@@ -308,7 +299,8 @@ export function awsServicesStack(input: AwsServicesInput): AwsStack {
 
 	const resources: Record<string, JsonValue> = {}
 	for (const task of AWS_PLATFORM_SERVICE_TASKS) {
-		const commands = SERVICE_COMMANDS[task]
+		const commands = serviceCommands(task)
+		const { health } = awsInstallationModel.services[task]
 		const logical = `${task[0]?.toUpperCase() ?? ''}${task.slice(1)}`
 		const shared = {
 			Image: servicesImage,
@@ -324,7 +316,7 @@ export function awsServicesStack(input: AwsServicesInput): AwsStack {
 				Command: ['sh', '-c', `bun ${commands.migrate} && exec bun ${commands.server}`],
 				PortMappings: [{ Name: PORT_NAME, ContainerPort: AWS_PLATFORM_SERVICE_PORT, Protocol: 'tcp', AppProtocol: 'http' }],
 				HealthCheck: {
-					Command: ['CMD-SHELL', `wget -q -O /dev/null http://127.0.0.1:${AWS_PLATFORM_SERVICE_PORT}/healthz || exit 1`],
+					Command: ['CMD-SHELL', `wget -q -O /dev/null http://127.0.0.1:${health.port}${health.path} || exit 1`],
 					Interval: 15,
 					Timeout: 5,
 					Retries: 3,

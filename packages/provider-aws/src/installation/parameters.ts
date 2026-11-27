@@ -5,7 +5,7 @@
 //
 // Three kinds of value, each written its own way:
 //
-// - **Generated** (`INSTALLATION_SECRET_VARIABLES`: the signing keys, the RPC, proxy, provisioning and sync keys, the
+// - **Generated** (the installation model's `generated` variables, `model.ts`'s `AWS_GENERATED`: the signing keys, the RPC, proxy, provisioning and sync keys, the
 //   vault and data keys, and Control's copy of the proxy key for the namespace proxies): written once and never
 //   replaced. A secret several services read is one value in each reader's path, so a run that stopped part way takes
 //   the value an earlier run wrote from any reader that holds it, and refuses to go on when two readers hold different
@@ -30,7 +30,6 @@ import {
 	deployedServiceEnvironment,
 	type DeployedServiceInput,
 	generateInstallationSecrets,
-	INSTALLATION_SECRET_VARIABLES,
 	type InstallationAuthentication,
 	type InstallationEmail,
 	type InstallationSecrets,
@@ -43,6 +42,7 @@ import { awsAccessEnvironment, awsRunLogsBucket } from './access'
 import { awsPlatformAccessInput, type AwsPlatformState } from './apply'
 import { awsBalancersEnvironment } from './balancers'
 import { AWS_DATABASE_SERVICES, awsDatabasePasswordParameter, awsDatabaseUrl } from './database'
+import { AWS_GENERATED, AWS_UPGRADE_MAY_ADD, isAwsDataVariable } from './model'
 import { awsNetworkEnvironment, awsNetworkLayout } from './network'
 import { AWS_PLATFORM_SERVICE_PORT, awsOperationsBucket, awsPlatformParameters } from './runtime'
 import type { AwsServicesInput } from './services'
@@ -53,30 +53,6 @@ const SCHEME = 'https'
 const IAM_UPSTREAM = `iam:${AWS_PLATFORM_SERVICE_PORT}`
 /** The four tasks whose parameters this writes. */
 const TASKS: readonly PlatformService[] = ['iam', 'control', 'operations', 'proxy']
-
-/** Each generated variable's value in `InstallationSecrets`. A name missing here is refused, never left unwritten. */
-const GENERATED: Readonly<Record<string, keyof InstallationSecrets>> = {
-	FABRIKA_IAM_SIGNING_KEYS: 'signingKeys',
-	FABRIKA_IAM_RPC_KEY: 'rpcKey',
-	FABRIKA_IAM_PROXY_KEY: 'proxyKey',
-	FABRIKA_IAM_KEY: 'proxyKey',
-	FABRIKA_AWS_PROXY_IAM_KEY: 'proxyKey',
-	FABRIKA_IAM_PROVISIONING_KEY: 'provisioningKey',
-	FABRIKA_IAM_DATA_KEY: 'dataKey',
-	OPERATIONS_SYNC_KEY: 'operationsSyncKey',
-	FABRIKA_CONTROL_VAULT_KEY: 'vaultKey',
-}
-/** The generated variables each task reads: `installation-init`'s, and Control's copy of the proxy key. */
-const GENERATED_READERS: Readonly<Record<PlatformService, readonly string[]>> = {
-	...INSTALLATION_SECRET_VARIABLES,
-	control: [...INSTALLATION_SECRET_VARIABLES.control, 'FABRIKA_AWS_PROXY_IAM_KEY'],
-}
-
-/**
- * The generated keys an upgrade may make when no reader holds one, as Zerops' deploy makes IAM's data key: a key a
- * release added after the installation was made. Every other key is the install's alone, and its absence a loss.
- */
-const UPGRADE_MAY_ADD: ReadonlySet<keyof InstallationSecrets> = new Set(['dataKey'])
 
 /** What the run settles before it writes: where the stacks are, and the release the installation runs. */
 export interface AwsParametersInput {
@@ -105,9 +81,7 @@ async function settledSecrets(input: AwsParametersInput): Promise<InstallationSe
 	const fresh = (input.newSecrets ?? generateInstallationSecrets)()
 	const readers = new Map<keyof InstallationSecrets, string[]>()
 	for (const task of TASKS) {
-		for (const name of GENERATED_READERS[task]) {
-			const field = GENERATED[name]
-			if (field === undefined) throw new Error(`aws: the ${task} task's generated ${name} has no value of its own here`)
+		for (const [name, field] of AWS_GENERATED[task]) {
 			readers.set(field, [...(readers.get(field) ?? []), parameterOf(task, name)])
 		}
 	}
@@ -122,7 +96,7 @@ async function settledSecrets(input: AwsParametersInput): Promise<InstallationSe
 			throw new Error(`aws: the platform's ${field} differs between ${parameters.join(', ')}; an operator must make them one before a run writes more`)
 		}
 		// An upgrade makes no key the install made: one no reader holds was lost, and a new one would hide that.
-		if (held.size === 0 && input.bringUp === undefined && !UPGRADE_MAY_ADD.has(field)) {
+		if (held.size === 0 && input.bringUp === undefined && !AWS_UPGRADE_MAY_ADD.has(field)) {
 			throw new Error(
 				`aws: the platform's ${field} is in none of ${parameters.join(', ')}; an upgrade never makes a new one, so restore it from where it was kept`,
 			)
@@ -195,26 +169,19 @@ export async function desiredAwsParameters(input: AwsParametersInput): Promise<D
 		]),
 		proxy: new Map(),
 	}
-	// What a deploy derives, or the AWS provider does: rewritten whenever it differs. Everything else of the
-	// installation's environment is the bring-up's own, written once.
-	const derivedNames = new Set([
-		'FABRIKA_IAM_DATABASE_URL',
-		'FABRIKA_CONTROL_DATABASE_URL',
-		'FABRIKA_OPERATIONS_DATABASE_URL',
-		'FABRIKA_CONTROL_RUN_LOGS_BUCKET',
-		'FABRIKA_OPERATIONS_BLOB_BUCKET',
-	])
+	// What a deploy derives, a store's coordinate (the model's `data`), or the AWS provider's own: rewritten whenever it
+	// differs. Everything else of the installation's environment is the bring-up's own, written once.
 	const once = new Map<PlatformService, Map<string, string>>()
 	const derived = new Map<PlatformService, Map<string, string>>()
 	for (const task of TASKS) {
 		const taskOnce = new Map<string, string>()
 		const taskDerived = new Map<string, string>()
-		const generated = new Set(GENERATED_READERS[task])
+		const generated = AWS_GENERATED[task]
 		for (const [name, value] of [...installation[task], ...aws[task]]) {
 			// A storage key, a secret key or an endpoint the account's own S3 takes none of.
 			if (value === '') continue
 			if (generated.has(name)) taskOnce.set(name, value)
-			else if (derivedNames.has(name) || deployed[task].has(name) || aws[task].has(name)) taskDerived.set(name, value)
+			else if (isAwsDataVariable(task, name) || deployed[task].has(name) || aws[task].has(name)) taskDerived.set(name, value)
 			else if (input.bringUp !== undefined) taskOnce.set(name, value)
 		}
 		for (const [name, value] of deployed[task]) taskDerived.set(name, value)
@@ -240,7 +207,7 @@ export async function writeAwsParameters(input: AwsParametersInput): Promise<Aws
 			const parameter = parameterOf(task, name)
 			if (await secrets.putSecretOnce(parameter, value, signal)) {
 				written.push(name)
-			} else if (GENERATED_READERS[task].includes(name) && (await secrets.readSecret(parameter, signal)) !== value) {
+			} else if (AWS_GENERATED[task].has(name) && (await secrets.readSecret(parameter, signal)) !== value) {
 				// Settled from its readers, yet another value is there: a run at the same time won this reader's path.
 				throw new Error(`aws: ${parameter} holds another value than its readers settled on; run again once no other run writes`)
 			}
