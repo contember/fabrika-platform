@@ -121,7 +121,9 @@ in [`signing.ts`](../../packages/iam/src/signing.ts) and the JWKS cache in
 
 `fabrika control apps environments suspend --app=<app> --env=<env>` takes an environment offline (the procedure
 `apps.environments.suspend`, `app.manage` on the application, audited as `app.env.suspend`). `resume` undoes it
-(`app.env.resume`) and restores exactly what was there before. Repeating either is a retry.
+(`app.env.resume`) and restores exactly what was there before. Repeating either is a retry. Only a person in the console
+resumes a protected environment, whatever its `data` mode: a key's resume is refused (403), or waits as an approval
+request that a person's approval executes.
 
 - **Zerops.** Control records the suspension and republishes the namespace proxy, whose entry for the environment then
   answers 503 to every request, on every path, before any credential is read and without dialling the application

@@ -1,4 +1,4 @@
-// The human rule of ADR-0050 §4–5, shared by approving, changing `protected`, deleting a protected environment,
+// The human rule of ADR-0050 §4–5, shared by approving, changing `protected`, deleting or resuming a protected environment,
 // deploying to one by hand and redirecting what it deploys. These checks are authorization; the proxy's session
 // admission keeps another site's page out (ADR-0022).
 
@@ -70,6 +70,15 @@ export function requireHumanForProtectedDelete(auth: AuthContext, admission: Con
 			fail(403, `environment \`${row.env}\` is protected; deleting it takes \`access.approve\``)
 		}
 	}
+}
+
+/**
+ * Resuming a protected environment puts back online what a person may have taken offline in an incident, so it takes a
+ * person in the console, as deleting one does, whatever its `data` mode; an approved request executes as its approver.
+ */
+export function requirePersonToResume(auth: AuthContext, admission: ConsoleAdmission | undefined, row: AppEnvRow): void {
+	if (row.protected !== 1 || isConsolePerson(auth, admission)) return
+	fail(403, `environment \`${row.env}\` is protected: only a person in the console resumes it; an agent, a builder key or a service key cannot`)
 }
 
 /**

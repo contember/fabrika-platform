@@ -4,17 +4,18 @@
 
 import type { AuthContext, DomainEvent } from '@fabrika/auth'
 import type { OpsMaintenance, OpsPublishedState, OpsStateAck, OpsStateRequest, OpsView } from '@fabrika/auth-core'
-import { CONTROL_ACTIONS } from '@fabrika/control-contract'
+import { CONTROL_ACTIONS, STRICT_POLICY } from '@fabrika/control-contract'
 import { type ControlProvider, ProviderNamespaceError, type ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { republishNamespace } from '../api/namespaces'
+import { storedPolicy } from '../approval/categories'
 import { type OpsAnswer, type OpsDataAnswer, type OpsFencedAnswer, type OpsInspection, type OpsTransport, startMaintenance } from '../data-operations'
 import { runLeaseKey } from '../lease'
 import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
 import { authWithPermissions } from './helpers/iam'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureProtect, makeFakeLock } from './helpers/lock'
 import { fakeControlProvider, providerEnvironment, TEST_PROVIDER_ID } from './helpers/provider'
 import { rpcRequest, rpcResult } from './helpers/rpc'
 
@@ -174,9 +175,29 @@ const answerSchema = z.object({
 })
 
 const call = async (deps: ControlRpcDeps, verb: 'suspend' | 'resume') => {
-	const response = await rpcResult(rpcRequest(`apps.environments.${verb}`, TARGET), deps)
+	const response = await rpcResult(rpcRequest(`apps.environments.${verb}`, TARGET), deps, { consoleOrigin: 'https://control.test' })
 	return { status: response.status, body: answerSchema.parse(await response.json()) }
 }
+
+/** A builder key: every action allowed, but a service principal, which no gate mode makes a person. */
+function keyOf(deps: ControlRpcDeps, audits: DomainEvent[]): ControlRpcDeps {
+	return { ...deps, auth: { ...auditingAuth(audits), principal: { id: 'svc', type: 'service', label: 'builder' } } }
+}
+
+/** `data: off` lets a key's suspend and resume of the protected environment through the gate (ADR-0083 §3). */
+async function dataOff(deps: ControlRpcDeps): Promise<void> {
+	const row = await fixtureProtect(
+		deps.repositories.registry,
+		makeFakeLock(deps.repositories),
+		TARGET,
+		true,
+		Date.now,
+		storedPolicy({ ...STRICT_POLICY, data: 'off' }),
+	)
+	expect(row?.protected).toBe(1)
+}
+
+const RESUME_REFUSAL = 'environment `prod` is protected: only a person in the console resumes it'
 
 const parsedJson = (text: string): unknown => JSON.parse(text)
 
@@ -313,6 +334,58 @@ describe("through the environment's object", () => {
 		const { deps, object } = await objectHarness()
 		expect((await call(deps, 'resume')).status).toBe(409)
 		expect(object.modes).toEqual([])
+	})
+})
+
+describe('resuming a protected environment', () => {
+	test('behind a namespace proxy a key suspends but cannot resume, and a person resumes, audited', async () => {
+		const recording: ProxyRecording = { republished: [], pinReadsSuspension: true }
+		const { deps, audits } = await proxyHarness(recording)
+		await dataOff(deps)
+		const key = keyOf(deps, audits)
+
+		expect((await call(key, 'suspend')).status).toBe(200)
+		const refused = await call(key, 'resume')
+		expect(refused.status).toBe(403)
+		expect(refused.body.error).toContain(RESUME_REFUSAL)
+		expect(await deps.repositories.registry.getAppEnv(APP, ENV)).toMatchObject({ suspended_at: expect.any(Number) })
+		expect(recording.republished).toHaveLength(1)
+
+		expect((await call(deps, 'resume')).status).toBe(200)
+		expect(await deps.repositories.registry.getAppEnv(APP, ENV)).toMatchObject({ suspended_at: null })
+		expect(audits.map((event) => [event.action, event.metadata])).toEqual([
+			['app.env.suspend', { namespaceId: 'apps-prod' }],
+			['app.env.resume', { namespaceId: 'apps-prod' }],
+		])
+	})
+
+	test("through the environment's object a key cannot resume and the object stays closed; a person resumes, audited", async () => {
+		const { deps, audits, object } = await objectHarness()
+		await dataOff(deps)
+		const key = keyOf(deps, audits)
+
+		expect((await call(key, 'suspend')).status).toBe(200)
+		const refused = await call(key, 'resume')
+		expect(refused.status).toBe(403)
+		expect(refused.body.error).toContain(RESUME_REFUSAL)
+		expect(object.modes).toEqual(['closed'])
+
+		expect((await call(deps, 'resume')).status).toBe(200)
+		expect(object.modes).toEqual(['closed', 'open'])
+		expect(audits.map((event) => [event.action, event.metadata])).toEqual([
+			['app.env.suspend', { mode: 'closed', operationId: expect.any(String), state: 'succeeded' }],
+			['app.env.resume', { mode: 'open', operationId: expect.any(String), state: 'succeeded' }],
+		])
+	})
+
+	test('a key resumes an unprotected environment', async () => {
+		const { deps, audits, object } = await objectHarness()
+		expect((await fixtureProtect(deps.repositories.registry, makeFakeLock(deps.repositories), TARGET, false))?.protected).toBe(0)
+		const key = keyOf(deps, audits)
+
+		expect((await call(key, 'suspend')).status).toBe(200)
+		expect((await call(key, 'resume')).status).toBe(200)
+		expect(object.modes).toEqual(['closed', 'open'])
 	})
 })
 
