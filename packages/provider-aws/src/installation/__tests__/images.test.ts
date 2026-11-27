@@ -3,6 +3,7 @@
 // variable and checked first.
 
 import { describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { awsControlPolicies } from '../access'
 import {
 	AWS_IMAGES_BUILDSPEC,
@@ -127,7 +128,10 @@ describe("the platform's images", () => {
 	test("the proxy's build: tagged by the commit and the manifest, its manifest under the platform's prefix, the balancers' ranges", () => {
 		const image: AwsPlatformImage = { kind: 'proxy', manifestSha256: MANIFEST, trustedProxies: '10.80.240.0/24,10.80.241.0/24' }
 		const start = awsImagesBuildStart({ ...base, image })
-		expect(awsPlatformImageTag(COMMIT, image)).toBe(`${COMMIT.slice(0, 12)}-${MANIFEST.slice(0, 16)}`)
+		const ranges = createHash('sha256').update('10.80.240.0/24,10.80.241.0/24').digest('hex').slice(0, 8)
+		expect(awsPlatformImageTag(COMMIT, image)).toBe(`${COMMIT.slice(0, 12)}-${MANIFEST.slice(0, 16)}-${ranges}`)
+		// Other trusted ranges are another image, never the one built under these.
+		expect(awsPlatformImageTag(COMMIT, { ...image, trustedProxies: '10.81.240.0/24,10.81.241.0/24' })).not.toBe(awsPlatformImageTag(COMMIT, image))
 		expect(start.variables).toMatchObject({
 			FABRIKA_PLATFORM_IMAGE_KIND: { value: 'proxy' },
 			FABRIKA_IMAGE: { value: `123456789012.dkr.ecr.eu-central-1.amazonaws.com/fabrika/platform/proxy:${awsPlatformImageTag(COMMIT, image)}` },

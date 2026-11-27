@@ -81,6 +81,34 @@ describe('codeBuildClient', () => {
 		expect(empty.calls.map((call) => call.operation)).toEqual(['ListBuildsForProject'])
 	})
 
+	test('finds every build of one image by its variable, newest first whatever order BatchGetBuilds answers', async () => {
+		const THIRD_ID = 'fabrika-apps-build:33333333-2222-4333-8444-555555555555'
+		const withImage = (id: string, status: string, image: string) => ({
+			id,
+			buildStatus: status,
+			environment: { environmentVariables: [{ name: 'FABRIKA_IMAGE', value: image }, { name: BUILD_TOKEN_VARIABLE, value: TOKEN }] },
+		})
+		const { options } = fakeAws(CODEBUILD, {
+			ListBuildsForProject: () => ({ ids: [THIRD_ID, OTHER_ID, ID] }),
+			BatchGetBuilds: () => ({
+				builds: [
+					withImage(ID, 'FAILED', 'registry/repo:a'),
+					withImage(OTHER_ID, 'SUCCEEDED', 'registry/repo:b'),
+					withImage(THIRD_ID, 'IN_PROGRESS', 'registry/repo:a'),
+				],
+			}),
+		})
+		const codeBuild = codeBuildClient(options)
+		expect((await codeBuild.findBuildsWith('fabrika-apps-build', 'FABRIKA_IMAGE', 'registry/repo:a')).map((build) => [build.id, build.status])).toEqual(
+			[
+				[THIRD_ID, 'in_progress'],
+				[ID, 'failed'],
+			],
+		)
+		expect(await codeBuild.findBuildsWith('fabrika-apps-build', 'FABRIKA_IMAGE', 'registry/repo:c')).toEqual([])
+		await expect(codeBuild.findBuildsWith('fabrika-apps-build', 'not a name', 'x')).rejects.toThrow('the variable name')
+	})
+
 	test('reads each status as the provider names it, a build without its log as such, and an unknown one as null', async () => {
 		const statuses: readonly (readonly [string, CodeBuildStatus])[] = [
 			['SUCCEEDED', 'succeeded'],

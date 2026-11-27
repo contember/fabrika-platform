@@ -719,9 +719,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          Its digest is part of the proxy image's tag; the console's table digest and the OAuth configuration go to the
          parameters in the same run.
        - **The release's two images** (built, `installation/images-build.ts`): an image its tag already holds is read,
-         not built. Otherwise the proxy's manifest is written beside the release in the sources bucket and both builds
-         start, each with an idempotency token derived from its tag, so a run that lost a build finds and follows it.
-         A build that ends without its image is started once more; the answer is each image's digest.
+         not built; the proxy's tag carries the manifest's digest and the trusted ranges', everything its build bakes
+         in. Otherwise the proxy's manifest is written beside the release in the sources bucket and both builds start.
+         A run that lost a build finds it by the image it builds and follows it. The tag is read after every build,
+         whatever its status. Each start has a token of its own, so a start after a fast failure is a new build. At
+         most two starts per image and run, and the first image to fail stops the other. The answer is each digest.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:

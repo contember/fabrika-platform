@@ -76,6 +76,11 @@ export interface CodeBuildClient {
 	startBuild(start: CodeBuildStart, signal?: AbortSignal): Promise<CodeBuildBuild>
 	/** The build `project` started with `token`, among its newest `FIND_BUILD_DEPTH`, or `null`: how a lost start is settled. */
 	findBuild(project: string, token: string, signal?: AbortSignal): Promise<CodeBuildBuild | null>
+	/**
+	 * The builds of `project` among its newest `FIND_BUILD_DEPTH` whose plain variable `name` holds `value`, newest first:
+	 * every build of one image, whatever token each was started with.
+	 */
+	findBuildsWith(project: string, name: string, value: string, signal?: AbortSignal): Promise<readonly CodeBuildBuild[]>
 	/** The build `id`, or `null` when CodeBuild knows none. */
 	getBuild(id: string, signal?: AbortSignal): Promise<CodeBuildBuild | null>
 	/**
@@ -189,6 +194,20 @@ export function codeBuildClient(options: AwsJsonClientOptions): CodeBuildClient 
 				build.environment?.environmentVariables?.some((variable) => variable.name === BUILD_TOKEN_VARIABLE && variable.value === token)
 			)
 			return found === undefined ? null : buildOf('BatchGetBuilds', found)
+		},
+
+		async findBuildsWith(project, name, value, signal) {
+			if (!PROJECT_NAME.test(project)) refuse('the project name')
+			if (!VARIABLE_NAME.test(name)) refuse('the variable name')
+			const listed = await json.call('ListBuildsForProject', { projectName: project, sortOrder: 'DESCENDING' }, listedSchema, signal)
+			const ids = (listed.ids ?? []).filter((id) => BUILD_ID.test(id)).slice(0, FIND_BUILD_DEPTH)
+			if (ids.length === 0) return []
+			const got = await json.call('BatchGetBuilds', { ids }, gotSchema, signal)
+			const matching = got.builds.filter((build) =>
+				build.environment?.environmentVariables?.some((variable) => variable.name === name && variable.value === value)
+			)
+			// `BatchGetBuilds` promises no order: the listing's, newest first, is the one answered.
+			return ids.flatMap((id) => matching.filter((build) => build.id === id).map((build) => buildOf('BatchGetBuilds', build)))
 		},
 
 		getBuild,
