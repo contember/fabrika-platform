@@ -32,6 +32,11 @@ if (!hasPostgres) {
 
 const schema = `orm_${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 const alice = new TestAuthority('user:alice')
+
+/** The part of an aggregate's `where` description these tests call. */
+interface Condition {
+	where(column: string, operator: string, value: unknown): Condition
+}
 let database: Database
 let data: DataAccess
 
@@ -358,6 +363,22 @@ describe.skipIf(!hasPostgres)('the mini-ORM on Postgres', () => {
 		await expect(call(within, 'notes.list', { offset: 2 })).rejects.toThrow('offset is not an option of list')
 		await expect(call(within, 'notes.list', { limit: 501 })).rejects.toThrow('limit must be an integer from 1 to 500')
 		expect(keysOf(within)).toEqual(['note_comments', 'note_flags', 'notes', 'workspaces'])
+		await transaction.commit()
+	})
+
+	test("an aggregate whose where holds an 'in' with an empty list answers no group, its column still checked", async () => {
+		await admin((sql) => sql.unsafe(`insert into ${schema}.workspaces (id, organization_id, name, created_by) values ('we', 'o1', 'WE', 'u')`))
+		await seedNote('kept', 'we')
+		const { transaction, handles } = invocation('query')
+		const within = handles.within(alice.within('workspace', 'notes.read', ['we']))
+		const emptyIn = (column: string) => (q: Condition) => q.where('title', '=', 'kept').where(column, 'in', [])
+		expect(await call(within, 'notes.aggregate', { count: true, where: emptyIn('id') })).toEqual([])
+		expect(await call(within, 'notes.aggregate', { groupBy: ['title'], count: true, where: emptyIn('id') })).toEqual([])
+		expect(await call(within, 'notes.aggregate', { count: true, where: (q: Condition) => q.where('title', '=', 'kept') })).toEqual([{ count: '1' }])
+		await expect(call(within, 'notes.aggregate', { count: true, where: emptyIn('internal') })).rejects.toThrow('internal is not a column of notes')
+		await expect(call(within, 'notes.aggregate', { count: true, where: (q: Condition) => q.where('id', 'not in', []) })).rejects.toThrow(
+			'not in needs a non-empty plain array of values',
+		)
 		await transaction.commit()
 	})
 

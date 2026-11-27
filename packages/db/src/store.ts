@@ -73,6 +73,7 @@ import {
 	type Compare,
 	type Condition,
 	type Contains,
+	finishFilter,
 	finishSelect,
 	isPrimitive,
 	type JoinShape,
@@ -2193,7 +2194,7 @@ function aggregateFilter<Row>(shape: TableShape, where: AggregateSpec<Row>['wher
 		throw new QueryRefusedError('invalid_argument', 'aggregate where takes a callback')
 	}
 	const start = startSelect<Row, NoColumns>(shape)
-	const state = finishSelect(where(start), start)
+	const state = finishFilter(where(start), start)
 	if (state.columns !== undefined || state.orderBy.length > 0 || state.limit !== undefined || state.offset !== undefined || state.joins.length > 0) {
 		throw new QueryRefusedError('invalid_argument', 'aggregate where takes where conditions only')
 	}
@@ -2212,7 +2213,8 @@ export async function aggregateRows<Row, O>(
 	}
 	const columns = aggregateColumns(context.model.name, shape, spec)
 	const filter = aggregateFilter(shape, spec.where)
-	if (scope === undefined) {
+	// An `in` with an empty list answers what an empty `Within` does, and sends no statement.
+	if (scope === undefined || filter?.matchesNone === true) {
 		return []
 	}
 	const dialect = dialectOf(context)
