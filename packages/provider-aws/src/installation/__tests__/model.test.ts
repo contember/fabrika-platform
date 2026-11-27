@@ -15,7 +15,10 @@ describe('AWS renders the installation model', () => {
 		expect(awsJobInterval('* * * * *')).toBe(60)
 		expect(awsJobInterval('*/5 * * * *')).toBe(300)
 		expect(awsJobInterval('0 3 * * *')).toBe(86_400)
-		for (const schedule of ['0 */2 * * *', '0 3 * * 1', '@daily', '*/0 * * * *']) expect(() => awsJobInterval(schedule)).toThrow('none a loop runs')
+		expect(awsJobInterval('*/15 * * * *')).toBe(900)
+		for (const schedule of ['0 */2 * * *', '0 3 * * 1', '@daily', '*/0 * * * *', '*/90 * * * *', '*/45 * * * *', '0 24 * * *', '60 3 * * *']) {
+			expect(() => awsJobInterval(schedule)).toThrow('none a loop runs')
+		}
 		for (const service of PLATFORM_SERVICES) {
 			for (const job of model.services[service].jobs) expect(() => awsJobInterval(job.schedule)).not.toThrow()
 		}
@@ -25,6 +28,8 @@ describe('AWS renders the installation model', () => {
 		const services: readonly PlatformService[] = ['iam', 'control', 'operations']
 		for (const service of services) {
 			expect(model.services[service].ports.map((port) => port.port)).toEqual([AWS_PLATFORM_SERVICE_PORT])
+			// The task's health check takes the model's port; the port mapping is the runtime's.
+			expect(model.services[service].health.port).toBe(AWS_PLATFORM_SERVICE_PORT)
 		}
 		expect(model.services.proxy.ports.map((port) => port.port)).toEqual([AWS_PLATFORM_PROXY_PORT, AWS_PLATFORM_PROXY_HEALTH_PORT])
 		expect(model.services.proxy.health.port).toBe(AWS_PLATFORM_PROXY_HEALTH_PORT)

@@ -69,6 +69,9 @@ function isSecret(name: string): name is keyof InstallationSecrets {
 /**
  * Whether a name of the installation's environment is a store's coordinate (`data`): a database's DSN, or a name under
  * a bucket's prefix. Every run writes them when they differ, because a DSN carries the password the run reads.
+ *
+ * A bucket's key pair would count too, and so be rewritten on every run rather than written once; on AWS it is never
+ * written at all (the task role signs, so its value is empty and `desiredAwsParameters` skips it).
  */
 export function isAwsDataVariable(service: PlatformService, name: string): boolean {
 	return awsInstallationModel.services[service].environment.some((variable) =>
@@ -76,17 +79,21 @@ export function isAwsDataVariable(service: PlatformService, name: string): boole
 	)
 }
 
-const DAILY = /^\d+ \d+ \* \* \*$/
+const DAILY = /^([0-5]?\d) ([01]?\d|2[0-3]) \* \* \*$/
 const EVERY_N_MINUTES = /^\*\/([1-9]\d*) \* \* \* \*$/
 
 /**
  * A job's schedule as the interval, in seconds, of the loop that runs it beside its service. A loop keeps an interval,
  * not a time of day (ADR-0092): every minute, every N minutes, and `M H * * *` as every 24 hours from the task's start.
+ *
+ * Every N minutes only where N divides 60: cron restarts the count each hour, so a step of 90 runs at minute 0 of every
+ * hour and a step of 45 at minutes 0 and 45, which no fixed interval matches. A loop must not disagree with how a crontab
+ * (Zerops') runs the same schedule.
  */
 export function awsJobInterval(schedule: string): number {
 	if (schedule === '* * * * *') return 60
-	const minutes = EVERY_N_MINUTES.exec(schedule)?.[1]
-	if (minutes !== undefined) return Number(minutes) * 60
+	const minutes = Number(EVERY_N_MINUTES.exec(schedule)?.[1] ?? Number.NaN)
+	if (Number.isInteger(minutes) && 60 % minutes === 0) return minutes * 60
 	if (DAILY.test(schedule)) return 86_400
-	throw new Error(`aws: a job's schedule ${schedule} is none a loop runs: every minute, every N minutes, or once a day`)
+	throw new Error(`aws: a job's schedule ${schedule} is none a loop runs: every minute, every N minutes for an N that divides 60, or once a day`)
 }
