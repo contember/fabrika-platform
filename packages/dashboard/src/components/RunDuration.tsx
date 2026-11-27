@@ -26,11 +26,8 @@ export function RunReview({ run }: { run: ListedRun }) {
 	const access = useConsoleAccess()
 	if (run.status !== 'awaiting_approval' || !mayDo(access, CONTROL_ACTIONS.ACCESS_APPROVE, { app: run.appId, env: run.env })) return null
 	return (
-		<>
-			{' · '}
-			<Link to="approvals/detail" params={{ id: run.id }}>
-				Review<span className="sr-only">{` the deploy of ${run.appId} / ${run.env}`}</span>
-			</Link>
-		</>
+		<Link to="approvals/detail" params={{ id: run.id }} className="small">
+			Review<span className="sr-only">{` the deploy of ${run.appId} / ${run.env}`}</span>
+		</Link>
 	)
 }

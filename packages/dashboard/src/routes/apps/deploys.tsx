@@ -68,10 +68,12 @@ export default createPage()
 					{runs.items.map((run) => (
 						<tr key={run.id}>
 							<td>
-								<Link to="runs/detail" params={{ id: run.id }}>
-									<RunStatus status={run.status} />
-								</Link>
-								<RunReview run={run} />
+								<div className="cell-stack">
+									<Link to="runs/detail" params={{ id: run.id }}>
+										<RunStatus status={run.status} />
+									</Link>
+									<RunReview run={run} />
+								</div>
 							</td>
 							<td>{run.env}</td>
 							<td>
