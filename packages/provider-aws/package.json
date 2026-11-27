@@ -20,6 +20,7 @@
 		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/installation-init": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*"

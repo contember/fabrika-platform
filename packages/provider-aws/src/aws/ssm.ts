@@ -152,6 +152,8 @@ export interface SsmPlatformSecrets {
 	putSecret(name: string, value: string, signal?: AbortSignal): Promise<void>
 	/** The value under `name`, decrypted; `null` when there is none. It never reaches an error or a log. */
 	readSecret(name: string, signal?: AbortSignal): Promise<string | null>
+	/** The names of the parameters one level below `path` (no trailing `/`), sorted; never a value. */
+	listNames(path: string, signal?: AbortSignal): Promise<readonly string[]>
 }
 
 const readSchema = z.object({ Parameter: z.object({ Value: z.string() }) })
@@ -170,6 +172,7 @@ function platformParameterName(name: string): string {
  */
 export function ssmPlatformSecrets(options: AwsJsonClientOptions): SsmPlatformSecrets {
 	const json = awsJsonClient(SSM, options)
+	const lister = ssmClient(options)
 	const put = async (name: string, value: string, overwrite: boolean, signal?: AbortSignal) => {
 		const parameter = platformParameterName(name)
 		if (value === '' || new TextEncoder().encode(value).byteLength > MAX_SECRET_BYTES) refuse('the value')
@@ -191,6 +194,10 @@ export function ssmPlatformSecrets(options: AwsJsonClientOptions): SsmPlatformSe
 			}
 		},
 		putSecret: (name, value, signal) => put(name, value, true, signal),
+		async listNames(path, signal) {
+			if (!`${path}/`.startsWith(PLATFORM_PARAMETERS)) refuse('the path (not one of the platform)')
+			return lister.listNames(path, signal)
+		},
 		async readSecret(name, signal) {
 			const parameter = platformParameterName(name)
 			try {
