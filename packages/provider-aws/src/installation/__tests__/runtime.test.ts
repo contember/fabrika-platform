@@ -109,11 +109,10 @@ describe("the platform services' foundation", () => {
 			return (action: string) => statements.filter((statement) => statement.Action.includes(action)).flatMap((statement) => statement.Resource)
 		}
 		const parameter = (path: string) => `arn:aws:ssm:eu-central-1:123456789012:parameter${path}`
-		expect(grantsOf('iam')('ssm:GetParameters')).toEqual([parameter('/fabrika/platform/iam/*'), parameter('/fabrika/platform/database/iam-password')])
-		expect(grantsOf('control')('ssm:GetParameters')).toEqual([
-			parameter('/fabrika/platform/control/*'),
-			parameter('/fabrika/platform/database/control-password'),
-		])
+		// A service reads its database URL from its own path, never the database's.
+		expect(grantsOf('iam')('ssm:GetParameters')).toEqual([parameter('/fabrika/platform/iam/*')])
+		expect(grantsOf('control')('ssm:GetParameters')).toEqual([parameter('/fabrika/platform/control/*')])
+		expect(grantsOf('operations')('ssm:GetParameters')).toEqual([parameter('/fabrika/platform/operations/*')])
 		expect(grantsOf('proxy')('ssm:GetParameters')).toEqual([parameter('/fabrika/platform/proxy/*')])
 		// The setup alone reads the master's password, and the services' it sets.
 		expect(grantsOf('setup')('ssm:GetParameters')).toEqual([parameter('/fabrika/platform/setup/*'), parameter('/fabrika/platform/database/*')])

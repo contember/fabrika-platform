@@ -650,8 +650,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        `fabrika-platform-runtime`, applied before the access stack):
        - **One identity per task.** Each task (IAM, Control, Operations, the platform proxy, the database setup) gets
          an execution role of its own. It pulls its own image, writes its own log group and reads its own parameters
-         alone (`/fabrika/platform/<task>/*`, and a service's own database password). A secret two services share is
-         written once per reader, under each one's path. The setup alone reads the database's master password.
+         alone (`/fabrika/platform/<task>/*`, a service's database URL among them, which the command derives from the
+         service's password). A secret two services share is written once per reader, under each one's path. The
+         setup alone reads the database's path: the master's password and the services'.
        - **Task roles.** Control's is the access stack's. Operations' reaches its blob bucket alone. IAM, the proxy
          and the setup take none.
        - **One security group per task, the rules exact.** The proxy admits the platform balancer's group alone and
@@ -663,8 +664,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          (`ecs:namespace`, by its ARN, which the access stack takes from this stack's outputs, or its name).
        - **Two private, TLS-only buckets**: Control's run logs (granted to Control's role) and Operations' blobs.
 
-       Then the services themselves (built, `installation/services.ts`, the stack `fabrika-platform-services`, applied
-       last):
+       Then the services themselves (built, `installation/services.ts`): the database setup's task in a stack of its
+       own (`fabrika-platform-setup`), which the operator applies and runs, then the stack `fabrika-platform-services`,
+       applied last. One stack could not hold both: the services' migrations would fail on users the setup has not
+       made, the stack would roll back with the setup's definition, and an upgrade's setup could not precede its
+       migrations.
        - **No value in the template.** Every variable a task reads is a SecureString under its own path, which the
          operator's command writes from `installation-init`'s `installationServiceEnvironment` and
          `deployedServiceEnvironment` and the AWS provider's own (the same names on every cloud), and which the task
@@ -672,7 +676,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        - **Images by digest**, never a tag, which the lifecycle policy can free again.
        - **IAM, Control and Operations** each run their migrations, then their server, in one container, in the
          platform's cluster and task subnets, under their own group and the database's client group. They publish
-         `iam`, `control` and `operations` in the platform's Service Connect namespace.
+         `iam`, `control` and `operations` in the platform's Service Connect namespace, with its per-request timeout
+         (15 seconds by default for HTTP) turned off, as on Zerops, and an idle timeout of five minutes.
        - **Their scheduled jobs** run in a second container of the same task, once the server is healthy: IAM's prune
          daily, Control's maintenance every five minutes, Operations' every minute, as Zerops' crontab runs them. The
          jobs hold their own claims and locks, so a rolling deploy's two tasks are safe. An EventBridge schedule
@@ -680,8 +685,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        - **The platform proxy** is a Service Connect client behind the platform balancer's one target group. It routes
          the three hosts on one port, by host, as a namespace proxy does.
        - **The database setup** is a task definition and no service. The operator's command runs it in the platform's
-         network, on install and on every upgrade before the services, with the master's password and the services'
-         (`database-setup-main.ts`).
+         network, on install and on every upgrade before it applies the services' stack, with the master's password
+         and the services' (`database-setup-main.ts`).
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
        GitHub OIDC role.
 
@@ -871,6 +876,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     IAM Access Analyzer's external access findings on the bounded roles, and whether ECS accepts from Control's role a
     `serviceRegistries` entry naming a Cloud Map service of the platform's namespace and Service Connect's clients take
     such an instance (an accepted reach: no route joins the VPCs, so it could only make the platform's calls fail).
+    For the platform's services: that Service Connect takes a per-request timeout of 0 as off (a request through the
+    proxy outlasting 15 seconds), that the services image carries `wget` for the health checks, and that the
+    setup stack, its task and then the services stack install in that order.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 

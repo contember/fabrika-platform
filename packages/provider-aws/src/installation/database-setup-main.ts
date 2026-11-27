@@ -36,6 +36,9 @@ function required(variables: Readonly<Record<string, string | undefined>>, name:
 /** Runs the setup with `variables` (the process's environment). */
 export async function runDatabaseSetupTask(variables: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {
 	const port = Number(required(variables, AWS_DATABASE_SETUP_VARIABLES.port))
+	if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+		throw new Error(`aws: the database setup's ${AWS_DATABASE_SETUP_VARIABLES.port} is not a port`)
+	}
 	const outputs = { host: required(variables, AWS_DATABASE_SETUP_VARIABLES.host), port, clientGroupId: '' }
 	const passwords: Record<AwsDatabaseService, string> = { iam: '', control: '', operations: '' }
 	for (const service of AWS_DATABASE_SERVICES) passwords[service] = required(variables, awsDatabaseSetupPasswordVariable(service))

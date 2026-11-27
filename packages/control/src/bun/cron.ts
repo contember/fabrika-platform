@@ -8,6 +8,12 @@
 // multiplies with horizontal scale) and its schedule silently resets on every redeploy. `allContainers:
 // false` in the crontab entry keeps a horizontally-scaled service polling once.
 //
+// AWS runs it differently on purpose: a loop in a container beside each Control task starts this one-shot process
+// every five minutes (`provider-aws/src/installation/services.ts`), so a rolling deploy runs two passes for a while
+// and each new task restarts the schedule. That is safe because each pass holds its own claims and locks; an
+// EventBridge schedule starting a task per run was the alternative, at the cost of a scheduler role and a task per
+// pass.
+//
 // An installation's composition root runs it with its provider: `bun src/zerops/cron.ts`.
 
 import { runBackupSchedule } from '../backups'
