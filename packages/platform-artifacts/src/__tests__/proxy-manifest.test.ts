@@ -34,6 +34,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { APP, FakeIam, HOST, ISSUER, signToken, verifyRequest } from '../../../proxy-core/src/__tests__/helpers'
 import {
+	AWS_PLATFORM_PROXY_MANIFEST_PATH,
 	PLATFORM_IAM_APP_ID,
 	PLATFORM_PROXY_APPS,
 	type PlatformProxyComposition,
@@ -341,9 +342,10 @@ describe('OAuth on the console, resolved', () => {
 })
 
 describe('the committed artifact', () => {
-	test('is what the declaration produces', () => {
-		const artifact = platformProxyManifestArtifact()
-		expect(readFileSync(resolve(REPO_ROOT, artifact.path), 'utf8')).toBe(artifact.content)
+	test('is what the declaration produces, in the Zerops provider and the AWS provider alike', () => {
+		for (const artifact of [platformProxyManifestArtifact(), platformProxyManifestArtifact(AWS_PLATFORM_PROXY_MANIFEST_PATH)]) {
+			expect(readFileSync(resolve(REPO_ROOT, artifact.path), 'utf8')).toBe(artifact.content)
+		}
 	})
 
 	test('carries the template a deploy will read, tables included', () => {

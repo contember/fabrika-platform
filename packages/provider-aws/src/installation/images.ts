@@ -6,8 +6,8 @@
 //   each started by its task definition's own command. Tagged by the commit.
 // - **The platform proxy's image** (`packages/proxy/Dockerfile`): the commit with the platform's proxy manifest beside
 //   it, trusting forwarding headers from the platform VPC's balancer subnets alone, as a namespace proxy trusts the
-//   applications' VPC's. Tagged by the commit
-//   and the manifest's digest, so new hosts build a new image and an old one is never overwritten.
+//   applications' VPC's. Tagged by the commit, the manifest's digest and the trusted ranges' digest, so new hosts or
+//   ranges build a new image and an old one is never overwritten.
 //
 // The source is fetched by the commit's full id inside the build, and checked to be that commit before anything is
 // built: no archive passes through another hand. The commit id is the one anchor. GitHub serves any commit of a
@@ -26,6 +26,7 @@
 // was checked against an account.
 
 import type { JsonValue } from '@fabrika/provider-contract'
+import { createHash } from 'node:crypto'
 import type { CodeBuildStart } from '../aws/codebuild'
 import { IPV4_CIDR_LIST } from '../codecs'
 import { allow, AWS_LOG_RETENTION_DAYS, policy, trust } from '../environment-stack'
@@ -231,9 +232,15 @@ const REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
 const COMMIT = /^[0-9a-f]{40}$/
 const SHA256 = /^[0-9a-f]{64}$/
 
-/** The image's tag: the commit, and for the proxy the manifest's digest too, each shortened. */
+/**
+ * The image's tag: the commit, and for the proxy the manifest's digest and the digest of the trusted ranges too, each
+ * shortened. Everything the proxy's build bakes in is in its tag, so an image found by its tag is the one these inputs
+ * build, never one built under other ranges.
+ */
 export function awsPlatformImageTag(commitSha: string, image: AwsPlatformImage): string {
-	return image.kind === 'services' ? commitSha : `${commitSha.slice(0, 12)}-${image.manifestSha256.slice(0, 16)}`
+	if (image.kind === 'services') return commitSha
+	const ranges = createHash('sha256').update(image.trustedProxies, 'utf8').digest('hex')
+	return `${commitSha.slice(0, 12)}-${image.manifestSha256.slice(0, 16)}-${ranges.slice(0, 8)}`
 }
 
 /** Where the operator's command writes the platform proxy's manifest: under `platform/` of the sources bucket. */
