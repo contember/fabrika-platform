@@ -412,6 +412,27 @@ describe('a plan covers only for a while, and only what it showed', () => {
 		expect((await deploy(w, PLANNED)).status).toBe('awaiting_approval')
 	})
 
+	test('every write is audited: the plan as `deploy.trigger`, its approval and revocation as `access.approve`', async () => {
+		const w = await world()
+		await published(w)
+		const audited: { action: string; resourceType: string; decision: unknown }[] = []
+		const recording = (auth: AuthContext): AuthContext => ({
+			...auth,
+			audit: (event) => {
+				audited.push({ action: event.action, resourceType: event.resourceType, decision: event.metadata?.['decision'] })
+				return Promise.resolve()
+			},
+		})
+		const made = await createApprovalPlanUseCase(plans(w, recording(agent())), { appId: 'notes', env: 'prod', commitSha: PLANNED })
+		await decidePlan(w, made.id, 'approve', recording(person()))
+		await revokeApprovalPlanUseCase(plans(w, recording(person())), made.id)
+		expect(audited).toEqual([
+			{ action: 'deploy.trigger', resourceType: 'approval_plan', decision: 'plan' },
+			{ action: 'access.approve', resourceType: 'approval_plan', decision: 'approve' },
+			{ action: 'access.approve', resourceType: 'approval_plan', decision: 'revoke' },
+		])
+	})
+
 	test('a revoked plan covers nothing; only a person in the console with access.approve revokes it', async () => {
 		const w = await world()
 		await published(w)

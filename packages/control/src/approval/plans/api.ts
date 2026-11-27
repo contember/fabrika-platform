@@ -150,6 +150,20 @@ export async function createApprovalPlanUseCase(c: ApprovalPlanContext, input: C
 		ttlSeconds: appEnvSettings(appEnv).requestTtlHours * 3600,
 		entries: entries.map((entry) => ({ id: uuidv7(), ...entry })),
 	})
+	await c.auth.audit({
+		action: CONTROL_ACTIONS.DEPLOY_TRIGGER,
+		resourceType: 'approval_plan',
+		resourceId: row.id,
+		metadata: {
+			appId: row.app_id,
+			env: row.env,
+			commitSha: row.commit_sha,
+			decision: 'plan',
+			entries: entries.length,
+			candidateDigest: row.candidate_digest,
+			baselineDigest: row.baseline_digest,
+		},
+	})
 	return toApprovalPlanDto(c, row)
 }
 
