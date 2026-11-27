@@ -155,6 +155,16 @@ describe('the device authorization endpoint', () => {
 		expect(await errorOf(await start('deploy:alpha', [RESOURCE, RESOURCE]))).toBe('invalid_request')
 	})
 
+	test('gives the CLI five minutes to decide, polled every five seconds', async () => {
+		const { harness, start } = await fixture()
+		const body: unknown = await (await start()).json()
+		expect(Reflect.get(Object(body), 'expires_in')).toBe(300)
+		expect(Reflect.get(Object(body), 'interval')).toBe(5)
+		const row = harness.sqlite.query<{ created_at: number; expires_at: number }, []>('SELECT created_at, expires_at FROM oauth_device_authorizations')
+			.get()
+		expect((row?.expires_at ?? 0) - (row?.created_at ?? 0)).toBe(300)
+	})
+
 	test('limits starts per client address, and a start refused there does not count against the shared bucket', async () => {
 		const { f, start } = await fixture()
 		for (let attempt = 0; attempt < 30; attempt++) expect((await start('deploy:alpha', [RESOURCE], [], '203.0.113.7')).status).toBe(200)
