@@ -8,6 +8,11 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
+		},
+		"./installation": {
+			"bun": "./src/installation/index.ts",
+			"types": "./src/installation/index.ts",
+			"default": "./src/installation/index.ts"
 		}
 	},
 	"scripts": {
@@ -20,6 +25,7 @@
 		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/email": "workspace:*",
 		"@fabrika/installation-init": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",

@@ -83,21 +83,16 @@ export async function buildAwsPlatformImages(run: AwsImagesBuildRun): Promise<Aw
 		run.log("aws: wrote the platform proxy's manifest beside the release")
 	}
 	// The first image to fail stops the other's wait, so nothing of this run goes on once it has failed.
-	const both = new AbortController()
-	const stopBoth = () => both.abort(run.signal.reason)
-	run.signal.addEventListener('abort', stopBoth, { once: true })
-	const scoped: AwsImagesBuildRun = { ...run, signal: both.signal }
+	// The caller's signal and the first failure both stop the two: one derived signal, whenever the caller's aborted.
+	const failed = new AbortController()
+	const scoped: AwsImagesBuildRun = { ...run, signal: AbortSignal.any([run.signal, failed.signal]) }
 	const failingBoth = (digest: Promise<string>) =>
 		digest.catch((error: unknown) => {
-			both.abort(error)
+			failed.abort(error)
 			throw error
 		})
-	try {
-		const [services, proxied] = await Promise.all([failingBoth(imageDigest(scoped, { kind: 'services' })), failingBoth(imageDigest(scoped, proxy))])
-		return { services, proxy: proxied }
-	} finally {
-		run.signal.removeEventListener('abort', stopBoth)
-	}
+	const [services, proxied] = await Promise.all([failingBoth(imageDigest(scoped, { kind: 'services' })), failingBoth(imageDigest(scoped, proxy))])
+	return { services, proxy: proxied }
 }
 
 /** One image's digest: the one its tag holds, or the one a build of it pushed. */
