@@ -965,6 +965,17 @@ other environment, before the provider prepares anything, and the write maps a r
   `requesterMayApprove: false` on any waiting category (`requesterMayApprove` in the contract) keeps the requester's
   person from approving a parked deploy request (`requireOtherThanRequester`); where that person is unknown (a service
   key's issuer, which no token names) nobody approves it, and anyone may refuse it.
+- **An approval plan approves a commit's access change ahead of its deploy (ADR-0050 §5, `src/approval/plans/`).**
+  `approvals.plans.create` (`deploy.trigger` at the coordinates of a protected environment) reads the commit as a run
+  reads it (`planCommitReader`) and stores one `approval_plan_entries` row per subject its `plan`-mode lines touch: the
+  subject's fragment hash before and after (`subjectFragmentHash`) and the digests of those lines. A person decides it
+  under a parked run's rules (`requireHumanApprover`, `access.approve`, the shown digests, the deadline,
+  `requesterMayApprove`, `approvers`, `planStepUpBinding`); approval makes its entries `active` until `planTtlDays`.
+  At publication, only when the run would otherwise park, `planCoverage` covers a `plan` line by a chain of entries
+  from the baseline fragment to the candidate's (`planBinding: transition`) or by one entry with the candidate's after
+  hash (`after-state`), never a `person` line. The used entries are consumed in `publishRunSnapshot`'s batch: locked,
+  counted active and unexpired in the compare-and-swap, so a revoke or an expiry in between makes the swap lose.
+  Expiry is read from `deadline` and `expires_at`; nothing sweeps it.
 - **A decision under `stepUp: webauthn` carries a step-up challenge the person answered on IAM's page and IAM verified (ADR-0050 §5, `src/approval/step-up.ts`).**
   `requiredStepUp` on the waiting categories decides it, beside `requiredApprovers`. Control builds the binding from the
   stored item and the decision (`runStepUpBinding`, `requestStepUpBinding`), never from the input, and calls IAM's

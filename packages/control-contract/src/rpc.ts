@@ -300,7 +300,7 @@ export interface ControlRpcContract {
 			create: RpcProcedure<CreateApprovalPlanInput, ApprovalPlanDto>
 			/** The requester's own, or any at coordinates where the caller holds `access.approve`. */
 			get: RpcProcedure<ApprovalPlanIdInput, ApprovalPlanDto>
-			/** The pending plans at coordinates where the caller holds `access.approve`. */
+			/** The pending plans, and the approved ones still covering a deploy, where the caller holds `access.approve`. */
 			list: RpcProcedure<void, ApprovalPlanListResponse>
 			/** A person in the console with `access.approve` at the plan's coordinates, on the digests the page showed. */
 			decide: RpcProcedure<DecideApprovalPlanInput, ApprovalPlanDto>

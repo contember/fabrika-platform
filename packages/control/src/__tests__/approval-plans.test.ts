@@ -288,11 +288,14 @@ describe('deciding a plan follows the rules of a parked run', () => {
 		const approved = await decidePlan(w, made.id, 'approve')
 		expect(approved).toMatchObject({ state: 'approved', decision: { principalId: 'p-ada' }, expiresAt: w.now + 30 * DAY })
 		expect(approved.entries).toEqual([{ subject: 'role:editor', state: 'active' }])
+		// Listed while it covers a deploy, so a person can find it to revoke it.
+		expect((await listApprovalPlansUseCase(plans(w))).items.map((item) => item.state)).toEqual(['approved'])
 		const deployed = await deploy(w, PLANNED)
 		expect(deployed.status).toBe('succeeded')
 		expect(w.deploys).toBe(2)
 		const after = await getApprovalPlanUseCase(plans(w), made.id)
 		expect(after.entries).toEqual([{ subject: 'role:editor', state: 'consumed', consumedByRunId: deployed.runId }])
+		expect((await listApprovalPlansUseCase(plans(w))).items).toEqual([])
 	})
 
 	test('a consumed entry covers one publication: the same change again, after a revert, waits', async () => {
@@ -416,6 +419,7 @@ describe('a plan covers only for a while, and only what it showed', () => {
 		expect((await status(revokeApprovalPlanUseCase(plans(w, agent()), approved.id))).status).toBe(403)
 		const revoked = await revokeApprovalPlanUseCase(plans(w), approved.id)
 		expect(revoked).toMatchObject({ state: 'revoked', entries: [{ subject: 'role:editor', state: 'revoked' }] })
+		expect((await listApprovalPlansUseCase(plans(w))).items).toEqual([])
 		expect((await deploy(w, PLANNED)).status).toBe('awaiting_approval')
 	})
 

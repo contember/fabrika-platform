@@ -160,9 +160,9 @@ export async function getApprovalPlanUseCase(c: ApprovalPlanContext, id: string)
 	return toApprovalPlanDto(c, row)
 }
 
-/** The plans waiting for a decision at coordinates where the caller holds `access.approve`, newest first. */
+/** The plans waiting for a decision, and the approved ones still covering a deploy, where the caller holds `access.approve`. */
 export async function listApprovalPlansUseCase(c: ApprovalPlanContext): Promise<ApprovalPlanListResponse> {
-	const rows = await c.repositories.approvalPlans.listPending(LIST_LIMIT)
+	const rows = await c.repositories.approvalPlans.listOpen(LIST_LIMIT)
 	return { items: await Promise.all(rows.filter((row) => mayDecide(c.auth, row)).map((row) => toApprovalPlanDto(c, row))) }
 }
 
