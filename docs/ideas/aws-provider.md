@@ -754,7 +754,17 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        - **The ECS service-linked role** (built, `src/aws/iam.ts`, called from `run.ts`): ensured on install and
          upgrade alike, once agreed and before the first stack; read first, made only when missing, one another caller
          made meanwhile read again.
-       - Still to come: the sidecar workflow with its GitHub OIDC role.
+       - **The deployer** (built, `installation/deployer.ts`, GitHub's provider in `src/aws/iam.ts`; decided
+         2026-11-27: administrator access with safeguards): the role the sidecar workflow takes through GitHub's OIDC
+         provider, trusted by exactly one repository's jobs in one GitHub Environment (`sub`
+         `repo:<owner>/<name>:environment:<name>`, `aud` `sts.amazonaws.com`), holding `AdministratorAccess` inside a
+         boundary that denies: IAM on its own role, its boundary and the provider, and its own stack; IAM users and
+         long-lived credentials; making or changing identity providers; writing roles and policies outside `/fabrika/`;
+         `sts:AssumeRole`; the account and its organization. An upgrade's stacks create roles and policies, so a narrower
+         list would buy no safety: a role the deployer makes for a service carries no boundary, and the GitHub
+         Environment's protection (its branch, and a person approving each run, recommended) is what guards that reach.
+         The provider is ensured beside the stack, never owned by it, and an existing one is never changed.
+       - Still to come: the sidecar workflow and `platform init`, which applies the deployer and writes the Environment.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
@@ -764,7 +774,7 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
       `ecs:CreateAction = CreateService` (the tags of a service it creates); `RegisterTaskDefinition` (no resource scope
       in ECS), with `iam:PassRole` only on `role/fabrika/apps/*` and the condition
       `iam:PassedToService = ecs-tasks.amazonaws.com`. `CreateService` passes no role: the account's ECS service-linked
-      role, which the installation stack ensures, places the tasks.
+      role, which the commands ensure (`run.ts`, `src/aws/iam.ts`), places the tasks.
     - ECR: the repository calls on `repository/fabrika/apps/*`.
     - SSM: `PutParameter`, `DeleteParameter`, `DescribeParameters` on `parameter/fabrika/apps/*`.
     - CodeBuild: `StartBuild`, `BatchGetBuilds`, `StopBuild`, `ListBuildsForProject` on `project/fabrika_*`.
@@ -954,7 +964,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     certificate requested again for a host whose record is already in DNS is issued without touching DNS. For the ECS
     service-linked role: IAM's `GetRole` and `CreateServiceLinkedRole` answers and error codes as the client reads them
     (signed for `us-east-1` at `iam.amazonaws.com`), and that a fresh account's first services stack places its tasks
-    once the run made the role.
+    once the run made the role. For the deployer: that a GitHub Actions job in the Environment takes the role (the
+    token's `sub` as the trust names it, and the session length granted), that a job of another repository, branch
+    without the Environment or Environment is refused, and that the boundary refuses each of its denials (IAM Access
+    Analyzer's policy checks and a refused call apiece) while an upgrade run through it completes.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 
