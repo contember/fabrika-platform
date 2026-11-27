@@ -116,8 +116,8 @@ redirect: a 3xx is a failure.
      --data-urlencode agent_label='Release notes agent'
    ```
 
-   It answers `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `expires_in` and
-   `interval`. Show the person `verification_uri_complete`, or `verification_uri` and `user_code`. `invalid_target`
+   It answers `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `expires_in` (1800: the
+   person has thirty minutes to open the link and decide) and `interval` (5). Show the person `verification_uri_complete`, or `verification_uri` and `user_code`. `invalid_target`
    means the host is no application resource (no group of its approved contract lists `agent`), `invalid_scope` a
    scope the client cannot ask for or a dimension the environment does not declare, and 429 with `retry-after` too many
    starts.

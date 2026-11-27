@@ -30,8 +30,11 @@ import type { Services } from './services'
 type SigningEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 export const OAUTH_DEVICE_PATH = '/oauth/device'
-/** RFC 8628 §3.2 `expires_in`: a person has five minutes to enter the code and decide. */
-export const OAUTH_DEVICE_ATTEMPT_TTL_SECONDS = 300
+/**
+ * RFC 8628 §3.2 `expires_in`: thirty minutes to enter the code and decide, because the person is often not at the screen
+ * that shows it (an agent's code reaches them as a notification). The approval page and its passkey stay the defence.
+ */
+export const OAUTH_DEVICE_ATTEMPT_TTL_SECONDS = 1800
 export const OAUTH_DEVICE_POLL_INTERVAL_SECONDS = 5
 
 /** RFC 8628 §6.1: twenty consonants, eight of them (about 34 bits), typed without ambiguity. */
@@ -43,7 +46,7 @@ const START_WINDOW_SECONDS = 600
 const STARTS_PER_ADDRESS = 30
 /**
  * Starts per client in a window. With one device client it is installation-wide, and on a composition that names no
- * client address it is the only bound, so it bounds the attempt rows a flood writes (each expires in five minutes)
+ * client address it is the only bound, so it bounds the attempt rows a flood writes (each expires in thirty minutes)
  * rather than a person: keeping it full takes a sustained flood, and a full bucket refuses for one minute only.
  */
 const STARTS_PER_CLIENT = 10_000

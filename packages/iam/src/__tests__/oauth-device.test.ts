@@ -155,6 +155,28 @@ describe('the device authorization endpoint', () => {
 		expect(await errorOf(await start('deploy:alpha', [RESOURCE, RESOURCE]))).toBe('invalid_request')
 	})
 
+	test('gives the person thirty minutes to decide, polled every five seconds', async () => {
+		const { harness, start, poll, page } = await fixture()
+		const before = unixNow()
+		const response = await start()
+		const body: unknown = await response.json()
+		expect(Reflect.get(Object(body), 'expires_in')).toBe(1800)
+		expect(Reflect.get(Object(body), 'interval')).toBe(5)
+		const deviceCode = Reflect.get(Object(body), 'device_code')
+		const userCode = Reflect.get(Object(body), 'user_code')
+		if (typeof deviceCode !== 'string' || typeof userCode !== 'string') throw new Error('no device codes')
+		const row = harness.sqlite.query<{ created_at: number; expires_at: number }, []>('SELECT created_at, expires_at FROM oauth_device_authorizations')
+			.get()
+		expect(row?.created_at).toBeGreaterThanOrEqual(before)
+		expect((row?.expires_at ?? 0) - (row?.created_at ?? 0)).toBe(1800)
+
+		// Twenty-nine minutes on, the code still reaches its attempt and the approval still gives a grant.
+		harness.sqlite.run('UPDATE oauth_device_authorizations SET created_at = created_at - 1740, expires_at = expires_at - 1740')
+		expect(await errorOf(await poll(deviceCode))).toBe('authorization_pending')
+		expect((await page({ user_code: userCode, decision: 'approve', lifetime: '3600' })).status).toBe(200)
+		expect((await tokenBody(await poll(deviceCode))).access_token).toBeString()
+	})
+
 	test('limits starts per client address, and a start refused there does not count against the shared bucket', async () => {
 		const { f, start } = await fixture()
 		for (let attempt = 0; attempt < 30; attempt++) expect((await start('deploy:alpha', [RESOURCE], [], '203.0.113.7')).status).toBe(200)
