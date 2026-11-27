@@ -175,6 +175,7 @@ export async function prepareRegistration(
 		|| prepared.environment.appId !== requested.app.id
 		|| prepared.environment.env !== requested.environment.env
 		|| prepared.environment.publicOrigin !== requested.environment.publicOrigin
+		|| prepared.environment.domain !== requested.environment.domain
 		|| !sameNamespaceCoordinates(prepared.environment.namespace, requested.environment.namespace, c.provider.id)
 	) throw new Error('provider returned a prepared registration for different coordinates')
 	return normalizeRegistration(c.provider, prepared.app, prepared.environment)
@@ -188,6 +189,7 @@ export function normalizeRegistration(provider: ControlProvider, app: ProviderAp
 			|| registration.environment.appId !== app.id
 			|| registration.environment.env !== environment.env
 			|| registration.environment.publicOrigin !== environment.publicOrigin
+			|| registration.environment.domain !== environment.domain
 			|| registration.environment.target.provider !== provider.id
 			|| registration.environment.artifact.provider !== provider.id
 			|| !sameNamespaceCoordinates(registration.environment.namespace, environment.namespace, provider.id)

@@ -6,6 +6,7 @@
 import type { AuthContext } from '@fabrika/auth'
 import { type ApprovalPolicy, STRICT_POLICY } from '@fabrika/control-contract'
 import { type SqlDatabase, SqlDeployLocks } from '@fabrika/platform'
+import type { ControlProvider } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { storedPolicy } from '../approval/categories'
 import { ControlRegistryRepository, type ControlRepositories, createControlRepositories } from '../db'
@@ -176,6 +177,31 @@ for (const backend of backends) {
 			// Without a trigger ref, the key registers prod; a person names one.
 			expect((await register(key, 'prod', null)).status).toBe(200)
 			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 1, trigger_ref: null })
+		})
+
+		test('a person registers an app whose environment starts protected with a domain', async () => {
+			const f = await open()
+			const registered = await rpcResult(
+				rpcRequest('register', { id: 'app', repoUrl: 'github.com/acme/app', env: 'prod', triggerRef: null, domain: 'app.example.com', ...envelopes }),
+				f.as(manager),
+			)
+			expect(registered.status).toBe(200)
+			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 1, domain: 'app.example.com' })
+		})
+
+		test('a provider that names a domain the registration did not is refused, so no key gets one past the person rule', async () => {
+			const f = await open()
+			const provider: ControlProvider = {
+				...fakeControlProvider,
+				normalizeRegistration: ({ app, environment }) => ({ app, environment: { ...environment, domain: 'app.example.com' } }),
+			}
+			const refused = await rpcResult(
+				rpcRequest('register', { id: 'app', repoUrl: 'github.com/acme/app', env: 'prod', triggerRef: null, ...envelopes }),
+				{ ...f.as(key), provider },
+			)
+			expect(refused.status).toBe(400)
+			expect(await refused.text()).toContain('provider returned a registration for different coordinates')
+			expect(await f.registry.getAppEnv('app', 'prod')).toBeNull()
 		})
 
 		test("a person's own key is a key: with a bearer, the person cannot redirect a protected environment", async () => {
