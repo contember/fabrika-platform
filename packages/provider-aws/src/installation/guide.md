@@ -28,8 +28,8 @@ fabrika platform install --provider=aws \
   --commit=<40 hex> --base-image=<image@sha256:...>
 ```
 
-**The certificates first.** For each host the run takes the account's newest certificate of exactly that host,
-issued or waiting for its record; for a host with none it asks, then requests one. Until every one is issued it prints
+**The certificates first.** For each host the run takes the account's certificate of exactly that host (an
+issued one before one waiting for its record, the newest of each); for a host with none it asks, then requests one. Until every one is issued it prints
 the DNS records to add (`CNAME <name> -> <value>`) and stops before anything else. Add them, and keep them: ACM renews
 each certificate with its record. Run the same command again once ACM has issued them (minutes, once the records
 resolve); it finds the same certificates and goes on. To use a certificate you already have, name it

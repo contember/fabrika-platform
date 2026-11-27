@@ -222,6 +222,12 @@ describe("the AWS installation's commands", () => {
 		const account = fakeAccount()
 		await run('install', INSTALL, account).result
 		expect(account.store.get(AWS_INSTALLATION_RECORD)).toBe(RECORD)
+		// Resumed with another host: refused as a resumed install's change, before the record's certificate is read
+		// against a host the installation does not have.
+		const otherHost = run('install', INSTALL.map((arg) => (arg.startsWith('--iam-host=') ? '--iam-host=login.example.com' : arg)), account)
+		await expect(otherHost.result).rejects.toThrow(
+			"an install that stopped part way is resumed with its own choices, and these differ: IAM's host from iam.example.com to login.example.com",
+		)
 		// Resumed with the platform network moved: refused, naming the change, before anything is applied.
 		const moved = run('install', [...INSTALL, '--platform-vpc-cidr=10.90.0.0/16'], account)
 		await expect(moved.result).rejects.toThrow('the platform network range from 10.81.0.0/16 to 10.90.0.0/16')

@@ -15,6 +15,8 @@ const described = (change: Record<string, unknown> = {}) => ({
 		CertificateArn: ARN,
 		DomainName: HOST,
 		Status: 'PENDING_VALIDATION',
+		SubjectAlternativeNames: [HOST],
+		Type: 'AMAZON_ISSUED',
 		DomainValidationOptions: [{ DomainName: HOST, ValidationStatus: 'PENDING_VALIDATION', ResourceRecord: RECORD }],
 		...change,
 	},
@@ -68,6 +70,15 @@ describe('acmClient', () => {
 				{ DomainValidationOptions: [{ DomainName: HOST, ResourceRecord: { ...RECORD, Value: 'evil value <script>' } }] },
 				{ DomainValidationOptions: [{ DomainName: 'other.example.com', ResourceRecord: RECORD }] },
 				{ DomainValidationOptions: [{ DomainName: HOST, ResourceRecord: RECORD }, { DomainName: HOST, ResourceRecord: RECORD }] },
+				// Another name beside the host, a wildcard, or no names said: never exactly one host.
+				{ SubjectAlternativeNames: [HOST, 'control.example.com'] },
+				{ SubjectAlternativeNames: ['*.example.com'] },
+				{ SubjectAlternativeNames: undefined },
+				// Imported or private: no validation options say what it covers, and nothing here requested it.
+				{ Type: 'IMPORTED', SubjectAlternativeNames: [HOST, 'control.example.com'], DomainValidationOptions: undefined, Status: 'ISSUED' },
+				{ Type: 'IMPORTED', DomainValidationOptions: undefined, Status: 'ISSUED' },
+				{ Type: 'PRIVATE', DomainValidationOptions: undefined, Status: 'ISSUED' },
+				{ Type: undefined },
 			]
 		) {
 			const { options } = fakeAws(ACM, { DescribeCertificate: () => described(change) })
@@ -101,7 +112,7 @@ describe('acmPlatformCertificates', () => {
 		...change,
 	})
 
-	test("finds the account's certificates for exactly the host across pages, newest first; one naming more, imported or private is none", async () => {
+	test("finds the account's certificates for exactly the host across pages, issued first; one naming more, imported or private is none", async () => {
 		const { options, calls } = fakeAws(ACM, {
 			ListCertificates: (body) =>
 				typeof body === 'object' && body !== null && 'NextToken' in body
@@ -119,9 +130,10 @@ describe('acmPlatformCertificates', () => {
 					},
 		})
 		const found = await acmPlatformCertificates(options).findCertificates(HOST)
+		// The issued one before a later request still waiting: an abandoned request does not hide a usable certificate.
 		expect(found).toEqual([
-			{ arn: arn(4), host: HOST, status: 'PENDING_VALIDATION', createdAt: 1_700_000_004 },
 			{ arn: arn(1), host: HOST, status: 'ISSUED', createdAt: 1_700_000_001 },
+			{ arn: arn(4), host: HOST, status: 'PENDING_VALIDATION', createdAt: 1_700_000_004 },
 		])
 		expect(calls.map((call) => call.body)).toEqual([
 			{ CertificateStatuses: ['PENDING_VALIDATION', 'ISSUED'], MaxItems: 1000 },

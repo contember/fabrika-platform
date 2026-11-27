@@ -198,7 +198,8 @@ function certificateArns(certificates: readonly AwsSlotCertificate[]): Record<Aw
 
 /**
  * An install's certificates, each issued, or `null` once the run has said what is still missing: the record's or the
- * named ones, else the newest the account holds for exactly the host, else one requested after its own question.
+ * named ones, else one the account holds for exactly the host (issued first, then the newest), else one requested
+ * after its own question.
  * Nothing waits for a DNS record: the run stops, and run again, it finds the same certificates.
  */
 async function installCertificates(
@@ -207,6 +208,12 @@ async function installCertificates(
 	acm: AwsCertificatesWhere,
 ): Promise<Record<AwsCertificateSlot, string> | null> {
 	const { options, log } = input
+	if (held !== null) {
+		// A resumed install with another host, range or environment is refused for that, before any certificate is read
+		// against a host the installation does not have.
+		const refused = awsChoiceChanges(held, awsInstallChoices(options, awsPlanCertificates(held.plan))).refused
+		if (refused.length > 0) throw resumedWithOtherChoices(refused)
+	}
 	// A resumed install takes the record's certificate wherever it names none: never a new one.
 	const chosen = held === null ? options.certificates : { ...awsPlanCertificates(held.plan), ...options.certificates }
 	const settled = await settleAwsCertificates(acm, options.hosts, chosen)
@@ -227,6 +234,11 @@ async function installCertificates(
 	return null
 }
 
+/** A resumed install's refusal, naming each choice that differs from the record. */
+function resumedWithOtherChoices(refused: readonly string[]): Error {
+	return new Error(`aws: an install that stopped part way is resumed with its own choices, and these differ: ${refused.join('; ')}`)
+}
+
 /** The choices this run applies, refused where they would change what may not change; the changes it names. */
 async function settledChoices(
 	input: AwsPlatformRunInput,
@@ -239,9 +251,7 @@ async function settledChoices(
 		const choices = awsInstallChoices(input.options, certificates)
 		if (held === null) return { choices, named: [] }
 		const changes = awsChoiceChanges(held, choices)
-		if (changes.refused.length > 0) {
-			throw new Error(`aws: an install that stopped part way is resumed with its own choices, and these differ: ${changes.refused.join('; ')}`)
-		}
+		if (changes.refused.length > 0) throw resumedWithOtherChoices(changes.refused)
 		return { choices, named: changes.named }
 	}
 	if (held === null) return { choices: await rebuiltChoices(input), named: [`the installation record, written back from the choices named`] }

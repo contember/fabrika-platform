@@ -5,11 +5,11 @@
 //   A balancer serves a certificate to every client whose SNI it matches, so a certificate that also covered a
 //   platform host, put on the applications' listener, would let a rule Control's role writes serve that host
 //   (`balancers.ts`). A named one is read back and refused when it names another host, several, or none ACM
-//   describes; when it is another account's or region's (a balancer takes only its own region's); or when it is not
-//   issued, or about to be.
-// - **An install requests what is missing.** A host named without a certificate takes the newest one the account
-//   holds for exactly that host, issued or waiting for its DNS record; with none, the install requests one, validated
-//   by DNS, after the operator's one confirmation. Until every one is issued, the install prints the records to add and
+//   describes; when ACM did not issue it (an imported or private one, whose names nothing here requested); when it is
+//   another account's or region's (a balancer takes only its own region's); or when it is not issued, or about to be.
+// - **An install requests what is missing.** A host named without a certificate takes one the account holds for
+//   exactly that host (an issued one before one waiting for its DNS record, the newest of each); with none, the install
+//   requests one, validated by DNS, after a question of its own. Until every one is issued, the install prints the records to add and
 //   stops before any stack; run again, it finds the same certificates and goes on. An install resumed from its record
 //   takes the record's certificates, never a new one.
 // - **An upgrade requests nothing.** Each certificate is the record's or the one named, checked the same way; one no
@@ -72,7 +72,9 @@ export async function checkedAwsCertificate(where: AwsCertificatesWhere, slot: A
 	} catch (error) {
 		// ACM's answer names several hosts, a wildcard, or one of another form: never exactly one host.
 		if (error instanceof AwsError && error.code === 'invalid_answer') {
-			throw new Error(`aws: ${flag} ${arn} is not a certificate of exactly ${host}; each certificate names its own host alone`)
+			throw new Error(
+				`aws: ${flag} ${arn} is not a certificate ACM issued for exactly ${host}; each names its own host alone, and none is imported or private`,
+			)
 		}
 		throw error
 	}
@@ -95,7 +97,7 @@ export interface AwsSlotCertificate extends AwsSettledCertificate {
 
 /**
  * An install's, reading and never writing: each slot's certificate from `chosen` (named, or the record's), checked;
- * else the newest the account holds for exactly its host; else none, to request.
+ * else the first the account holds for exactly its host (issued before pending, newest first); else none, to request.
  */
 export async function settleAwsCertificates(
 	where: AwsCertificatesWhere,

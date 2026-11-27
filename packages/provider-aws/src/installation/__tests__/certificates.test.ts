@@ -3,7 +3,8 @@
 // its record; and the statuses an install waits for, goes on with, or refuses.
 
 import { describe, expect, test } from 'bun:test'
-import type { Certificate } from '../../aws/acm'
+import { fakeAws } from '../../__tests__/helpers/fake-aws'
+import { ACM, acmPlatformCertificates, type Certificate } from '../../aws/acm'
 import { AwsError } from '../../aws/json'
 import { awsCertificatesIssued, type AwsCertificatesWhere, awsCertificateToken, checkedAwsCertificate, requestAwsCertificates } from '../certificates'
 
@@ -36,8 +37,24 @@ describe("the installation's certificates", () => {
 			throw new AwsError('DescribeCertificate', 'invalid_answer', 200, null, false)
 		})
 		await expect(checkedAwsCertificate(several, 'iam', HOST, ARN)).rejects.toThrow(
-			`--iam-certificate ${ARN} is not a certificate of exactly iam.example.com`,
+			`--iam-certificate ${ARN} is not a certificate ACM issued for exactly iam.example.com`,
 		)
+		// Through the client: an imported certificate of the applications' host that also names Control's host, issued
+		// and with no validation options, is refused by its flag before it could reach the applications' listener.
+		const imported = fakeAws(ACM, {
+			DescribeCertificate: () => ({
+				Certificate: {
+					CertificateArn: ARN,
+					DomainName: 'apps.example.com',
+					SubjectAlternativeNames: ['apps.example.com', 'control.example.com'],
+					Status: 'ISSUED',
+					Type: 'IMPORTED',
+				},
+			}),
+		})
+		await expect(
+			checkedAwsCertificate({ ...where(async () => null), acm: acmPlatformCertificates(imported.options) }, 'apps', 'apps.example.com', ARN),
+		).rejects.toThrow(`--apps-certificate ${ARN} is not a certificate ACM issued for exactly apps.example.com`)
 		// Any other failure is ACM's own, passed on.
 		const denied = where(async () => {
 			throw new AwsError('DescribeCertificate', 'AccessDeniedException', 400, null, false)

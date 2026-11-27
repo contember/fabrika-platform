@@ -743,9 +743,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          A lost record is written back by an upgrade that names every choice, its ranges, hosts and environment checked
          against what the installation holds.
        - **The certificates** (built, `installation/certificates.ts`, `acmPlatformCertificates` in `src/aws/acm.ts`):
-         each of the four is of exactly its host (no wildcard, no other name), in the installation's account and region,
+         each of the four is one ACM issued (never imported or private) of exactly its host (no wildcard, no other
+         name: `DescribeCertificate`'s `SubjectAlternativeNames` is the host alone), in the installation's account and region,
          and issued before any stack. A named one is read back and refused otherwise. An install takes, for a host it
-         names none for, the account's newest certificate of exactly that host (`ListCertificates`, the operator's
+         names none for, the account's certificate of exactly that host, issued before pending, the newest of each (`ListCertificates`, the operator's
          client alone), or asks and requests one validated by DNS under a token derived from the host; until every one
          is issued it prints the records and stops, and run again it finds them. A resumed install takes the record's.
          An upgrade requests none, and refuses one no longer issued until another is named.
@@ -943,7 +944,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     stack settles within the hour the run waits, and that `RunTask` from the operator's credentials places the setup
     in the platform's cluster and subnets as named, and that a fresh install's services reach each other through
     Service Connect after the run's one redeploy (and, without it, do not: what the redeploy rests on). For the
-    certificates: `ListCertificates`' summary fields (`Type`, `CreatedAt`, the alternative names) as the operator's
+    certificates: that `DescribeCertificate` answers `SubjectAlternativeNames` and `Type` for every certificate, a
+    fresh request included (the client refuses one without them), `ListCertificates`' summary fields (`Type`, `CreatedAt`, the alternative names) as the operator's
     client reads them, that a fresh request names its DNS record within the minute the run reads it again, and that a
     certificate requested again for a host whose record is already in DNS is issued without touching DNS.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
