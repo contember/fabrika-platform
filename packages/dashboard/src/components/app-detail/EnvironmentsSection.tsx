@@ -175,11 +175,7 @@ function EnvironmentRow(
 						<ConfirmDialog
 							title="Delete environment"
 							confirmLabel="Delete environment"
-							body={
-								<p>
-									Delete environment <strong>{env.env}</strong> of <strong>{appId}</strong>?
-								</p>
-							}
+							body={<DeleteEnvironmentConsequences appId={appId} env={env.env} />}
 							onConfirm={remove}
 							onClose={() => setConfirming(false)}
 						/>
@@ -210,6 +206,28 @@ function EnvironmentRow(
 					</td>
 				</tr>
 			)}
+		</>
+	)
+}
+
+/** What deleting an environment removes and what it leaves, read before it happens. */
+export function DeleteEnvironmentConsequences({ appId, env }: { appId: string; env: string }) {
+	return (
+		<>
+			<p>
+				Delete environment <strong>{env}</strong> of <strong>{appId}</strong>?
+			</p>
+			<p>Goes:</p>
+			<ul>
+				<li>its settings here: domain, deploy trigger and placement, so a push no longer deploys {env};</li>
+				<li>its list of backups.</li>
+			</ul>
+			<p>Stays:</p>
+			<ul>
+				<li>what runs at the hosting, and its data: the platform removes no service or database there;</li>
+				<li>its deploy history;</li>
+				<li>secrets and variables set for {env} only, and its approval rules: an environment added again as {env} starts with them.</li>
+			</ul>
 		</>
 	)
 }

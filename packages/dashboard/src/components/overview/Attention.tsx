@@ -7,6 +7,7 @@ import {
 	boundedCount,
 	expiringKey,
 	isProduction,
+	missingSecrets,
 	OVERVIEW_APP_LIMIT,
 	OVERVIEW_ISSUE_LIMIT,
 	OVERVIEW_KEY_LIMIT,
@@ -25,6 +26,7 @@ type Destination =
 	| { to: 'approvals/detail' | 'runs/detail' | 'namespaces/detail' | 'access/credentials/keys/detail'; params: { id: string } }
 	| { to: 'mail'; params: { state: string } }
 	| { to: 'apps/data'; params: { id: string; env: string } }
+	| { to: 'apps/secrets'; params: { id: string } }
 
 type Kind = 'operations' | 'delivery' | 'mail' | 'access'
 interface AttentionItem {
@@ -61,6 +63,8 @@ function TargetLink({ target, children, className }: { target: Destination; chil
 		case 'mail':
 			return <Link to={target.to} params={target.params} className={className}>{children}</Link>
 		case 'apps/data':
+			return <Link to={target.to} params={target.params} className={className}>{children}</Link>
+		case 'apps/secrets':
 			return <Link to={target.to} params={target.params} className={className}>{children}</Link>
 	}
 }
@@ -103,6 +107,23 @@ function attentionItems(data: OverviewData, states: ReadonlyMap<string, Environm
 			target: { to: 'apps/data', params: { id: env.appId, env: env.env } },
 			// A production boot failure is an outage, as a failed production check is; a running operation only asks to wait.
 			priority: running ? 3 : !isProduction(env.env) ? 2 : state.kind === 'boot-failure' ? 0 : 1,
+		})
+	}
+	for (const { env, names } of missingSecrets(data)) {
+		const shown = names.slice(0, 3).join(', ')
+		items.push({
+			id: `secrets:${env.appId}:${env.env}`,
+			kind: 'delivery',
+			lamp: 'run',
+			title: `${env.appId} / ${env.env}: ${names.length === 1 ? '1 secret' : `${names.length} secrets`} missing`,
+			context: `${names.length > 3 ? `${shown} and ${names.length - 3} more` : shown} ${
+				names.length === 1 ? 'is' : 'are'
+			} set on another environment, not on ${env.env}`,
+			time: null,
+			action: 'Set secrets',
+			target: { to: 'apps/secrets', params: { id: env.appId } },
+			// A deploy that needs a missing secret fails before anything changes, so it waits for the next deploy, not an outage.
+			priority: isProduction(env.env) ? 2 : 3,
 		})
 	}
 	for (const source of data.health.data?.sources ?? []) {
@@ -233,8 +254,9 @@ export function Attention({ data, states }: { data: OverviewData; states: Readon
 	const items = attentionItems(data, states)
 	const matching = items.filter((item) => filter === 'all' || item.kind === filter)
 	const visible = expanded ? matching : matching.slice(0, 8)
-	const unavailable = [data.health, data.issues, data.approvals, data.failures, data.namespaces, data.mailHeld, data.mailFailed, data.keys]
-		.some((read) => read.problem === 'unavailable')
+	const unavailable =
+		[data.health, data.issues, data.approvals, data.failures, data.namespaces, data.mailHeld, data.mailFailed, data.keys, ...data.secrets.values()]
+			.some((read) => read.problem === 'unavailable')
 		|| [...states.values()].some((state) => state.kind === 'unknown' && state.reason === 'unavailable')
 	const checking = [...states.values()].some((state) => state.kind === 'reading')
 	return (
@@ -290,7 +312,7 @@ export function Attention({ data, states }: { data: OverviewData; states: Readon
 			)}
 			{(data.apps.data?.items.length ?? 0) > OVERVIEW_APP_LIMIT && (
 				<p className="ov-section-note">
-					Data state checks cover the first {OVERVIEW_APP_LIMIT} applications. <Link to="apps">View all applications</Link>
+					Data state and missing secret checks cover the first {OVERVIEW_APP_LIMIT} applications. <Link to="apps">View all applications</Link>
 				</p>
 			)}
 			{data.keys.data?.limited && (

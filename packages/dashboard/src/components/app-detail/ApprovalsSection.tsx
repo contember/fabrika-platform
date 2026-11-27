@@ -63,9 +63,8 @@ export function ApprovalsSection({ appId, envs, onDone }: { appId: string; envs:
 				<h2>What lets a change through</h2>
 			</div>
 			<p className="section-note">
-				On an environment with approval on, a change that needs closer review, a new permission or what an agent or a key does waits for a person with
-				{' '}
-				<code>access.approve</code>, as its rules say. The audit log records each change of these rules.
+				On an environment with approval on, a change that needs closer review, a new permission or what an agent or a key does waits for a person who
+				may approve on that environment, as its rules say. The audit log records each change of these rules.
 			</p>
 			<Table
 				colSpan={4}

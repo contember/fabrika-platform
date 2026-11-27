@@ -1,12 +1,13 @@
 import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
-import { type AppEnvDto, CONTROL_ACTIONS, type RunDto } from '@fabrika/control-contract'
+import { type AppEnvDto, type AppSecretDto, CONTROL_ACTIONS, type RunDto } from '@fabrika/control-contract'
 import type { ApiKeyDetail, IamAdminRpcContract } from '@fabrika/iam-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import type { OperationsSourceHealthDto } from '@fabrika/operations-contract/operator-api'
 import { actorIdsToResolve, resolveActors } from '../access/lib/audit-actors'
 import { createOperationsClient } from '../operations/client'
 import { createControlClient } from './api'
-import { type ConsoleCaller, holdsGlobally, mayDo, mayOpen } from './console-access'
+import { cellAt, layersByName } from './config-layers'
+import { type ConsoleCaller, holdsAtApp, holdsGlobally, mayDo, mayOpen } from './console-access'
 import { runtimeHealth } from './health'
 import { recentAuditChangePage } from './iam'
 
@@ -82,6 +83,17 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 		)
 		return environments
 	})
+	// Secrets need `secret.manage` at the application; an application the caller may not manage them on is not read.
+	const secretsPromise = appsPromise.then(async (apps) => {
+		const secrets = new Map<string, OverviewRead<AppSecretDto[]>>()
+		await Promise.all(
+			(apps.data?.items ?? []).slice(0, OVERVIEW_APP_LIMIT).map(async (app) => {
+				const allowed = caller.access === null || holdsAtApp(caller.access, CONTROL_ACTIONS.SECRET_MANAGE, app.id)
+				secrets.set(app.id, await overviewRead(allowed, () => control.apps.secrets.list({ appId: app.id }).then((list) => list.items)))
+			}),
+		)
+		return secrets
+	})
 	const [apps, environments, namespaces, runs, activeRuns, failures, approvals, health, issues, mailHeld, mailFailed, access] = await Promise.all(
 		[
 			appsPromise,
@@ -98,6 +110,7 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 			accessPromise,
 		],
 	)
+	const secrets = await secretsPromise
 	const publishedRuns = new Map<string, OverviewRead<RunDto>>()
 	const publicationIds = new Set(
 		[...environments.values()].flatMap((read) => read.data?.items.flatMap((env) => env.publishedRunId === null ? [] : [env.publishedRunId]) ?? []),
@@ -110,6 +123,7 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 		caller,
 		apps,
 		environments,
+		secrets,
 		namespaces,
 		runs,
 		activeRuns,
@@ -133,6 +147,22 @@ export type OverviewData = Awaited<ReturnType<typeof loadOverview>>
 /** Every environment the overview read, of the applications whose environments it reads. */
 export function overviewEnvironments(data: Pick<OverviewData, 'environments'>): AppEnvDto[] {
 	return [...data.environments.values()].flatMap((read) => read.data?.items ?? [])
+}
+
+/**
+ * The secrets each environment lacks that another environment of its application has, by name: neither its own value
+ * nor one for all environments. Control does not answer which secrets a release declares, so this is the gap the
+ * Secrets tab marks "missing", not a deploy's verdict.
+ */
+export function missingSecrets(data: Pick<OverviewData, 'environments' | 'secrets'>): { env: AppEnvDto; names: string[] }[] {
+	const gaps: { env: AppEnvDto; names: string[] }[] = []
+	for (const env of overviewEnvironments(data)) {
+		const secrets = data.secrets.get(env.appId)?.data
+		if (secrets === undefined || secrets === null) continue
+		const names = layersByName(secrets).filter((row) => cellAt(row, env.env).kind === 'missing').map((row) => row.name)
+		if (names.length > 0) gaps.push({ env, names })
+	}
+	return gaps
 }
 
 export function isProduction(environment: string): boolean {

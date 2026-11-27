@@ -5,9 +5,10 @@ import { Icon } from '../../components/Icon'
 import { QuerySearch } from '../../components/QuerySearch'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
+import { RunDuration } from '../../components/RunDuration'
 import { api, ApiError, type RunDto } from '../../lib/api'
 import { holdsGlobally, opensApplications, scopedRunReads } from '../../lib/console-access'
-import { fmtAgo, fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
+import { fmtAgo, fmtDate, shortRef, shortSha } from '../../lib/format'
 import type { QueryLanguage } from '../../lib/query-search'
 import { consoleSession } from '../../lib/session'
 
@@ -171,7 +172,9 @@ export default createPage()
 								<code>{shortSha(run.commitSha)}</code>
 							</td>
 							<td className="muted small">{run.trigger}</td>
-							<td className="small">{fmtDuration(run.startedAt, run.finishedAt)}</td>
+							<td className="small">
+								<RunDuration run={run} />
+							</td>
 							<td className="muted small" title={fmtDate(run.createdAt)}>{fmtAgo(run.createdAt)}</td>
 						</tr>
 					))}

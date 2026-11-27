@@ -53,7 +53,7 @@ export default createPage()
 				<div className="danger-zone">
 					<div className="danger-zone-copy">
 						<strong>Delete this app</strong>
-						Removes its environments and secret references. Run history is kept.
+						Removes its environments, secrets, variables and deploy history. What runs at the hosting stays.
 					</div>
 					<span className="spacer" />
 					<button type="button" className="danger" onClick={() => setConfirming(true)}>
@@ -65,11 +65,7 @@ export default createPage()
 					<ConfirmDialog
 						title="Delete app"
 						confirmLabel="Delete app"
-						body={
-							<p>
-								Delete app <strong>{app.id}</strong> and all its environments and secrets? Run history is kept.
-							</p>
-						}
+						body={<DeleteAppConsequences appId={app.id} envs={envs.map((env) => env.env)} />}
 						onConfirm={deleteApp}
 						onClose={() => setConfirming(false)}
 					/>
@@ -77,6 +73,28 @@ export default createPage()
 			</AppFrame>
 		)
 	})
+
+/** What deleting an application removes and what it leaves, read before it happens. */
+export function DeleteAppConsequences({ appId, envs }: { appId: string; envs: readonly string[] }) {
+	return (
+		<>
+			<p>
+				Delete app <strong>{appId}</strong>?
+			</p>
+			<p>Goes:</p>
+			<ul>
+				<li>{envs.length === 0 ? 'its registration' : `its environments (${envs.join(', ')}) and their settings`};</li>
+				<li>its secrets and variables;</li>
+				<li>its deploy history.</li>
+			</ul>
+			<p>Stays:</p>
+			<ul>
+				<li>what runs at the hosting, and its data: the platform removes no service or database there;</li>
+				<li>each environment's approval rules: an app registered again as {appId} starts with them.</li>
+			</ul>
+		</>
+	)
+}
 
 /** Listing namespaces needs `namespace.manage` globally; Control's refusal leaves the placement picker empty, an outage throws. */
 function refusedAsNone(cause: unknown): DeploymentNamespaceDto[] {
