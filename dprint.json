@@ -25,12 +25,7 @@
 		// What `fabrika app build` writes from the SQLite migrations, verbatim, so their checksums stay the files'.
 		"**/fabrika/migrations.generated.ts",
 		// What `fabrika app build` writes from the compiled contract: one string literal, the encoded artifact verbatim.
-		"**/fabrika/contract.generated.ts",
-		// The isolation kits' fixtures, kept as the scaffold wrote them until the kits go.
-		"packages/app/src/__tests__/members-fixture/src/__tests__/endpoint-access.test.ts",
-		"packages/app/src/__tests__/members-fixture/src/db/__tests__/*.policy-isolation.test.ts",
-		"packages/app/src/__tests__/app-wide-fixture/src/__tests__/endpoint-access.test.ts",
-		"packages/app/src/__tests__/app-wide-fixture/src/db/__tests__/*.policy-isolation.test.ts"
+		"**/fabrika/contract.generated.ts"
 	],
 	"plugins": [
 		"https://plugins.dprint.dev/typescript-0.95.11.wasm",

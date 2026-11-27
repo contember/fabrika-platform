@@ -41,6 +41,7 @@ bun test src/__tests__/clamscan.test.ts         # the ClamAV scanner: stand-in b
 bun test src/__tests__/archive.test.ts          # the archive check: LZMA, damaged, encrypted, nested, bombs
 bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, a webhook bound by binds (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/members-lookup.test.ts   # ctx.members below its dimension: types, the kit, a generated member field (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/members-isolation.test.ts  # the isolation kits over members-fixture/: a chain's policy probes, denied, leaked and own (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/terminal.test.ts        # a terminal: the identification page, ctx.principal.terminal, ctx.terminals over a fake IAM
 bun test src/__tests__/test-kit-terminal.test.ts  # the kit's IAM opens identifications and answers ctx.terminals under IAM's rules
 bun test src/__tests__/public-admission.test.ts # a public procedure's shared buckets and challenge through boot (needs FABRIKA_TEST_POSTGRES_URL)
@@ -1195,8 +1196,8 @@ vocabulary (`packages/db/CLAUDE.md`).
 - The hook tests are DOM tests (`src/react/__tests__/*.test.tsx`, happy-dom through `dom.ts`, which keeps Bun's
   `fetch`): run them with `bun test --isolate src/react`. The root `bun run test` runs them in `test:dom`.
 - **The isolation kits (`@fabrika/app/testing/isolation`) add no second pipeline.** They back fabrika's own
-  enforcement tests (`policy-enforcement.property.test.ts` and the kit tests over `access-fixture/`,
-  `members-fixture/` and `app-wide-fixture/`) and the leak sweep; the skill teaches an application `leakSweep` only.
+  enforcement tests (`policy-enforcement.property.test.ts`, the kit tests over `access-fixture/`, and
+  `members-isolation.test.ts` and `app-access.test.ts` over `members-fixture/` and `app-wide-fixture/`) and the leak sweep; the skill teaches an application `leakSweep` only.
   **The leak sweep is opt-in and generates no file.** `leakSweep` compiles the contract, plans a case per endpoint
   `on`, `in` or `over` called by a person or a script (none for one that declares `unscoped`, a hint instead), and
   runs each through `endpointAccessKit`'s `swept`: `leaked`, then, on a query, the own scope asked again, and once more
@@ -1234,7 +1235,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   `app` endpoints over one row `seedRow` writes. A leak scans every value of
   the other row's chain, so an outer dimension's value is a leak too. A subpath of its
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root
-  kit does not. The tests committed under the three fixtures are frozen with the kits: edit them by hand.
+  kit does not.
 - **`testKit(…).runJob(name)` runs a cron job once** through `boot`'s own job runner (`application.jobs.run`): its
   lease, its key's signed actions, its fenced writes. A `link` test caller binds its key with `{ link: { mount, chain } }`.
 - **The isolation kits catch mistakes; the data layer is the enforcement.** They catch what an

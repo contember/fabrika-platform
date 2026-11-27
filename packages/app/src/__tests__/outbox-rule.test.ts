@@ -1,5 +1,5 @@
-// The rule the generated tests hold a request handler to: it calls no outside service; it records an outbox row in its
-// own transaction, and a job sends it. The generated cases boot the application without its variables, so a handler
+// The rule the endpoint access kit holds a request handler to: it calls no outside service; it records an outbox row in its
+// own transaction, and a job sends it. Its cases boot the application without its variables, so a handler
 // that calls out answers 500 there, and the one that records the row answers 200. Skips cleanly when
 // FABRIKA_TEST_POSTGRES_URL is unset.
 
@@ -58,7 +58,7 @@ const deals = app.group({ callers: ['human'] }, (r) => ({
 const contract = app.contract((c) => ({ api: c.rpc('/api', { deals }), health: c.health('/healthz') }))
 
 if (postgres !== null) {
-	describe('an outbound call in the generated cases', () => {
+	describe('an outbound call in the endpoint access cases', () => {
 		const kit = endpointAccessKit(serve(contract, { database: scoped(tables), deps: mailer }), tables, postgres)
 
 		test('a handler that records an outbox row reaches its own object; one that calls out answers 500', async () => {

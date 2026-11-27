@@ -1,7 +1,7 @@
 // `ctx.members` below its dimension (WU22): a deal endpoint reads the directory of the org the deal lies in. The types
 // give every endpoint on or in a dimension under a directory the lookup, and the list only for the directory's
-// `members.list`; the test kit's directory answers both from its callers; the generated endpoint access tests fill a
-// field `members` names with a real member, so an endpoint that validates a picked person passes them. The fixture is
+// `members.list`; the test kit's directory answers both from its callers; the endpoint access kit replaces `GENERATED_MEMBER` in
+// an input with a real member, so an endpoint that validates a picked person passes them. The fixture is
 // `members-fixture/` (org → company → deal); the same lookup against the real IAM is `local-stack/__tests__/member-lookup.test.ts`.
 
 import type { App, Declared, EndpointContext, KitTypes, Unavailable } from '@fabrika/app/contract'
@@ -92,15 +92,15 @@ function caching() {
 const Result = z.strictObject({ result: z.unknown() })
 const Found = z.strictObject({ member: z.nullable(z.strictObject({ principalId: z.string(), label: z.nullable(z.string()) })) })
 
-describe('the generated endpoint access tests of an endpoint that validates a picked member', () => {
-	test("the scaffold writes the members field as the kit's member, and the committed tests are current", async () => {
+describe('the fixture of an endpoint that validates a picked member', () => {
+	test('the checker accepts the fixture', async () => {
 		expect(await checkApplication({ root: fixtureRoot })).toEqual([])
 	})
 })
 
 describe.skipIf(postgres === null)("a deal endpoint's ctx.members in the test kit", () => {
 	if (postgres === null) return
-	// Each suite boots a layer of its own: the fixture's `src/app.ts` is booted by its generated tests.
+	// Each suite boots a layer of its own: a layer binds once.
 	const kit = testKit(serve(contract, { database: scoped(tables) }), { database: postgres.database })
 	const access = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, postgres)
 

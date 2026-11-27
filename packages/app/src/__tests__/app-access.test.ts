@@ -1,7 +1,6 @@
 // Application-wide data (WU23a) through the production proxy decision and a REAL Postgres: an `app` endpoint is
 // admitted only for a global grant of its action, and its `ctx.db.app` writes the application tables and reads every
-// candidate. The generated tests' kits probe the same endpoints and tables; the fixture's own generated tests
-// (`app-wide-fixture/src/**/__tests__/`) are committed and current. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
+// candidate; the isolation kits probe the same endpoints and tables. Skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset.
 
 import { createClient, download, RpcError } from '@fabrika/app/client'
 import { type App, compileContract, type Declared, type EndpointContext, type KitTypes, type Unavailable } from '@fabrika/app/contract'
@@ -93,7 +92,7 @@ const statusOf = async (call: Promise<unknown>): Promise<number> => {
 }
 
 describe('the app access form in the artifact', () => {
-	test('the checker accepts the fixture, and its committed generated tests are what the scaffold writes', async () => {
+	test('the checker accepts the fixture', async () => {
 		expect(await checkApplication({ root: fixtureRoot })).toEqual([])
 	})
 
@@ -183,14 +182,34 @@ if (postgres !== null) {
 		})
 	})
 
-	describe('the generated tests of application-wide data', () => {
+	describe('the isolation kits over application-wide data', () => {
 		const access = endpointAccessKit(serve(contract, { database: scoped(tables) }), tables, postgres)
+		const UUID = '00000000-0000-4000-8000-000000000000'
 
-		test('the proxy refuses a holder of the action in one scope, and admits a global holder', async () => {
-			expect(await access.scoped('api.admin.add', { title: 'Nurse' })).toEqual({ status: 403 })
-			expect(await access.global('api.admin.add', { title: 'Nurse' })).toEqual({ answered: true })
-			expect(await access.scoped('api.admin.export', {})).toEqual({ status: 403 })
-			expect(await access.global('api.admin.export', {})).toEqual({ answered: true })
+		test('the proxy refuses a holder of the action in one scope, and admits a global holder, at every app endpoint', async () => {
+			const endpoints: ReadonlyArray<readonly [string, Readonly<Record<string, unknown>>]> = [
+				['api.admin.add', { title: 'Nurse' }],
+				['api.admin.audit', {}],
+				['api.admin.columns', { id: UUID }],
+				['api.admin.counts', {}],
+				['api.admin.drop', { expectVersion: 1, id: UUID }],
+				['api.admin.edit', { active: false, expectVersion: 1, id: UUID, title: 'x' }],
+				['api.admin.export', {}],
+				['api.admin.positions', {}],
+				['api.admin.reason', { label: 'x' }],
+				['api.admin.retire', { expectVersion: 1, id: UUID }],
+			]
+			for (const [endpoint, input] of endpoints) {
+				expect([endpoint, await access.scoped(endpoint, input)]).toEqual([endpoint, { status: 403 }])
+				expect([endpoint, await access.global(endpoint, input)]).toEqual([endpoint, { answered: true }])
+			}
+		})
+
+		test('the on endpoint: the candidate of another scope is 404, its answer holds nothing of it, its own is reached', async () => {
+			const input = { expectVersion: 1, id: UUID, reasonId: null }
+			expect(await access.denied('api.admin.decide', input)).toEqual({ status: 404 })
+			expect(await access.leaked('api.admin.decide', input)).toEqual({ answered: true, leaked: [] })
+			expect(await access.own('api.admin.decide', input)).toEqual({ status: 200 })
 		})
 
 		test('the policy probe of an application table: only a global holder of its actions reaches a row', async () => {
@@ -207,26 +226,55 @@ if (postgres !== null) {
 			expect((await positions.remove('scoped')).status).toBe(403)
 			expect(await positions.updateWithRead()).toEqual({ status: 200, refused: true })
 			expect(await positions.removeWithRead()).toEqual({ status: 200, refused: true })
+			expect(await positions.scopedList()).toEqual({ status: 200, rows: ['own'] })
+			expect(await positions.scopedListWithOther()).toEqual({ status: 200, refused: true })
 		})
 
-		test('the policy probe of an application table: a scoped site of its read action reads every row, of another action none', async () => {
+		test('the policy probe of an application table without delete: a scoped site of its read action reads every row, of another action none', async () => {
 			const reasons = appPolicyIsolationKit(contract, tables, 'reasons', postgres)
+			expect(await reasons.get('global')).toMatchObject({ status: 200 })
+			expect((await reasons.get('scoped')).status).toBe(403)
+			expect(await reasons.list('global')).toEqual({ status: 200, rows: ['own'] })
+			expect((await reasons.list('scoped')).status).toBe(403)
+			expect(await reasons.insert('global')).toEqual({ status: 200 })
+			expect((await reasons.insert('scoped')).status).toBe(403)
+			expect(await reasons.update('global')).toEqual({ status: 200 })
+			expect((await reasons.update('scoped')).status).toBe(403)
+			expect(await reasons.updateWithRead()).toEqual({ status: 200, refused: true })
 			expect(await reasons.scopedList()).toEqual({ status: 200, rows: ['own'] })
 			expect(await reasons.scopedListWithOther()).toEqual({ status: 200, refused: true })
 		})
 
-		test("the policy probe of the candidates' app reach: appRead lists every row, appCount counts every row and lists none", async () => {
+		test('the policy probe of a dimension table: a caller of one candidate reaches no row of another, and no column with its own read action', async () => {
+			const candidates = policyIsolationKit(contract, tables, 'candidates', postgres)
+			const own = await candidates.get('own')
+			expect(own.status).toBe(200)
+			expect(own.columns).not.toContain('notes')
+			expect(own.columns).not.toContain('score')
+			expect((await candidates.get('other')).status).toBe(404)
+			expect(await candidates.list()).toEqual({ status: 200, rows: ['own'] })
+			expect(await candidates.count()).toEqual({ status: 200, count: '1' })
+		})
+
+		test("the policy probe of the candidates' app reach: appRead lists every row with its own columns, appCount counts every row and lists or groups none", async () => {
 			const candidates = policyIsolationKit(contract, tables, 'candidates', postgres)
 			expect(await candidates.appList('candidates.export')).toEqual({ status: 200, rows: ['own', 'other'] })
+			expect(await candidates.appColumns('candidates.export')).toEqual({ status: 200, leaked: [], missing: [] })
 			expect(await candidates.appCount('candidates.count')).toEqual({ status: 200, counted: 2 })
 			expect(await candidates.appListWithCount('candidates.count')).toEqual({ status: 200, refused: true })
+			expect(await candidates.appGroupWithCount('candidates.count')).toEqual({ status: 200, refused: true })
 		})
 
 		test('the probe of an append-only application table inserts with its insert action alone', async () => {
 			const exports = appPolicyIsolationKit(contract, tables, 'exports', postgres)
+			expect(await exports.get('global')).toMatchObject({ status: 200 })
+			expect((await exports.get('scoped')).status).toBe(403)
 			expect(await exports.insert('global')).toEqual({ status: 200 })
 			expect(await exports.list('global')).toEqual({ status: 200, rows: ['own'] })
+			expect((await exports.list('scoped')).status).toBe(403)
 			expect((await exports.insert('scoped')).status).toBe(403)
+			expect(await exports.scopedList()).toEqual({ status: 200, rows: ['own'] })
+			expect(await exports.scopedListWithOther()).toEqual({ status: 200, refused: true })
 		})
 	})
 }
