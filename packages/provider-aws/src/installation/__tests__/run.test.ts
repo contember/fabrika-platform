@@ -9,6 +9,7 @@ import type { SsmPlatformSecrets } from '../../aws/ssm'
 import type { AwsPlatformApplied, AwsPlatformApplyInput } from '../apply'
 import { installationCli, readAwsInstallationGuide } from '../index'
 import { parseAwsInstallArgs, parseAwsUpgradeArgs } from '../options'
+import { awsPlatformManifest } from '../platform-manifest'
 import { type AwsPlatformClients, environmentCredentials, runAwsPlatform } from '../run'
 import { platformState } from './platform-fixture'
 
@@ -123,7 +124,9 @@ describe("the AWS installation's commands", () => {
 		expect(names.iam).toContain('FABRIKA_IAM_PASSWORD_ENABLED')
 		expect(install.store.get('/fabrika/platform/control/FABRIKA_AWS_PROXY_COMMIT_SHA')).toBe('a'.repeat(40))
 		// The console's table digest is the manifest's for these hosts.
-		expect(install.store.get('/fabrika/platform/control/FABRIKA_SERVICE_TABLE_DIGEST')).toMatch(/^[0-9a-f]{64}$/)
+		expect(install.store.get('/fabrika/platform/control/FABRIKA_SERVICE_TABLE_DIGEST')).toBe(
+			awsPlatformManifest(input.plan, { mcp: false }).deployed.controlTableDigest,
+		)
 
 		const upgrade = run('upgrade', true)
 		await upgrade.result
