@@ -74,6 +74,13 @@ export function setEnvironmentProtection(
 	)
 }
 
+/** What the editor's save bar says: never a count of changes to save while one waits for its passkey, which reads as saved. */
+export function saveStatus(changes: number, waitingForPasskey: boolean): string {
+	if (waitingForPasskey) return 'Not saved yet: the change waits for your passkey'
+	if (changes === 0) return 'No changes'
+	return `${changes} ${changes === 1 ? 'change' : 'changes'} to save`
+}
+
 export interface CategoryOption {
 	readonly category: PolicyCategory
 	readonly label: string

@@ -3016,16 +3016,23 @@ tr:has(> td > .policy-summary) > :is(th, td) {
 	background: var(--blueprint-wash);
 }
 
-/* Stays in view while the rules scroll, so the count of unsaved changes and Save are always at hand. */
-.save-bar {
+/* Stays in view while the rules scroll, so what is unsaved, Save and a change's passkey check are always at hand. */
+.save-dock {
 	position: sticky;
 	bottom: 0;
 	display: flex;
-	align-items: center;
+	flex-direction: column;
 	gap: var(--s-2);
-	padding: var(--s-3) 0;
+	padding-top: var(--s-3);
 	background: var(--floor);
 	border-top: 1px solid var(--rule);
+}
+
+.save-bar {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	padding-bottom: var(--s-3);
 }
 
 .save-bar .spacer {
@@ -3845,6 +3852,26 @@ td.row-actions > * + * {
 
 .notice-bad .icon {
 	color: var(--lamp-stop);
+}
+
+/* A decision or change waiting for its passkey check on IAM's page: what is not saved yet, the steps, until when. */
+.passkey-check {
+	border-left: 3px solid var(--lamp-run);
+}
+
+.passkey-check-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-2);
+}
+
+.passkey-check-body p {
+	margin: 0;
+}
+
+.passkey-check-steps {
+	margin: 0;
+	padding-left: var(--s-5);
 }
 
 /* What a change on the Secrets and variables tab did, above the matrix it changed. */

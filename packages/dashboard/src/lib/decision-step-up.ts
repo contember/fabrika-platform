@@ -20,13 +20,17 @@ export class NoPasskeyError extends Error {
 	}
 }
 
-/** A decision waiting for its passkey check on IAM's page: `post` sends it with the challenge's id, once the person is back. */
+/**
+ * A decision waiting for its passkey check on IAM's page: `post` sends it with the challenge's id, once the person is back;
+ * `renew` asks for a new challenge bound to the same decision, for a check that expired.
+ */
 export interface PasskeyCheck<T> {
 	readonly url: string
 	/** Epoch seconds. */
 	readonly expiresAt: number
 	readonly what: StepUpSubject
 	post(): Promise<T>
+	renew(): Promise<PasskeyCheck<T>>
 }
 
 /** A decision posted at once, or one that waits for the person to confirm it on IAM's page first. */
@@ -43,10 +47,18 @@ export async function startDecision<T>(
 	what: StepUpSubject,
 ): Promise<StartedDecision<T>> {
 	if (mode === 'none') return { kind: 'posted', value: await post(undefined) }
+	return { kind: 'confirm', check: await issueCheck(challenge, post, what) }
+}
+
+async function issueCheck<T>(
+	challenge: () => Promise<ApprovalStepUpChallenge>,
+	post: (stepUp: ApprovalStepUp | undefined) => Promise<T>,
+	what: StepUpSubject,
+): Promise<PasskeyCheck<T>> {
 	const issued = await challenge()
 	if (issued.kind === 'no-passkey') throw new NoPasskeyError(what)
 	const { challengeId, expiresAt, url } = issued.challenge
-	return { kind: 'confirm', check: { url, expiresAt, what, post: () => post({ challengeId }) } }
+	return { url, expiresAt, what, post: () => post({ challengeId }), renew: () => issueCheck(challenge, post, what) }
 }
 
 /** Why a decision was not recorded, in the console's words; `noPasskey` adds the way to add one. */
