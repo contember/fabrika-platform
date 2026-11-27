@@ -127,7 +127,7 @@ export abstract class AlertsRepository {
 			deleted = result.meta.changes === 1
 		} catch (cause) {
 			// A notification queued between the check and the delete trips the foreign key instead.
-			if (await this.channelNotified(id)) return 'notified'
+			if (await this.channelNotified(sourceId, id).catch(() => false)) return 'notified'
 			throw cause
 		}
 		if (deleted) return 'deleted'
@@ -137,8 +137,10 @@ export abstract class AlertsRepository {
 		return channel === null ? 'not_found' : 'notified'
 	}
 
-	private async channelNotified(id: string): Promise<boolean> {
-		const row = await this.db.prepare('SELECT 1 AS found FROM notification_outbox WHERE channel_id = ? LIMIT 1').bind(id).first<{ found: number }>()
+	private async channelNotified(sourceId: string, id: string): Promise<boolean> {
+		const row = await this.db.prepare('SELECT 1 AS found FROM notification_outbox WHERE source_id = ? AND channel_id = ? LIMIT 1')
+			.bind(sourceId, id)
+			.first<{ found: number }>()
 		return row !== null
 	}
 
