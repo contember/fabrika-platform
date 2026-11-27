@@ -68,17 +68,29 @@ const section = (env: AppEnvDto): string =>
 
 describe('the surface in the console', () => {
 	test('the summary counts the endpoints of each reach, most exposed first, and names only the reaches there are', () => {
-		expect(surfaceSummary([FORM, GET, SPA, { ...SPA, id: 'app.prefix', path: '/' }])).toBe('1 for anyone · 1 for machines · 2 for signed-in people')
+		expect(surfaceSummary([FORM, GET, SPA, { ...SPA, id: 'app.prefix', path: '/' }])).toBe(
+			'1 for anyone · 1 for machines and signed-in people · 2 for signed-in people',
+		)
+	})
+
+	test('a machine endpoint reads "machines" only when no signed-in person may call it', () => {
+		const machineOnly = { ...GET, id: 'api.sync', callers: ['machine'] }
+		expect(surfaceSummary([GET, machineOnly])).toBe('1 for machines and signed-in people · 1 for machines')
+		expect(surfaceSummary([machineOnly, GET])).toBe('1 for machines and signed-in people · 1 for machines')
+		const markup = section(environment('prod', [GET, machineOnly]))
+		expect(markup).toContain('<span class="chip">machines and signed-in people</span>')
+		expect(markup).toContain('<span class="chip">machines</span>')
+		expect(markup).toContain('<summary>Show 2 endpoints, for machines and signed-in people</summary>')
 	})
 
 	test('an environment shows its address, its counts by reach and a row per endpoint; only the public ones are in view at first', () => {
 		const markup = section(environment('prod', [FORM, GET]))
 		const folded = markup.slice(markup.indexOf('<details class="surface">'))
-		expect(folded).toContain('<summary>Show the other 1 endpoint, for machines</summary>')
+		expect(folded).toContain('<summary>Show the other 1 endpoint, for machines and signed-in people</summary>')
 		expect(folded).not.toContain('anyone')
 		expect(markup).toContain(
 			'<p class="surface-summary"><code>prod.notes.example.test</code>'
-				+ '<span>1 for anyone · 1 for machines, published by <a href="/runs/01a144a6-prod">run <code>01a144a6</code></a></span></p>',
+				+ '<span>1 for anyone · 1 for machines and signed-in people, published by <a href="/runs/01a144a6-prod">run <code>01a144a6</code></a></span></p>',
 		)
 		expect(markup).toContain('<span class="chip chip-accent">anyone</span>')
 		expect(markup).toContain('<td><span class="muted">nothing</span></td><td><span>no rate limit and no challenge</span></td>')

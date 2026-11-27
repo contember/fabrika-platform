@@ -420,23 +420,34 @@ describe('recovery', () => {
 	test('the confirmation states the effect of each resolution', () => {
 		const stuck = operation('0192f1aa-stuck', { kind: 'maintenance', step: 'restrict', targetMode: 'closed' })
 		const resume = renderToStaticMarkup(<RecoveryEffect operation={stuck} resolution="resume" />)
+		expect(resume).toContain(
+			'Afterwards the maintenance carries on where it stopped, and the environment ends up serving nothing but Control&#x27;s ops requests.',
+		)
 		expect(resume).toContain('<code>closed</code>')
 		expect(resume).toContain('resumes')
 		expect(resume).toContain('<code>restrict</code>')
 		expect(resume).toContain('<code>aa-stuck</code>')
 
 		const open = renderToStaticMarkup(<RecoveryEffect operation={stuck} resolution="open" />)
+		expect(open).toContain('Afterwards the environment serves requests again, on its data as the stopped maintenance operation left it.')
 		expect(open).toContain('<code>closed</code>')
 		expect(open).toContain('opens the application')
 		expect(open).toContain('does not continue')
 
 		const failed = operation('0192f1aa-migrate', { kind: 'migrate', step: 'rewind', state: 'failed', recordsBookmark: true, rollbackAndOpen: true })
 		const rollback = renderToStaticMarkup(<RecoveryEffect operation={failed} resolution="rollback" />)
+		expect(rollback).toContain('on its data as it was before the migration')
 		expect(rollback).toContain('<code>inspect</code>')
 		expect(rollback).not.toContain('<code>closed</code>')
 		expect(rollback).toContain('deploys the last succeeded commit again, as a new run')
 		expect(rollback).toContain('when the data still holds the migration, the recovery stops')
 		expect(rollback).toContain('The migration operation <code>-migrate</code> stays failed')
+
+		const openPastMigration = renderToStaticMarkup(<RecoveryEffect operation={failed} resolution="open" />)
+		expect(openPastMigration).toContain('admits every request again, with the version and data the migration left in place')
+		expect(openPastMigration).toContain('Control refuses the open while the data was rewound and no rollback has settled')
+		const resumeRestore = renderToStaticMarkup(<RecoveryEffect operation={{ ...stuck, kind: 'restore' }} resolution="resume" />)
+		expect(resumeRestore).toContain('the environment ends as that operation leaves it')
 	})
 })
 
@@ -728,10 +739,19 @@ describe('backups', () => {
 				backups={{ kind: 'not-allowed' }}
 				schedule={{ kind: 'not-allowed' }}
 				manages={false}
+				reachable
 				onChanged={() => undefined}
 			/>,
 		)
 		expect(refused).toContain('not allowed')
+	})
+
+	test('without a data channel no backup runs, so none is promised and the schedule is not offered', () => {
+		const html = markup(holding(['data.manage']), { kind: 'no-channel' }, undefined, backupPage([]))
+		expect(html).toContain('Daily backups do not run here.')
+		expect(html).not.toContain('Turn off daily backups')
+		expect(html).not.toContain('Daily backups <')
+		expect(html).not.toContain('the next daily backup')
 	})
 
 	test('the schedule reads to data.read; its toggle shows only to a data.manage holder at the environment', () => {

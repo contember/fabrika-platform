@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { editableTriggerRef, fmtAgo, fmtDuration, shortRef, shortSha } from '../lib/format'
+import { editableTriggerRef, fmtAgo, fmtDate, fmtDuration, shortRef, shortSha } from '../lib/format'
 
 // Pure formatting helpers used across the dashboard. No DOM, just the deterministic transforms.
 
@@ -78,5 +78,14 @@ describe('fmtAgo', () => {
 	})
 	test('em dash when absent', () => {
 		expect(fmtAgo(null, nowMs)).toBe('none')
+	})
+})
+
+describe('fmtDate', () => {
+	test('names the time zone it shows the time in', () => {
+		const expected = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date(1_790_000_000_000))
+			.find((part) => part.type === 'timeZoneName')?.value
+		expect(expected).toBeDefined()
+		expect(fmtDate(1_790_000_000)).toContain(`${expected}`)
 	})
 })

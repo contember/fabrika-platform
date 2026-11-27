@@ -28,8 +28,8 @@ export interface SelfAdminTarget {
 	readonly env: string
 	/** The IAM application id, `<app>@<env>`. */
 	readonly app: string
-	/** The caller's active global Admin grant there; null when it holds none. */
-	readonly held: { readonly until: number | null } | null
+	/** The caller's active global Admin there, its grant and expiry; null when it holds none. */
+	readonly held: { readonly grantId: string; readonly until: number | null } | null
 }
 
 /**
@@ -42,7 +42,7 @@ export function selfAdminTargets(input: {
 	readonly envs: readonly string[]
 	readonly iamApps: readonly AppDto[]
 	readonly administration: IamAdministrationScope
-	readonly grants: readonly Pick<GrantDto, 'app' | 'roleKey' | 'scopeType' | 'expiresAt'>[]
+	readonly grants: readonly Pick<GrantDto, 'id' | 'app' | 'roleKey' | 'scopeType' | 'expiresAt'>[]
 	readonly now: number
 }): SelfAdminTarget[] {
 	const known = new Set(input.iamApps.filter((app) => !app.installation).map((app) => app.id))
@@ -51,13 +51,12 @@ export function selfAdminTargets(input: {
 	return input.envs.flatMap((env): SelfAdminTarget[] => {
 		const app = appEnvironmentId(input.appId, env)
 		if (!known.has(app) || !administers(app)) return []
-		const active = input.grants.filter((candidate) =>
+		// IAM keeps at most one global grant of a role per person and application (`idx_grants_uq_global`).
+		const active = input.grants.find((candidate) =>
 			candidate.app === app && candidate.roleKey === ADMIN_ROLE && candidate.scopeType === null
 			&& (candidate.expiresAt === null || candidate.expiresAt > input.now)
 		)
-		if (active.length === 0) return [{ env, app, held: null }]
-		const until = active.some((grant) => grant.expiresAt === null) ? null : Math.max(...active.map((grant) => grant.expiresAt ?? 0))
-		return [{ env, app, held: { until } }]
+		return [{ env, app, held: active === undefined ? null : { grantId: active.id, until: active.expiresAt } }]
 	})
 }
 
