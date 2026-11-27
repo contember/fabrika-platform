@@ -155,6 +155,14 @@ export interface SsmPlatformSecrets {
 }
 
 const readSchema = z.object({ Parameter: z.object({ Value: z.string() }) })
+/** The platform's own parameters, the only ones the operator's client touches: an application's are Control's. */
+const PLATFORM_PARAMETERS = '/fabrika/platform/'
+
+/** A name under the platform's path, or a refusal before anything is sent. */
+function platformParameterName(name: string): string {
+	if (!name.startsWith(PLATFORM_PARAMETERS)) refuse('the parameter name (not one of the platform)')
+	return parameterName(name)
+}
 
 /**
  * Parameter Store for the operator's command alone, with the operator's credentials: the platform's parameters
@@ -163,7 +171,7 @@ const readSchema = z.object({ Parameter: z.object({ Value: z.string() }) })
 export function ssmPlatformSecrets(options: AwsJsonClientOptions): SsmPlatformSecrets {
 	const json = awsJsonClient(SSM, options)
 	const put = async (name: string, value: string, overwrite: boolean, signal?: AbortSignal) => {
-		const parameter = parameterName(name)
+		const parameter = platformParameterName(name)
 		if (value === '' || new TextEncoder().encode(value).byteLength > MAX_SECRET_BYTES) refuse('the value')
 		await json.call(
 			'PutParameter',
@@ -184,7 +192,7 @@ export function ssmPlatformSecrets(options: AwsJsonClientOptions): SsmPlatformSe
 		},
 		putSecret: (name, value, signal) => put(name, value, true, signal),
 		async readSecret(name, signal) {
-			const parameter = parameterName(name)
+			const parameter = platformParameterName(name)
 			try {
 				const read = await json.call('GetParameter', { Name: parameter, WithDecryption: true }, readSchema, signal)
 				return read.Parameter.Value

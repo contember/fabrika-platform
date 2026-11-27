@@ -33,7 +33,9 @@
 //   longer. Each published service turns the per-request timeout off and keeps the idle timeout at five minutes.
 // - **The platform proxy** routes the three hosts on one port, by host, as a namespace proxy does, behind the
 //   platform balancer's one target group; it is a Service Connect client and dials `iam:3000`, `control:3000` and
-//   `operations:3000`.
+//   `operations:3000`. A task resolves only the endpoints that existed when its service deployed, so the proxy is
+//   created after the three; their own cycle (IAM dials Control, which dials IAM) the operator's command closes by
+//   redeploying, once, each whose tasks started before the last endpoint existed (`apply.ts`).
 //
 // UNVERIFIED: the resources' properties follow the CloudFormation and ECS references, and that the services image's
 // Alpine base carries BusyBox's `wget` for the health checks; none was checked against an account.
@@ -68,6 +70,10 @@ import {
 export const AWS_SETUP_STACK = 'fabrika-platform-setup'
 /** The services' stack, applied last. */
 export const AWS_SERVICES_STACK = 'fabrika-platform-services'
+/** A platform task's ECS service, in the platform's cluster. */
+export function awsPlatformServiceName(task: AwsPlatformTask): string {
+	return `fabrika-platform-${task}`
+}
 /** The name each container's port is published under, which Service Connect addresses it by. */
 const PORT_NAME = 'http'
 /** How long a Service Connect connection may sit idle, in seconds: the HTTP default, stated. */
@@ -279,11 +285,17 @@ export function awsServicesStack(input: AwsServicesInput): AwsStack {
 	const network = (task: AwsPlatformTask, groups: readonly string[]): JsonValue => ({
 		AwsvpcConfiguration: { Subnets: [...input.platform.taskSubnetIds], SecurityGroups: [runtime.groupIds[task], ...groups], AssignPublicIp: 'ENABLED' },
 	})
-	const service = (task: AwsPlatformTask, logical: string, extra: Readonly<Record<string, JsonValue>>): JsonValue => ({
+	const service = (
+		task: AwsPlatformTask,
+		logical: string,
+		extra: Readonly<Record<string, JsonValue>>,
+		dependsOn: readonly string[] = [],
+	): JsonValue => ({
 		Type: 'AWS::ECS::Service',
+		...(dependsOn.length === 0 ? {} : { DependsOn: [...dependsOn] }),
 		Properties: {
 			Cluster: AWS_PLATFORM_CLUSTER,
-			ServiceName: `fabrika-platform-${task}`,
+			ServiceName: awsPlatformServiceName(task),
 			LaunchType: 'FARGATE',
 			PlatformVersion: 'LATEST',
 			TaskDefinition: { Ref: logical },
@@ -358,13 +370,17 @@ export function awsServicesStack(input: AwsServicesInput): AwsStack {
 		Secrets: secrets('proxy', input.variables.proxy),
 		LogConfiguration: parts.logs('proxy', 'proxy'),
 	}])
+	// Created after the three, so its first tasks already resolve their names (a task resolves only the endpoints its
+	// service's deployment saw). The three dial each other, which no order satisfies: the operator's command redeploys
+	// any of them whose tasks started before the last one was created (`apply.ts`).
+	const published = AWS_PLATFORM_SERVICE_TASKS.map((task) => `${task[0]?.toUpperCase() ?? ''}${task.slice(1)}Service`)
 	resources['ProxyService'] = service('proxy', 'ProxyTaskDefinition', {
 		NetworkConfiguration: network('proxy', []),
 		// A client of the namespace alone: it dials the three services and publishes nothing.
 		ServiceConnectConfiguration: { Enabled: true, Namespace: runtime.namespaceArn },
 		LoadBalancers: [{ ContainerName: 'proxy', ContainerPort: AWS_PLATFORM_PROXY_PORT, TargetGroupArn: input.balancers.platformProxyTargetGroupArn }],
 		HealthCheckGracePeriodSeconds: 60,
-	})
+	}, published)
 
 	return {
 		stackName: AWS_SERVICES_STACK,

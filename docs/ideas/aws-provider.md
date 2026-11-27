@@ -696,10 +696,16 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        - **The passwords are each written once** (`PutParameter` without `Overwrite`). The master's is what the
          instance was created with, so no later run replaces it.
        - **The setup's task is started by `RunTask` from the operator's credentials** (`aws/ecs.ts`'s
-         `ecsPlatformTasks`), in the platform's cluster and task subnets, and awaited. A run whose setup exits other
-         than 0 stops before any service moves. Control never builds that client, and its role is denied `RunTask`.
+         `ecsPlatformTasks`), in the platform's cluster and task subnets, and awaited. A setup an earlier run left
+         running is awaited first. A run whose setup exits other than 0 stops before any service moves (the stacks
+         before it, access among them, and the images have moved by then). Control never builds that client, and its
+         role is denied `RunTask`.
+       - **The services' names connected.** A task resolves only the Service Connect endpoints that existed when its
+         service deployed, and the three services dial each other. The proxy is created after them, and the run then
+         redeploys once each platform service whose current deployment started before the three all existed, and
+         awaits it. An upgrade redeploys none.
        - **The operator's Parameter Store calls** (`aws/ssm.ts`'s `ssmPlatformSecrets`) write once, replace and read
-         back a platform parameter. Control's client stays without a read.
+         back a parameter under `/fabrika/platform/`, and refuse any other. Control's client stays without a read.
        - What the images are built from and what each task's parameters hold come next, each its own change.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
@@ -892,7 +898,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     proxy outlasting 15 seconds), that the services image carries `wget` for the health checks, and that the
     setup stack, its task and then the services stack install in that order. For the commands: that the database's
     stack settles within the hour the run waits, and that `RunTask` from the operator's credentials places the setup
-    in the platform's cluster and subnets as named.
+    in the platform's cluster and subnets as named, and that a fresh install's services reach each other through
+    Service Connect after the run's one redeploy (and, without it, do not: what the redeploy rests on).
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 

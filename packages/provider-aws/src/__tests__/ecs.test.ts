@@ -576,4 +576,45 @@ describe("ecsPlatformTasks, the operator's own", () => {
 		})
 		expect(await ecsPlatformTasks(options).describeTask('fabrika-platform', TASK, 'setup')).toMatchObject({ status: 'stopped', exitCode: 0 })
 	})
+
+	test('lists the tasks a starter left running, on one page alone', async () => {
+		const { options, calls } = fakeAws(ECS, { ListTasks: () => ({ taskArns: [TASK] }) })
+		expect(await ecsPlatformTasks(options).listRunningTasks('fabrika-platform', 'fabrika-platform-setup')).toEqual([TASK])
+		expect(calls[0]?.body).toEqual({ cluster: 'fabrika-platform', startedBy: 'fabrika-platform-setup', desiredStatus: 'RUNNING', maxResults: 100 })
+		const paged = fakeAws(ECS, { ListTasks: () => ({ taskArns: [TASK], nextToken: 'more' }) })
+		await expect(ecsPlatformTasks(paged.options).listRunningTasks('fabrika-platform', 'fabrika-platform-setup')).rejects.toMatchObject({
+			code: 'too_many_tasks',
+		})
+	})
+
+	test("reads a service's creation and deployments, and redeploys its own revision", async () => {
+		const { options, calls } = fakeAws(ECS, {
+			DescribeServices: () => ({
+				services: [{
+					serviceName: 'fabrika-platform-iam',
+					status: 'ACTIVE',
+					createdAt: 1_790_000_000,
+					deployments: [{ id: 'ecs-svc/1', status: 'PRIMARY', createdAt: 1_790_000_060.5, rolloutState: 'COMPLETED' }],
+				}],
+			}),
+			UpdateService: () => ({ service: { serviceName: 'fabrika-platform-iam' } }),
+		})
+		const tasks = ecsPlatformTasks(options)
+		expect(await tasks.describeService('fabrika-platform', 'fabrika-platform-iam')).toEqual({
+			createdAt: new Date(1_790_000_000_000),
+			deployments: [{ id: 'ecs-svc/1', status: 'primary', createdAt: new Date(1_790_000_060_500), rolloutState: 'completed' }],
+		})
+		await tasks.redeployService('fabrika-platform', 'fabrika-platform-iam')
+		expect(calls[1]?.body).toEqual({ cluster: 'fabrika-platform', service: 'fabrika-platform-iam', forceNewDeployment: true })
+		const missing = fakeAws(ECS, { DescribeServices: () => ({ services: [], failures: [{ reason: 'MISSING' }] }) })
+		expect(await ecsPlatformTasks(missing.options).describeService('fabrika-platform', 'fabrika-platform-iam')).toBeNull()
+		const odd = fakeAws(ECS, {
+			DescribeServices: () => ({
+				services: [{ serviceName: 'fabrika-platform-iam', status: 'ACTIVE', createdAt: 1, deployments: [{ id: 'x', status: 'NEW', createdAt: 1 }] }],
+			}),
+		})
+		await expect(ecsPlatformTasks(odd.options).describeService('fabrika-platform', 'fabrika-platform-iam')).rejects.toMatchObject({
+			code: 'invalid_answer',
+		})
+	})
 })

@@ -200,6 +200,9 @@ describe("the platform's services", () => {
 			ContainerPort: 8080,
 			TargetGroupArn: TARGET_GROUP,
 		}])
+		// The proxy is created after the three, so its first tasks resolve their names.
+		expect(JSON.parse(JSON.stringify(stack.template)).Resources.ProxyService.DependsOn).toEqual(['IamService', 'ControlService', 'OperationsService'])
+		expect(resources['ProxyService']?.Properties['ServiceName']).toBe('fabrika-platform-proxy')
 	})
 
 	test("the setup: no service, the database's address plain and its passwords secrets of the database's path", () => {

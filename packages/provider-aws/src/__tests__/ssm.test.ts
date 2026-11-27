@@ -168,6 +168,10 @@ describe("ssmPlatformSecrets, the operator's own", () => {
 		await expect(secrets.putSecretOnce('/aws/reserved', VALUE)).rejects.toThrow('the parameter name')
 		await expect(secrets.putSecret(PLATFORM_NAME, '')).rejects.toThrow('the value')
 		await expect(secrets.readSecret('no-slash')).rejects.toThrow('the parameter name')
+		// Only the platform's own path: an application's secrets are Control's, never the operator's client's.
+		await expect(secrets.putSecret('/fabrika/apps/notes/prod/STRIPE_KEY', VALUE)).rejects.toThrow('not one of the platform')
+		await expect(secrets.putSecretOnce('/fabrika/platformer/x', VALUE)).rejects.toThrow('not one of the platform')
+		await expect(secrets.readSecret(NAME)).rejects.toThrow('not one of the platform')
 		expect(calls).toEqual([])
 	})
 })

@@ -5,7 +5,8 @@
 
 import { describe, expect, test } from 'bun:test'
 import type { CloudFormationClient, StackStatus } from '../../aws/cloudformation'
-import type { EcsPlatformTasks, EcsPlatformTaskStart, EcsTaskRun } from '../../aws/ecs'
+import type { EcsPlatformService, EcsPlatformTasks, EcsPlatformTaskStart, EcsTaskRun } from '../../aws/ecs'
+import { AwsError } from '../../aws/transport'
 import { AWS_ACCESS_STACK } from '../access'
 import { applyAwsPlatform, AWS_SETUP_STARTED_BY, awsDatabasePassword, type AwsPlatformApplyInput, type AwsPlatformPlan } from '../apply'
 import { AWS_BALANCERS_STACK } from '../balancers'
@@ -111,32 +112,86 @@ function fakeCloudFormation(events: string[]) {
 	return { client, stacks }
 }
 
-/** ECS's task calls: the setup is started, read once while it runs, and stops with `exitCode`. */
-function fakeTasks(events: string[], exitCode: number | null) {
-	const started: EcsPlatformTaskStart[] = []
+const SERVICES = ['fabrika-platform-iam', 'fabrika-platform-control', 'fabrika-platform-operations', 'fabrika-platform-proxy']
+
+/**
+ * ECS for the platform: the setup is started, read while it runs, and stops with `exitCode`; the four services exist
+ * as the services' stack created them, each still on the deployment it was created with, until it is redeployed.
+ */
+interface FakeEcsState {
+	exitCode: number | null
+	/** Setup tasks an earlier run left running. */
+	readonly running: Set<string>
+	/** How many task reads to refuse for rate before answering. */
+	throttled: number
+	readonly started: EcsPlatformTaskStart[]
+	readonly services: Map<string, EcsPlatformService>
+}
+
+function fakeEcs(events: string[]) {
+	const state: FakeEcsState = { exitCode: 0, running: new Set(), throttled: 0, started: [], services: new Map() }
+	const created = new Date(Date.now() - 10 * 60_000)
+	for (const name of SERVICES) {
+		state.services.set(name, {
+			createdAt: created,
+			deployments: [{ id: `${name}-first`, status: 'primary', createdAt: created, rolloutState: 'completed' }],
+		})
+	}
+	let deployments = 0
 	const tasks: EcsPlatformTasks = {
 		runTask: async (start) => {
-			started.push(start)
+			state.started.push(start)
 			events.push('run setup')
 			return { arn: TASK, status: 'pending', exitCode: null, stopCode: null, reason: null }
 		},
-		describeTask: async (): Promise<EcsTaskRun> => ({
-			arn: TASK,
-			status: 'stopped',
-			exitCode,
-			stopCode: 'EssentialContainerExited',
-			reason: exitCode === 0 ? null : 'Essential container in task exited',
-		}),
+		describeTask: async (_cluster, arn): Promise<EcsTaskRun> => {
+			if (state.throttled > 0) {
+				state.throttled -= 1
+				throw new AwsError('DescribeTasks', 'ThrottlingException', 400, null, true)
+			}
+			if (state.running.delete(arn)) {
+				events.push(`earlier setup ${arn} stopped`)
+				return { arn, status: 'stopped', exitCode: 0, stopCode: 'EssentialContainerExited', reason: null }
+			}
+			const { exitCode } = state
+			return {
+				arn,
+				status: 'stopped',
+				exitCode,
+				stopCode: 'EssentialContainerExited',
+				reason: exitCode === 0 ? null : 'Essential container in task exited',
+			}
+		},
+		listRunningTasks: async () => [...state.running],
+		describeService: async (_cluster, name) => state.services.get(name) ?? null,
+		redeployService: async (_cluster, name) => {
+			const service = state.services.get(name)
+			if (service === undefined) throw new Error(`no service ${name}`)
+			deployments += 1
+			events.push(`redeploy ${name}`)
+			state.services.set(name, {
+				createdAt: service.createdAt,
+				deployments: [{ id: `${name}-${deployments}`, status: 'primary', createdAt: new Date(), rolloutState: 'completed' }],
+			})
+		},
 	}
-	return { tasks, started }
+	return { tasks, state }
 }
 
 function run(
-	options: { readonly events: string[]; readonly exitCode?: number | null; readonly cloudFormation?: ReturnType<typeof fakeCloudFormation> },
+	options: {
+		readonly events: string[]
+		readonly exitCode?: number | null
+		readonly cloudFormation?: ReturnType<typeof fakeCloudFormation>
+		readonly ecs?: ReturnType<typeof fakeEcs>
+	},
 ) {
 	const { events } = options
 	const cloudFormation = options.cloudFormation ?? fakeCloudFormation(events)
-	const { tasks, started } = fakeTasks(events, options.exitCode === undefined ? 0 : options.exitCode)
+	const ecs = options.ecs ?? fakeEcs(events)
+	ecs.state.exitCode = options.exitCode === undefined ? 0 : options.exitCode
+	const { tasks } = ecs
+	const started = ecs.state.started
 	const written = new Set<string>()
 	const lines: string[] = []
 	const input: AwsPlatformApplyInput = {
@@ -164,7 +219,7 @@ function run(
 		log: (line) => lines.push(line),
 		newPassword: () => 'A'.repeat(40),
 	}
-	return { input, cloudFormation, started, lines, written }
+	return { input, cloudFormation, ecs, started, lines, written }
 }
 
 describe("the platform's stacks in order", () => {
@@ -193,6 +248,8 @@ describe("the platform's stacks in order", () => {
 			'run setup',
 			`parameters ${OUTPUTS[AWS_DATABASE_STACK]?.['DatabaseHost']}`,
 			`create ${AWS_SERVICES_STACK}`,
+			// A fresh install: every service started before the last endpoint existed, so each is redeployed once.
+			...SERVICES.map((name) => `redeploy ${name}`),
 		])
 		expect(applied.balancers.platformBalancerDnsName).toBe('fabrika-platform-1234567890.eu-central-1.elb.amazonaws.com')
 		expect(lines.at(-1)).toBe(
@@ -224,12 +281,14 @@ describe("the platform's stacks in order", () => {
 		const once = run({ events: first })
 		await applyAwsPlatform(once.input)
 		const second: string[] = []
-		const again = run({ events: second, cloudFormation: once.cloudFormation })
+		const again = run({ events: second, cloudFormation: once.cloudFormation, ecs: once.ecs })
 		// The same account: its parameters exist.
 		for (const name of once.written) again.written.add(name)
 		await applyAwsPlatform(again.input)
 		expect(second.filter((event) => event.startsWith('create ') || event.startsWith('update '))).toEqual([])
 		expect(second).toContain('run setup')
+		// Every service's deployment now postdates every endpoint: none is redeployed again.
+		expect(second.filter((event) => event.startsWith('redeploy '))).toEqual([])
 		expect(again.lines.filter((line) => line.startsWith('aws: wrote'))).toEqual([])
 		expect([...once.cloudFormation.stacks.keys()]).toEqual(ORDER)
 	})
@@ -241,6 +300,39 @@ describe("the platform's stacks in order", () => {
 		expect(events.at(-1)).toBe('run setup')
 		const unrun = run({ events: [], exitCode: null })
 		await expect(applyAwsPlatform(unrun.input)).rejects.toThrow('no exit code')
+	})
+
+	test("an earlier run's setup still running is awaited before this run's starts; a throttled read is read again", async () => {
+		const events: string[] = []
+		const ecs = fakeEcs(events)
+		const EARLIER = `arn:aws:ecs:eu-central-1:123456789012:task/fabrika-platform/${'d'.repeat(32)}`
+		ecs.state.running.add(EARLIER)
+		ecs.state.throttled = 1
+		const { input, lines } = run({ events, ecs })
+		await applyAwsPlatform(input)
+		expect(events.slice(events.indexOf(`create ${AWS_SETUP_STACK}`), events.indexOf('run setup') + 1)).toEqual([
+			`create ${AWS_SETUP_STACK}`,
+			`earlier setup ${EARLIER} stopped`,
+			'run setup',
+		])
+		expect(lines).toContain(`aws: waiting for the database setup ${EARLIER} an earlier run started`)
+		expect(ecs.state.throttled).toBe(0)
+		expect(lines).toContain('aws: the database setup is done')
+	})
+
+	test('a service whose deployment came after every endpoint is not redeployed', async () => {
+		const events: string[] = []
+		const ecs = fakeEcs(events)
+		// IAM was redeployed by an earlier run that stopped before the others.
+		const iam = ecs.state.services.get('fabrika-platform-iam')
+		if (iam === undefined) throw new Error('no iam')
+		ecs.state.services.set('fabrika-platform-iam', {
+			createdAt: iam.createdAt,
+			deployments: [{ id: 'later', status: 'primary', createdAt: new Date(), rolloutState: 'completed' }],
+		})
+		const { input } = run({ events, ecs })
+		await applyAwsPlatform(input)
+		expect(events.filter((event) => event.startsWith('redeploy '))).toEqual(SERVICES.slice(1).map((name) => `redeploy ${name}`))
 	})
 
 	test('overlapping networks are refused before anything is sent', async () => {
