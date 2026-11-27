@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { SSM } from '../aws/json'
-import { MAX_LISTED_PAGES, MAX_SECRET_BYTES, parameterArn, ssmClient } from '../aws/ssm'
+import { MAX_LISTED_PAGES, MAX_SECRET_BYTES, parameterArn, ssmClient, ssmPlatformSecrets } from '../aws/ssm'
 import { awsError, fakeAws } from './helpers/fake-aws'
 
 const PATH = '/fabrika/main/apps/notes/prod'
@@ -121,6 +121,53 @@ describe('ssmClient', () => {
 		expect(await large).not.toContain(VALUE)
 		await expect(ssm.deleteSecret('/aws/reserved')).rejects.toThrow('the parameter name')
 		await expect(ssm.listNames('no-slash')).rejects.toThrow('the path')
+		expect(calls).toEqual([])
+	})
+})
+
+describe("ssmPlatformSecrets, the operator's own", () => {
+	const PLATFORM_NAME = '/fabrika/platform/database/admin-password'
+
+	test('writes a secret once: never over one that exists, which answers false', async () => {
+		const first = fakeAws(SSM, { PutParameter: () => ({ Version: 1 }) })
+		expect(await ssmPlatformSecrets(first.options).putSecretOnce(PLATFORM_NAME, VALUE)).toBe(true)
+		expect(first.calls[0]?.body).toEqual({
+			Name: PLATFORM_NAME,
+			Value: VALUE,
+			Type: 'SecureString',
+			Overwrite: false,
+			Tier: 'Standard',
+			DataType: 'text',
+		})
+		const again = fakeAws(SSM, { PutParameter: () => awsError('ParameterAlreadyExists') })
+		expect(await ssmPlatformSecrets(again.options).putSecretOnce(PLATFORM_NAME, VALUE)).toBe(false)
+		const refused = fakeAws(SSM, { PutParameter: () => awsError('AccessDeniedException') })
+		const failure = await ssmPlatformSecrets(refused.options).putSecretOnce(PLATFORM_NAME, VALUE).catch((error: unknown) => error)
+		expect(failure).toMatchObject({ code: 'AccessDeniedException' })
+		expect(String(failure)).not.toContain(VALUE)
+	})
+
+	test('replaces a secret, and reads one back decrypted, or null when there is none', async () => {
+		const put = fakeAws(SSM, { PutParameter: () => ({ Version: 2 }) })
+		await ssmPlatformSecrets(put.options).putSecret(PLATFORM_NAME, VALUE)
+		expect(put.calls[0]?.body).toMatchObject({ Overwrite: true })
+		const read = fakeAws(SSM, { GetParameter: () => ({ Parameter: { Name: PLATFORM_NAME, Value: VALUE, Type: 'SecureString' } }) })
+		expect(await ssmPlatformSecrets(read.options).readSecret(PLATFORM_NAME)).toBe(VALUE)
+		expect(read.calls[0]?.body).toEqual({ Name: PLATFORM_NAME, WithDecryption: true })
+		const none = fakeAws(SSM, { GetParameter: () => awsError('ParameterNotFound') })
+		expect(await ssmPlatformSecrets(none.options).readSecret(PLATFORM_NAME)).toBeNull()
+		// An answer of another form names no value.
+		const odd = fakeAws(SSM, { GetParameter: () => ({ Parameter: { Name: PLATFORM_NAME } }) })
+		const failure = await ssmPlatformSecrets(odd.options).readSecret(PLATFORM_NAME).catch((error: unknown) => error)
+		expect(failure).toMatchObject({ code: 'invalid_answer' })
+	})
+
+	test('a name or value of another form is refused before anything is sent', async () => {
+		const { options, calls } = fakeAws(SSM, {})
+		const secrets = ssmPlatformSecrets(options)
+		await expect(secrets.putSecretOnce('/aws/reserved', VALUE)).rejects.toThrow('the parameter name')
+		await expect(secrets.putSecret(PLATFORM_NAME, '')).rejects.toThrow('the value')
+		await expect(secrets.readSecret('no-slash')).rejects.toThrow('the parameter name')
 		expect(calls).toEqual([])
 	})
 })

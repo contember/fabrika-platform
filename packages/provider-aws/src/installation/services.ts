@@ -21,8 +21,10 @@
 //   minutes, Operations' maintenance every minute, as Zerops' crontab runs them. The job runs once the service is
 //   healthy (its migrations done), with the service's own role and variables; each job holds its own claims and
 //   locks, so the two tasks of a rolling deploy run it safely. A job container that exits stops its task, which ECS
-//   replaces. Every container of the services image runs under an init process, so a task's stop reaches the shell's
-//   child instead of waiting out the stop timeout.
+//   replaces. Every container of the services image runs under an init process, so a task's SIGTERM reaches its
+//   shell, which exits at once instead of waiting out the stop timeout. A job's pass still running then is killed with
+//   the container, not signalled: it ends as a crash of the job would.
+//   After `exec` the server itself is the init's child and receives the signal.
 // - **The platform's network and cluster alone**: the platform's task subnets, each task's own group (IAM, Control
 //   and Operations the database's client group beside it), a public address because the subnets have no NAT gateway.
 // - **Service Connect without its request timeout.** An HTTP Service Connect service answers 504 for any request
@@ -228,7 +230,7 @@ function taskParts({ accountId: a, region: r }: AwsPlace) {
 	}
 }
 
-/** A container of the services image runs under an init process: a shell as PID 1 would drop the task's SIGTERM. */
+/** A container of the services image runs under an init process: a shell as PID 1 would ignore the task's SIGTERM. */
 const UNDER_INIT: JsonValue = { InitProcessEnabled: true }
 
 /** The setup's task definition, alone in its stack, so the operator runs it before the services exist or move. */

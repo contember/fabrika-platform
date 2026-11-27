@@ -152,7 +152,7 @@ describe("the platform's services", () => {
 		expect(server?.Command).toEqual(['sh', '-c', 'bun packages/operations/src/node/migrate.ts && exec bun packages/operations/src/node/server.ts'])
 		expect(job?.Command).toEqual(['sh', '-c', 'while true; do bun packages/operations/src/node/cron.ts; sleep 60; done'])
 		expect(job?.DependsOn).toEqual([{ ContainerName: 'server', Condition: 'HEALTHY' }])
-		// An init process as PID 1, so a task's stop reaches the shell's child.
+		// An init process as PID 1, so a task's SIGTERM reaches the shell instead of being ignored.
 		for (const container of [server, job, containersOf('SetupTaskDefinition')[0]]) {
 			expect(container?.LinuxParameters).toEqual({ InitProcessEnabled: true })
 		}

@@ -87,6 +87,8 @@ export interface EnsureStackInput {
 	readonly now?: () => number
 	/** A `ClientRequestToken`, one per call sent. */
 	readonly newToken?: () => string
+	/** How long to wait for the stack, `AWS_STACK_TIMEOUT_MS` by default: longer for a stack that creates a database. */
+	readonly timeoutMs?: number
 }
 
 /**
@@ -117,7 +119,9 @@ export async function ensureStack(input: EnsureStackInput): Promise<Readonly<Rec
 		throw new Error(`aws: the stack ${name}'s template is ${bytes} bytes, past the ${MAX_TEMPLATE_BYTES} CloudFormation takes inline`)
 	}
 	const wanted = canonical(stack.template)
-	const giveUpAt = now() + AWS_STACK_TIMEOUT_MS
+	const timeoutMs = input.timeoutMs ?? AWS_STACK_TIMEOUT_MS
+	const giveUpAt = now() + timeoutMs
+	const pending = () => new AwsStackPending(name, `aws: the stack ${name} did not settle within ${timeoutMs / 60_000} minutes`)
 	let sent: 'create' | 'update' | null = null
 	// The stack's id once a create answered it or a read listed it: from then on it is read by its id.
 	let stackId: string | null = null
@@ -161,7 +165,7 @@ export async function ensureStack(input: EnsureStackInput): Promise<Readonly<Rec
 							return described.outputs
 						}
 						// Read again at the next poll: the read failed, or the stack moved in between.
-						if (now() >= giveUpAt) throw new AwsStackPending(name, `aws: the stack ${name} did not settle within ${AWS_STACK_TIMEOUT_MS / 60_000} minutes`)
+						if (now() >= giveUpAt) throw pending()
 						await sleep(AWS_STACK_POLL_MS, signal)
 						continue
 					}
@@ -174,7 +178,7 @@ export async function ensureStack(input: EnsureStackInput): Promise<Readonly<Rec
 				throw new Error(`aws: the stack ${name} is ${found.status}; an operator must repair or delete it before a deploy`)
 			}
 		}
-		if (now() >= giveUpAt) throw new AwsStackPending(name, `aws: the stack ${name} did not settle within ${AWS_STACK_TIMEOUT_MS / 60_000} minutes`)
+		if (now() >= giveUpAt) throw pending()
 		await sleep(AWS_STACK_POLL_MS, signal)
 	}
 }

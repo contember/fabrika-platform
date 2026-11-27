@@ -805,6 +805,65 @@ export function ecsClient(options: AwsJsonClientOptions, taskRunner?: AwsFunctio
 	}
 }
 
+/** What the operator's command starts in the platform's cluster: one task of a revision, as it is defined. */
+export interface EcsPlatformTaskStart {
+	readonly cluster: string
+	readonly taskDefinitionArn: string
+	/** The container whose exit code decides the run. */
+	readonly container: string
+	readonly network: EcsNetwork
+	readonly clientToken: string
+	readonly startedBy: string
+}
+
+/** The operator's own task calls: starting a platform task and reading it back. */
+export interface EcsPlatformTasks {
+	/** Starts one task; a task ECS could not place (`failures`) is the error `task_not_started`. */
+	runTask(start: EcsPlatformTaskStart, signal?: AbortSignal): Promise<EcsTaskRun>
+	describeTask(cluster: string, arn: string, container: string, signal?: AbortSignal): Promise<EcsTaskRun | null>
+}
+
+/**
+ * `RunTask` from the caller's own credentials, for the operator's command alone (the database setup,
+ * `installation/services.ts`): its cluster and network are the ones it names, and no command is overridden. Control
+ * never builds this: its role is denied `ecs:RunTask` on every resource and starts its tasks through the task runner
+ * (`ecsClient`), which refuses a platform family.
+ */
+export function ecsPlatformTasks(options: AwsJsonClientOptions): EcsPlatformTasks {
+	const json = awsJsonClient(ECS, options)
+	const reader = ecsClient(options)
+	return {
+		async runTask(start, signal) {
+			if (!ECS_NAME.test(start.cluster)) refuse('the cluster name')
+			if (!TASK_DEFINITION_ARN.test(start.taskDefinitionArn)) refuse('the task definition')
+			if (!ECS_NAME.test(start.container)) refuse('the container')
+			if (!CLIENT_TOKEN.test(start.clientToken)) refuse('the client token')
+			if (!STARTED_BY.test(start.startedBy)) refuse('the starter')
+			const operation = 'RunTask'
+			const answered = await json.call(
+				operation,
+				{
+					cluster: start.cluster,
+					taskDefinition: start.taskDefinitionArn,
+					launchType: 'FARGATE',
+					count: 1,
+					networkConfiguration: awsvpcOf(start.network),
+					clientToken: start.clientToken,
+					startedBy: start.startedBy,
+				},
+				tasksSchema,
+				signal,
+			)
+			const tasks = answered.tasks ?? []
+			if (tasks.length === 0 && (answered.failures ?? []).length > 0) throw new AwsError(operation, 'task_not_started', 200, null, false)
+			const [task] = tasks
+			if (tasks.length !== 1 || task === undefined) throw new AwsError(operation, 'invalid_answer', 200, null, false)
+			return taskRunOf(operation, task, start.container)
+		},
+		describeTask: (cluster, arn, container, signal) => reader.describeTask(cluster, arn, container, signal),
+	}
+}
+
 /** A task as the deploy reads it; a state ECS may add later, or a stopped task without the container, is no answer. */
 function taskRunOf(operation: string, task: z.infer<typeof taskSchema>, container: string): EcsTaskRun {
 	const status = TASK_STATUSES[task.lastStatus]

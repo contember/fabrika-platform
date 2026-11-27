@@ -140,3 +140,58 @@ export function ssmClient(options: AwsJsonClientOptions): SsmClient {
 		},
 	}
 }
+
+/** The operator's own Parameter Store calls: a secret written once, a secret replaced, and a secret read back. */
+export interface SsmPlatformSecrets {
+	/**
+	 * Writes `value` under `name` only when no parameter of the name exists; answers whether it wrote. For a value that
+	 * must never change once something was made from it (the database's master password).
+	 */
+	putSecretOnce(name: string, value: string, signal?: AbortSignal): Promise<boolean>
+	/** Writes `value` under `name`, replacing an earlier one. */
+	putSecret(name: string, value: string, signal?: AbortSignal): Promise<void>
+	/** The value under `name`, decrypted; `null` when there is none. It never reaches an error or a log. */
+	readSecret(name: string, signal?: AbortSignal): Promise<string | null>
+}
+
+const readSchema = z.object({ Parameter: z.object({ Value: z.string() }) })
+
+/**
+ * Parameter Store for the operator's command alone, with the operator's credentials: the platform's parameters
+ * (`/fabrika/platform/…`), which no grant of Control's role names. Control never builds this.
+ */
+export function ssmPlatformSecrets(options: AwsJsonClientOptions): SsmPlatformSecrets {
+	const json = awsJsonClient(SSM, options)
+	const put = async (name: string, value: string, overwrite: boolean, signal?: AbortSignal) => {
+		const parameter = parameterName(name)
+		if (value === '' || new TextEncoder().encode(value).byteLength > MAX_SECRET_BYTES) refuse('the value')
+		await json.call(
+			'PutParameter',
+			{ Name: parameter, Value: value, Type: 'SecureString', Overwrite: overwrite, Tier: 'Standard', DataType: 'text' },
+			putSchema,
+			signal,
+		)
+	}
+	return {
+		async putSecretOnce(name, value, signal) {
+			try {
+				await put(name, value, false, signal)
+				return true
+			} catch (error) {
+				if (error instanceof AwsError && error.code === 'ParameterAlreadyExists') return false
+				throw error
+			}
+		},
+		putSecret: (name, value, signal) => put(name, value, true, signal),
+		async readSecret(name, signal) {
+			const parameter = parameterName(name)
+			try {
+				const read = await json.call('GetParameter', { Name: parameter, WithDecryption: true }, readSchema, signal)
+				return read.Parameter.Value
+			} catch (error) {
+				if (error instanceof AwsError && error.code === 'ParameterNotFound') return null
+				throw error
+			}
+		},
+	}
+}
