@@ -3,7 +3,7 @@ export class OperatorRequestError extends Error {
 
 	constructor(readonly httpStatus: number, message: string) {
 		super(message)
-		this.type = httpStatus === 404 ? 'not_found' : httpStatus === 400 ? 'bad_request' : 'request_error'
+		this.type = httpStatus === 404 ? 'not_found' : httpStatus === 400 ? 'bad_request' : httpStatus === 409 ? 'conflict' : 'request_error'
 	}
 }
 

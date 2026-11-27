@@ -13,7 +13,7 @@ import { DEFAULT_ACCOUNT_REFUSAL_THRESHOLD, DEFAULT_INSTALLATION_REFUSAL_THRESHO
 import { isValidWebhookTarget } from '../webhook-target.js'
 import { visibleSource } from './access.js'
 import type { OperationsOperatorOptions } from './context.js'
-import { badRequest, notFoundError } from './errors.js'
+import { badRequest, notFoundError, OperatorRequestError } from './errors.js'
 import { now } from './values.js'
 
 export async function alertSettings(sourceId: string, options: OperationsOperatorOptions): Promise<OperationsAlertSettingsResponseDto> {
@@ -157,7 +157,14 @@ export async function updateAlertChannel(
 
 export async function deleteAlertChannel(sourceId: string, channelId: string, options: OperationsOperatorOptions): Promise<null> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	if (!await options.repositories.alerts.deleteChannel(sourceId, channelId)) return notFoundError()
+	const outcome = await options.repositories.alerts.deleteChannel(sourceId, channelId)
+	if (outcome === 'not_found') return notFoundError()
+	if (outcome === 'notified') {
+		throw new OperatorRequestError(
+			409,
+			'this channel has notifications, which the delivery history keeps, so it cannot be deleted; disable it instead',
+		)
+	}
 	await options.auth.audit({ action: 'operations.alert_channel.delete', resourceType: 'operations_alert_channel', resourceId: channelId })
 	return null
 }
