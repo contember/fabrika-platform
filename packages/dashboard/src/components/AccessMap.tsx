@@ -1,4 +1,5 @@
 import type { AccessMapActionDto, AccessMapDto, AccessMapEndpointDto, AccessMapRoleDto } from '../lib/api'
+import { holdersLabel, type RoleHolders } from '../lib/role-holders'
 import { Chip } from './Status'
 import { Table } from './Table'
 
@@ -7,12 +8,15 @@ const SHOWN_ENDPOINTS = 8
 
 const CALLER_LABELS: Readonly<Record<string, string>> = { human: 'people', machine: 'scripts' }
 
-/** A contract's access read by role: each role, then each action it holds with the endpoints and data it reaches. */
-export function AccessMapView({ map }: { map: AccessMapDto }) {
+/**
+ * A contract's access read by role: each role, then each action it holds with the endpoints and data it reaches. With
+ * `holders`, each role also says how many hold it.
+ */
+export function AccessMapView({ map, holders = null }: { map: AccessMapDto; holders?: RoleHolders | null }) {
 	const actions = new Map(map.actions.map((action) => [action.action, action]))
 	return (
 		<>
-			{map.roles.map((role) => <RoleAccess key={role.role} role={role} actions={actions} />)}
+			{map.roles.map((role) => <RoleAccess key={role.role} role={role} actions={actions} holders={holders} />)}
 			{map.memberEndpoints.length > 0 && (
 				<details className="surface">
 					<summary>
@@ -44,7 +48,9 @@ interface HeldAction {
 	readonly conferredBy: readonly string[]
 }
 
-function RoleAccess({ role, actions }: { role: AccessMapRoleDto; actions: ReadonlyMap<string, AccessMapActionDto> }) {
+function RoleAccess(
+	{ role, actions, holders }: { role: AccessMapRoleDto; actions: ReadonlyMap<string, AccessMapActionDto>; holders: RoleHolders | null },
+) {
 	const held: HeldAction[] = [
 		...role.actions.map((action) => ({ action, through: null, conferredBy: [] })),
 		...role.via.flatMap((via) => via.actions.map((action) => ({ action, through: via.relation, conferredBy: via.conferredBy }))),
@@ -54,6 +60,7 @@ function RoleAccess({ role, actions }: { role: AccessMapRoleDto; actions: Readon
 			<summary>
 				<Chip>{role.role}</Chip>
 				<span>{roleSummary(role)}</span>
+				{holders !== null && <span className="muted">{holdersLabel(holders, role.role)}</span>}
 			</summary>
 			<Table
 				colSpan={3}

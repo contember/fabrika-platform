@@ -6,6 +6,7 @@ import { DeviationsSection } from '../../components/app-detail/DeviationsSection
 import { SurfaceSection } from '../../components/app-detail/SurfaceSection'
 import { AppFrame, loadAppFrame, useEnvironmentStates } from '../../components/app/AppFrame'
 import { EmptyState } from '../../components/Table'
+import { readRoleHolders } from '../../lib/role-holders'
 import { readSelfAdmin } from '../../lib/self-admin'
 import { consoleSession } from '../../lib/session'
 
@@ -13,12 +14,18 @@ export default createPage()
 	.params({ id: 'string', env: 'string' })
 	.loader(async ({ params }) => {
 		const [frame, session] = await Promise.all([loadAppFrame(params.id), consoleSession()])
-		const selfAdmin = await readSelfAdmin(params.id, frame.envs.map((env) => env.env), session)
-		return { ...frame, selfAdmin, peopleApps: session.peopleApps ?? [] }
+		const peopleApps = session.peopleApps ?? []
+		// One IAM read per environment opened, and only for a caller who administers its people, which IAM records.
+		const shown = frame.envs.some((env) => env.env === params.env) ? appEnvironmentId(params.id, params.env) : null
+		const [selfAdmin, holders] = await Promise.all([
+			readSelfAdmin(params.id, frame.envs.map((env) => env.env), session),
+			shown !== null && peopleApps.includes(shown) ? readRoleHolders(shown) : null,
+		])
+		return { ...frame, selfAdmin, peopleApps, holders }
 	})
 	.route('/apps/:id/access/:env')
 	.render(({ data, params, invalidate }) => {
-		const { app, envs, selfAdmin, peopleApps } = data
+		const { app, envs, selfAdmin, peopleApps, holders } = data
 		const states = useEnvironmentStates(envs)
 		const env = envs.find((candidate) => candidate.env === params.env)
 		return (
@@ -45,7 +52,7 @@ export default createPage()
 					: (
 						<>
 							<SurfaceSection env={env} />
-							<AccessMapSection env={env} people={peopleApps.includes(appEnvironmentId(env.appId, env.env))} />
+							<AccessMapSection env={env} people={peopleApps.includes(appEnvironmentId(env.appId, env.env))} holders={holders} />
 							<DeviationsSection env={env} />
 						</>
 					)}
