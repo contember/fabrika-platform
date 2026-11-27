@@ -206,7 +206,7 @@ jobs:
   platform-image:
     name: Build the AWS platform services' image
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
