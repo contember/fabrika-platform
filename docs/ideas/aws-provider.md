@@ -688,7 +688,25 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          network, on install and on every upgrade before it applies the services' stack, with the master's password
          and the services' (`database-setup-main.ts`).
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
-       GitHub OIDC role.
+       GitHub OIDC role. First their common run (built, `installation/apply.ts`), which install and upgrade both make
+       with the operator's credentials, every step idempotent so a run that stopped is resumed by running it again:
+       - **The order:** the two networks, the balancers, the database's passwords, the database (waited for up to an
+         hour), the foundation, access, the images' stack, the release's two images, the setup's stack, its task, each
+         task's parameters, and the services last.
+       - **The passwords are each written once** (`PutParameter` without `Overwrite`). The master's is what the
+         instance was created with, so no later run replaces it.
+       - **The setup's task is started by `RunTask` from the operator's credentials** (`aws/ecs.ts`'s
+         `ecsPlatformTasks`), in the platform's cluster and task subnets, and awaited. A setup an earlier run left
+         running is awaited first. A run whose setup exits other than 0 stops before any service moves (the stacks
+         before it, access among them, and the images have moved by then). Control never builds that client, and its
+         role is denied `RunTask`.
+       - **The services' names connected.** A task resolves only the Service Connect endpoints that existed when its
+         service deployed, and the three services dial each other. The proxy is created after them, and the run then
+         redeploys once each platform service whose current deployment started before the three all existed, and
+         awaits it. An upgrade redeploys none.
+       - **The operator's Parameter Store calls** (`aws/ssm.ts`'s `ssmPlatformSecrets`) write once, replace and read
+         back a parameter under `/fabrika/platform/`, and refuse any other. Control's client stays without a read.
+       - What the images are built from and what each task's parameters hold come next, each its own change.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
@@ -878,7 +896,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     such an instance (an accepted reach: no route joins the VPCs, so it could only make the platform's calls fail).
     For the platform's services: that Service Connect takes a per-request timeout of 0 as off (a request through the
     proxy outlasting 15 seconds), that the services image carries `wget` for the health checks, and that the
-    setup stack, its task and then the services stack install in that order.
+    setup stack, its task and then the services stack install in that order. For the commands: that the database's
+    stack settles within the hour the run waits, and that `RunTask` from the operator's credentials places the setup
+    in the platform's cluster and subnets as named, and that a fresh install's services reach each other through
+    Service Connect after the run's one redeploy (and, without it, do not: what the redeploy rests on).
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 

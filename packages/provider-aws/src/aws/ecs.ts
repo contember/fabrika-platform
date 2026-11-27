@@ -21,7 +21,7 @@ const ECS_NAME = /^[A-Za-z0-9_-]{1,255}$/
 /** An IAM role's ARN. */
 const ROLE_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:iam::\d{12}:role\/[\w+=,.@/-]{1,512}$/
 /** A task definition revision's ARN. */
-const TASK_DEFINITION_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:task-definition\/[A-Za-z0-9_-]{1,255}:\d{1,10}$/
+export const TASK_DEFINITION_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:task-definition\/[A-Za-z0-9_-]{1,255}:\d{1,10}$/
 /** An image by digest: `<registry>/<repository>@sha256:<64 hex>`; a tag would let the image change under the revision. */
 export const IMAGE_BY_DIGEST = /^[a-z0-9.-]{1,255}\/[a-z0-9._/-]{1,256}@sha256:[0-9a-f]{64}$/
 /**
@@ -802,6 +802,131 @@ export function ecsClient(options: AwsJsonClientOptions, taskRunner?: AwsFunctio
 			if ((described.failures ?? []).some((failure) => failure.arn === arn && failure.reason === 'MISSING')) return null
 			throw new AwsError(operation, 'invalid_answer', 200, null, false)
 		},
+	}
+}
+
+/** What the operator's command starts in the platform's cluster: one task of a revision, as it is defined. */
+export interface EcsPlatformTaskStart {
+	readonly cluster: string
+	readonly taskDefinitionArn: string
+	/** The container whose exit code decides the run. */
+	readonly container: string
+	readonly network: EcsNetwork
+	readonly clientToken: string
+	readonly startedBy: string
+}
+
+/** A platform service as the operator's command reads its rollout: when it was created, and its deployments. */
+export interface EcsPlatformService {
+	readonly createdAt: Date
+	readonly deployments: readonly {
+		readonly id: string
+		readonly status: EcsDeployment['status']
+		readonly createdAt: Date
+		readonly rolloutState: EcsRolloutState | null
+	}[]
+}
+
+/** The operator's own ECS calls on the platform: its one-off tasks, and its services' rollouts. */
+export interface EcsPlatformTasks {
+	/** Starts one task; a task ECS could not place (`failures`) is the error `task_not_started`. */
+	runTask(start: EcsPlatformTaskStart, signal?: AbortSignal): Promise<EcsTaskRun>
+	describeTask(cluster: string, arn: string, container: string, signal?: AbortSignal): Promise<EcsTaskRun | null>
+	/** The ARNs of the tasks `startedBy` started that are still meant to run (`desiredStatus` `RUNNING`). */
+	listRunningTasks(cluster: string, startedBy: string, signal?: AbortSignal): Promise<readonly string[]>
+	/** The service `service`, `null` when ECS answers it `MISSING` or it is no longer active. */
+	describeService(cluster: string, service: string, signal?: AbortSignal): Promise<EcsPlatformService | null>
+	/** Starts a new deployment of the service's own revision (`forceNewDeployment`): its tasks start again. */
+	redeployService(cluster: string, service: string, signal?: AbortSignal): Promise<void>
+}
+
+const listedSchema = z.object({ taskArns: z.array(z.string().regex(TASK_ARN)).max(100), nextToken: z.string().optional() })
+const platformServicesSchema = z.object({
+	services: z.array(z.object({
+		serviceName: z.string(),
+		status: z.string(),
+		createdAt: z.number(),
+		deployments: z.array(z.object({ id: z.string(), status: z.string(), createdAt: z.number(), rolloutState: z.string().optional() })).optional(),
+	})).optional(),
+	failures: failuresSchema,
+})
+const redeployedSchema = z.object({ service: z.object({ serviceName: z.string() }) })
+
+/**
+ * The operator's command's own ECS calls (the database setup and the services' first rollout,
+ * `installation/apply.ts`), from the caller's own credentials. `RunTask` places the task in the cluster and network it
+ * names, and no command is overridden. Control never builds this: its role is denied `ecs:RunTask` on every resource
+ * and starts its tasks through the task runner (`ecsClient`), which refuses a platform family.
+ */
+export function ecsPlatformTasks(options: AwsJsonClientOptions): EcsPlatformTasks {
+	const json = awsJsonClient(ECS, options)
+	const reader = ecsClient(options)
+	return {
+		async listRunningTasks(cluster, startedBy, signal) {
+			if (!ECS_NAME.test(cluster)) refuse('the cluster name')
+			if (!STARTED_BY.test(startedBy)) refuse('the starter')
+			// One page: the setup is one task per run, so more than a page is no answer to this question.
+			const listed = await json.call('ListTasks', { cluster, startedBy, desiredStatus: 'RUNNING', maxResults: 100 }, listedSchema, signal)
+			if (listed.nextToken !== undefined && listed.nextToken !== '') throw new AwsError('ListTasks', 'too_many_tasks', 200, null, false)
+			return listed.taskArns
+		},
+
+		async describeService(cluster, service, signal) {
+			if (!ECS_NAME.test(cluster)) refuse('the cluster name')
+			if (!ECS_NAME.test(service)) refuse('the service name')
+			const operation = 'DescribeServices'
+			const described = await json.call(operation, { cluster, services: [service] }, platformServicesSchema, signal)
+			const found = (described.services ?? []).find((candidate) => candidate.serviceName === service)
+			if (found === undefined) {
+				if ((described.failures ?? []).some((failure) => failure.reason === 'MISSING')) return null
+				throw new AwsError(operation, 'invalid_answer', 200, null, false)
+			}
+			if (found.status !== 'ACTIVE') return null
+			const deployments = (found.deployments ?? []).map((deployment) => {
+				const status = DEPLOYMENT_STATUSES[deployment.status]
+				if (status === undefined) throw new AwsError(operation, 'invalid_answer', 200, null, false)
+				const rolloutState = deployment.rolloutState === undefined ? null : ROLLOUT_STATES[deployment.rolloutState]
+				if (rolloutState === undefined) throw new AwsError(operation, 'invalid_answer', 200, null, false)
+				return { id: deployment.id, status, createdAt: new Date(deployment.createdAt * 1000), rolloutState }
+			})
+			return { createdAt: new Date(found.createdAt * 1000), deployments }
+		},
+
+		async redeployService(cluster, service, signal) {
+			if (!ECS_NAME.test(cluster)) refuse('the cluster name')
+			if (!ECS_NAME.test(service)) refuse('the service name')
+			const updated = await json.call('UpdateService', { cluster, service, forceNewDeployment: true }, redeployedSchema, signal)
+			if (updated.service.serviceName !== service) throw new AwsError('UpdateService', 'invalid_answer', 200, null, false)
+		},
+
+		async runTask(start, signal) {
+			if (!ECS_NAME.test(start.cluster)) refuse('the cluster name')
+			if (!TASK_DEFINITION_ARN.test(start.taskDefinitionArn)) refuse('the task definition')
+			if (!ECS_NAME.test(start.container)) refuse('the container')
+			if (!CLIENT_TOKEN.test(start.clientToken)) refuse('the client token')
+			if (!STARTED_BY.test(start.startedBy)) refuse('the starter')
+			const operation = 'RunTask'
+			const answered = await json.call(
+				operation,
+				{
+					cluster: start.cluster,
+					taskDefinition: start.taskDefinitionArn,
+					launchType: 'FARGATE',
+					count: 1,
+					networkConfiguration: awsvpcOf(start.network),
+					clientToken: start.clientToken,
+					startedBy: start.startedBy,
+				},
+				tasksSchema,
+				signal,
+			)
+			const tasks = answered.tasks ?? []
+			if (tasks.length === 0 && (answered.failures ?? []).length > 0) throw new AwsError(operation, 'task_not_started', 200, null, false)
+			const [task] = tasks
+			if (tasks.length !== 1 || task === undefined) throw new AwsError(operation, 'invalid_answer', 200, null, false)
+			return taskRunOf(operation, task, start.container)
+		},
+		describeTask: (cluster, arn, container, signal) => reader.describeTask(cluster, arn, container, signal),
 	}
 }
 

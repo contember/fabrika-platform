@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import type { z } from 'zod'
-import { ecsClient, type EcsContainer, type EcsService, type EcsServiceCreate, type EcsTaskDefinition } from '../aws/ecs'
+import { ecsClient, type EcsContainer, ecsPlatformTasks, type EcsService, type EcsServiceCreate, type EcsTaskDefinition } from '../aws/ecs'
 import { AwsError, ECS } from '../aws/json'
 import type { AwsFunction } from '../aws/lambda'
 import { awsError, fakeAws } from './helpers/fake-aws'
@@ -521,5 +521,100 @@ describe('ecsClient', () => {
 		await expect(ecs.updateService(address, 'notes-prod:42', serviceNetwork, connect)).rejects.toThrow('the task definition')
 		await expect(ecs.describeService({ cluster: 'fabrika-apps', service: '' })).rejects.toThrow('the service name')
 		expect(calls).toEqual([])
+	})
+})
+
+describe("ecsPlatformTasks, the operator's own", () => {
+	const TASK = `arn:aws:ecs:eu-central-1:123456789012:task/fabrika-platform/${'b'.repeat(32)}`
+	const start = {
+		cluster: 'fabrika-platform',
+		taskDefinitionArn: 'arn:aws:ecs:eu-central-1:123456789012:task-definition/fabrika_platform_setup:3',
+		container: 'setup',
+		network: { subnets: ['subnet-0123456789abcdef4'], securityGroups: ['sg-0123456789abcdef5', 'sg-0123456789abcdef6'], publicIp: true },
+		clientToken: '0190a000-0000-7000-8000-000000000000',
+		startedBy: 'fabrika-platform-setup',
+	}
+
+	test('starts the task by RunTask itself, in the cluster and network it names, its command as defined', async () => {
+		const { options, calls } = fakeAws(ECS, { RunTask: () => ({ tasks: [{ taskArn: TASK, lastStatus: 'PROVISIONING' }] }) })
+		expect(await ecsPlatformTasks(options).runTask(start)).toEqual({ arn: TASK, status: 'pending', exitCode: null, stopCode: null, reason: null })
+		expect(calls).toEqual([{
+			operation: 'RunTask',
+			target: 'AmazonEC2ContainerServiceV20141113.RunTask',
+			body: {
+				cluster: 'fabrika-platform',
+				taskDefinition: start.taskDefinitionArn,
+				launchType: 'FARGATE',
+				count: 1,
+				networkConfiguration: {
+					awsvpcConfiguration: { subnets: start.network.subnets, securityGroups: start.network.securityGroups, assignPublicIp: 'ENABLED' },
+				},
+				clientToken: start.clientToken,
+				startedBy: 'fabrika-platform-setup',
+			},
+		}])
+	})
+
+	test('a task ECS could not place, or an answer of another form, is an error; a value of another form is never sent', async () => {
+		const unplaced = fakeAws(ECS, { RunTask: () => ({ tasks: [], failures: [{ reason: 'RESOURCE:MEMORY' }] }) })
+		await expect(ecsPlatformTasks(unplaced.options).runTask(start)).rejects.toMatchObject({ code: 'task_not_started' })
+		const two = fakeAws(ECS, { RunTask: () => ({ tasks: [{ taskArn: TASK, lastStatus: 'PENDING' }, { taskArn: TASK, lastStatus: 'PENDING' }] }) })
+		await expect(ecsPlatformTasks(two.options).runTask(start)).rejects.toMatchObject({ code: 'invalid_answer' })
+		const { options, calls } = fakeAws(ECS, {})
+		const tasks = ecsPlatformTasks(options)
+		await expect(tasks.runTask({ ...start, taskDefinitionArn: 'fabrika_platform_setup' })).rejects.toThrow('the task definition')
+		await expect(tasks.runTask({ ...start, network: { ...start.network, subnets: [] } })).rejects.toThrow('the subnets')
+		await expect(tasks.runTask({ ...start, clientToken: 'a token' })).rejects.toThrow('the client token')
+		expect(calls).toEqual([])
+	})
+
+	test('reads the task back as the deploy does', async () => {
+		const { options } = fakeAws(ECS, {
+			DescribeTasks: () => ({
+				tasks: [{ taskArn: TASK, lastStatus: 'STOPPED', stopCode: 'EssentialContainerExited', containers: [{ name: 'setup', exitCode: 0 }] }],
+			}),
+		})
+		expect(await ecsPlatformTasks(options).describeTask('fabrika-platform', TASK, 'setup')).toMatchObject({ status: 'stopped', exitCode: 0 })
+	})
+
+	test('lists the tasks a starter left running, on one page alone', async () => {
+		const { options, calls } = fakeAws(ECS, { ListTasks: () => ({ taskArns: [TASK] }) })
+		expect(await ecsPlatformTasks(options).listRunningTasks('fabrika-platform', 'fabrika-platform-setup')).toEqual([TASK])
+		expect(calls[0]?.body).toEqual({ cluster: 'fabrika-platform', startedBy: 'fabrika-platform-setup', desiredStatus: 'RUNNING', maxResults: 100 })
+		const paged = fakeAws(ECS, { ListTasks: () => ({ taskArns: [TASK], nextToken: 'more' }) })
+		await expect(ecsPlatformTasks(paged.options).listRunningTasks('fabrika-platform', 'fabrika-platform-setup')).rejects.toMatchObject({
+			code: 'too_many_tasks',
+		})
+	})
+
+	test("reads a service's creation and deployments, and redeploys its own revision", async () => {
+		const { options, calls } = fakeAws(ECS, {
+			DescribeServices: () => ({
+				services: [{
+					serviceName: 'fabrika-platform-iam',
+					status: 'ACTIVE',
+					createdAt: 1_790_000_000,
+					deployments: [{ id: 'ecs-svc/1', status: 'PRIMARY', createdAt: 1_790_000_060.5, rolloutState: 'COMPLETED' }],
+				}],
+			}),
+			UpdateService: () => ({ service: { serviceName: 'fabrika-platform-iam' } }),
+		})
+		const tasks = ecsPlatformTasks(options)
+		expect(await tasks.describeService('fabrika-platform', 'fabrika-platform-iam')).toEqual({
+			createdAt: new Date(1_790_000_000_000),
+			deployments: [{ id: 'ecs-svc/1', status: 'primary', createdAt: new Date(1_790_000_060_500), rolloutState: 'completed' }],
+		})
+		await tasks.redeployService('fabrika-platform', 'fabrika-platform-iam')
+		expect(calls[1]?.body).toEqual({ cluster: 'fabrika-platform', service: 'fabrika-platform-iam', forceNewDeployment: true })
+		const missing = fakeAws(ECS, { DescribeServices: () => ({ services: [], failures: [{ reason: 'MISSING' }] }) })
+		expect(await ecsPlatformTasks(missing.options).describeService('fabrika-platform', 'fabrika-platform-iam')).toBeNull()
+		const odd = fakeAws(ECS, {
+			DescribeServices: () => ({
+				services: [{ serviceName: 'fabrika-platform-iam', status: 'ACTIVE', createdAt: 1, deployments: [{ id: 'x', status: 'NEW', createdAt: 1 }] }],
+			}),
+		})
+		await expect(ecsPlatformTasks(odd.options).describeService('fabrika-platform', 'fabrika-platform-iam')).rejects.toMatchObject({
+			code: 'invalid_answer',
+		})
 	})
 })
