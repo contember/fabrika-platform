@@ -95,7 +95,7 @@ const orgOf = (worlds: IsolationWorlds, world: 'own' | 'other'): string => {
 async function start(): Promise<Stack> {
 	if (postgres === null) throw new Error('the stack needs Postgres')
 	const f = await membershipFixture(createHarness().repositories)
-	// A layer of its own: the fixture's `src/app.ts` is booted by its generated tests, and a layer binds once.
+	// A layer of its own: a layer binds once.
 	const served = serve(contract, { database: scoped(tables) })
 	const artifact: ContractArtifact = compileContract(contract, served.database?.tables ?? {})
 	expect((await f.putSchema(schemaFromContract(artifact))).status).toBe(200)

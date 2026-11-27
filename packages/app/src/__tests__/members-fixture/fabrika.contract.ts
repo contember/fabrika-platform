@@ -1,4 +1,4 @@
-// A kit application for the member lookup below a directory (`members-lookup.test.ts`, and its generated tests).
+// A kit application for the member lookup below a directory (`members-lookup.test.ts`, `members-isolation.test.ts`).
 
 import { app } from './src/app-kit'
 import { deals } from './src/deals/endpoints'
