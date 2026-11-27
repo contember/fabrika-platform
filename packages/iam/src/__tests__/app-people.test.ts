@@ -274,6 +274,15 @@ describe("the application's administrator grants and revokes its global roles in
 		const administrator = await holding(f, 'administrator', 'administrator')
 		const elsewhere = await consoleRpc(f, administrator.id, 'appPeople.list', { app: 'notes@stage' })
 		expect([elsewhere.status, errorType(elsewhere.body)]).toEqual([404, 'not_found'])
+		for (const app of [APP, 'notes@stage']) {
+			const caller = app === APP ? staff : administrator
+			const refused = await consoleRpc(f, caller.id, 'appPeople.holders', { app })
+			expect([app, refused.status, errorType(refused.body)]).toEqual([app, 404, 'not_found'])
+		}
+		// A refused read records nothing: it read nothing.
+		for (const caller of [staff, administrator]) {
+			expect(await f.repositories.audit.listAuditEvents({ action: 'iam.admin.access', principalId: caller.id, limit: 10 })).toEqual([])
+		}
 	})
 
 	test('a user key the proxy exchanged for a console token administers nothing: only a signed-in session does', async () => {
@@ -296,6 +305,7 @@ describe("the application's administrator grants and revokes its global roles in
 			const [method, input] of [
 				['appPeople.apps', null],
 				['appPeople.list', { app: APP }],
+				['appPeople.holders', { app: APP }],
 				['appPeople.grant', { app: APP, role: 'staff', email: 'target@example.test' }],
 				['appPeople.revoke', { app: APP, role: 'administrator', principalId: administrator.id }],
 			] as const
@@ -358,5 +368,62 @@ describe("the application's administrator grants and revokes its global roles in
 		await f.repositories.principals.disablePrincipal(administrator.id)
 		const refused = await consoleRpc(f, administrator.id, 'appPeople.apps', null)
 		expect(refused.status).toBe(403)
+	})
+})
+
+describe('how many hold each role of the application', () => {
+	test('one read answers every role: active grants, global or in a value, of principals not disabled, at this environment only', async () => {
+		const f = await people()
+		const administrator = await holding(f, 'administrator', 'administrator')
+		await holding(f, 'staff-a', 'staff')
+		await holding(f, 'staff-b', 'staff')
+		const disabled = await holding(f, 'staff-disabled', 'staff')
+		await f.repositories.principals.disablePrincipal(disabled.id)
+		const lapsed = await f.person('lapsed')
+		await f.repositories.grants.createGrant({ principalId: lapsed.id, app: APP, roleKey: 'staff', expiresAt: 1 })
+		// One editor in two workspaces counts once; another in a third counts too.
+		const editor = await f.person('editor')
+		for (const value of ['w1', 'w2']) {
+			await f.repositories.grants.createRoleGrantUnlessHeld({
+				principalId: editor.id,
+				app: APP,
+				roleKey: 'editor',
+				scopeType: 'workspace',
+				scopeValue: value,
+			})
+		}
+		const other = await f.person('other-editor')
+		await f.repositories.grants.createRoleGrantUnlessHeld({
+			principalId: other.id,
+			app: APP,
+			roleKey: 'editor',
+			scopeType: 'workspace',
+			scopeValue: 'w3',
+		})
+		// The same application's other environment is another IAM application.
+		expect((await f.putSchema(PEOPLE_SCHEMA, 'notes@stage')).status).toBe(200)
+		await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: (await f.person('stage-staff')).id, app: 'notes@stage', roleKey: 'staff' })
+
+		const read = await consoleRpc(f, administrator.id, 'appPeople.holders', { app: APP })
+		expect(read.status).toBe(200)
+		expect(result(read.body)).toEqual({
+			app: APP,
+			roles: [{ role: 'administrator', holders: 1 }, { role: 'editor', holders: 2 }, { role: 'staff', holders: 2 }],
+		})
+	})
+
+	test("each read is recorded once, an application's own administrator's as much as an IAM administrator's", async () => {
+		const f = await people()
+		const administrator = await holding(f, 'administrator', 'administrator')
+		expect((await consoleRpc(f, administrator.id, 'appPeople.holders', { app: APP })).status).toBe(200)
+		const own = await f.repositories.audit.listAuditEvents({ action: 'iam.admin.access', principalId: administrator.id, limit: 10 })
+		expect(own.map((row) => [row.principal_id, row.app, row.resource_id])).toEqual([[administrator.id, CONSOLE_APP, '/admin/rpc#appPeople.holders']])
+
+		// An IAM administrator is recorded by the admin gateway before the procedure runs, and not a second time.
+		const both = await holding(f, 'both', 'administrator')
+		await f.repositories.grants.createGrant({ principalId: both.id, roleKey: 'admin' })
+		expect((await consoleRpc(f, both.id, 'appPeople.holders', { app: APP })).status).toBe(200)
+		const rows = await f.repositories.audit.listAuditEvents({ action: 'iam.admin.access', principalId: both.id, limit: 10 })
+		expect(rows.map((row) => row.resource_id)).toEqual(['/admin/rpc#appPeople.holders'])
 	})
 })

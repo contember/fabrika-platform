@@ -54,7 +54,7 @@ function env(h: Harness): Env {
 const ROUTER_METHODS = routerLeaves(adminRpcRouter)
 
 /** The procedures an application's administrator calls without `iam.admin` (`admin/app-people.ts`). */
-const DELEGATED = ['appPeople.apps', 'appPeople.grant', 'appPeople.list', 'appPeople.revoke']
+const DELEGATED = ['appPeople.apps', 'appPeople.grant', 'appPeople.holders', 'appPeople.list', 'appPeople.revoke']
 /** The procedures that answer a requester its own grant requests (`admin/grant-requests.ts`). */
 const OWN_REQUESTS = ['grantRequests.decide', 'grantRequests.list']
 

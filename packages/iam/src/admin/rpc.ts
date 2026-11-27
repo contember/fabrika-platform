@@ -15,7 +15,7 @@ import type { IamAppContext } from '../app'
 import { logError } from '../log'
 import { stepUpBindingSchema } from '../passkeys'
 import { recordAdminAccess, rpcProcedureOf } from './access'
-import { grantAppRole, listAdministeredApps, listAppPeople, revokeAppRole } from './app-people'
+import { grantAppRole, listAdministeredApps, listAppPeople, listRoleHolders, revokeAppRole } from './app-people'
 import { listConnections, revokeConnection } from './connections'
 import {
 	deleteExternalAppUseCase,
@@ -349,6 +349,7 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	appPeople: t.router({
 		apps: t.procedure.query(({ ctx }) => listAdministeredApps(ctx)),
 		list: t.procedure.input(z.object({ app: nonEmpty, after: nonEmpty.optional() })).query(({ ctx, input }) => listAppPeople(ctx, input)),
+		holders: t.procedure.input(appInput).query(({ ctx, input }) => listRoleHolders(ctx, input)),
 		grant: t.procedure
 			.input(z.object({ app: nonEmpty, role: nonEmpty, email: nonEmpty }))
 			.mutation(({ ctx, input }) => grantAppRole(ctx, input)),

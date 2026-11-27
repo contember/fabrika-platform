@@ -6,12 +6,14 @@
 import { MAX_APP_MEMBERS_PAGE, normalizeEmailIdentity, type PermissionEntry, permits } from '@fabrika/auth-core'
 import type {
 	AdministeredAppDto,
+	AppInput,
 	AppPeopleDto,
 	AppPeopleInput,
 	GrantAppRoleRequest,
 	GrantAppRoleResponse,
 	RevokeAppRoleRequest,
 	RevokeAppRoleResponse,
+	RoleHoldersDto,
 } from '@fabrika/iam-contract'
 import type { IamAppContext } from '../app'
 import { contractGrantProblem } from '../contract-rules'
@@ -31,15 +33,18 @@ import { authorityDeadline, type HeldEntry, resolveAuthorityAt } from '../resolv
 import { BUILTIN_ROLES } from '../roles'
 import type { Services } from '../services'
 import { delegatedActions, parseStoredPermissions } from '../stored-permissions'
+import { recordAdminAccess } from './access'
 import { fail } from './context'
 import { grantsWait, requestGrantChange } from './grant-requests'
-import { IAM_APP } from './router'
+import { IAM_APP, type ResolvedAdmin } from './router'
+import { administrationOf } from './user-admin'
 
 /** The person administering, as the console's token names it. */
 interface PeopleAdministrator {
 	readonly services: Services
 	readonly principal: PrincipalRow
 	readonly requestId: string
+	readonly resolved: ResolvedAdmin
 }
 
 /**
@@ -67,7 +72,7 @@ async function administrator(ctx: IamAppContext): Promise<PeopleAdministrator> {
 	}
 	const principal = await ctx.services.repositories.principals.getPrincipalById(admin.id)
 	if (principal === null || principalStatus(principal) === 'disabled') return fail(403, 'not_allowed')
-	return { services: ctx.services, principal, requestId: ctx.requestId }
+	return { services: ctx.services, principal, requestId: ctx.requestId, resolved: admin }
 }
 
 /** The application, when it declares its people and the administrator holds its `members.manage` globally there. */
@@ -154,6 +159,19 @@ export async function listAppPeople(ctx: IamAppContext, input: AppPeopleInput): 
 	const administered = await requireAdministered(admin, input.app)
 	const page = await appMemberPage(admin.services, administered.app, administered.people, true, input.after ?? null, MAX_APP_MEMBERS_PAGE)
 	return { app: administered.app, ...page }
+}
+
+/**
+ * How many hold each role of the application, in one read. It is recorded once per call: `adminRpcAuth` already wrote
+ * the access row of an IAM administrator, so only an application's own administrator is recorded here, after the check.
+ */
+export async function listRoleHolders(ctx: IamAppContext, input: AppInput): Promise<RoleHoldersDto> {
+	const admin = await administrator(ctx)
+	const administered = await requireAdministered(admin, input.app)
+	if (administrationOf(admin.resolved) === null) {
+		await recordAdminAccess(admin.services, admin.resolved, admin.requestId, { method: 'POST', route: '/admin/rpc', procedure: 'appPeople.holders' })
+	}
+	return { app: administered.app, roles: await admin.services.repositories.membership.countAppRoleHolders(administered.app) }
 }
 
 export async function grantAppRole(ctx: IamAppContext, input: GrantAppRoleRequest): Promise<GrantAppRoleResponse> {

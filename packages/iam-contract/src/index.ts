@@ -839,6 +839,15 @@ export interface AppPeopleDto {
 }
 
 /**
+ * How many principals hold each role of the application now, as `appPeople.list` lists them: an active grant of the
+ * role, global or in a value, of a principal not disabled. A role nobody holds is absent.
+ */
+export interface RoleHoldersDto {
+	app: string
+	roles: { role: string; holders: number }[]
+}
+
+/**
  * Give a person who already has an IAM principal one of the application's global roles, by its address (the people
  * list answers each person's). An address IAM knows no person for is a 404: an IAM administrator invites people, an
  * application's administrator does not. Holding the role already answers the same.
@@ -1025,6 +1034,8 @@ export interface IamAdminRpcContract {
 	appPeople: {
 		apps: RpcProcedure<void, ListResponse<AdministeredAppDto>>
 		list: RpcProcedure<AppPeopleInput, AppPeopleDto>
+		/** One read for every role of the application; IAM records each call (`iam.admin.access`), whoever the caller. */
+		holders: RpcProcedure<AppInput, RoleHoldersDto>
 		grant: RpcProcedure<GrantAppRoleRequest, GrantAppRoleResponse>
 		revoke: RpcProcedure<RevokeAppRoleRequest, RevokeAppRoleResponse>
 	}
