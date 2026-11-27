@@ -25,6 +25,7 @@ import {
 } from '../passkeys'
 import { htmlPage } from '../password-pages'
 import { chooseLocale, parseLocale, requestLocales } from '../person-locale'
+import { unixNow } from '../repositories/sql'
 import type { Config } from '../services'
 import type { Services } from '../services'
 import { ACCOUNT_PATH, type AccountNotice, accountRedirect, PASSKEYS_PATH } from './account'
@@ -266,7 +267,15 @@ async function finishRemoving(p: Page, form: URLSearchParams): Promise<Response>
 		assertion.data,
 	)
 	if (!verified.ok) return accountRedirect('passkey_refused')
-	const removed = await p.services.repositories.passkeys.remove(principalId, passkeyId, personEvent(p, 'iam.passkey.remove', passkeyId))
+	const removed = await p.services.repositories.passkeys.remove(
+		principalId,
+		passkeyId,
+		{
+			removal: personEvent(p, 'iam.passkey.remove', passkeyId),
+			revocation: { ...personEvent(p, 'iam.oauth.grant.revoke', passkeyId), metadata: { reason: 'passkey_removed', passkeyId } },
+		},
+		unixNow(),
+	)
 	return accountRedirect(removed ? 'passkey_removed' : 'passkey_refused')
 }
 

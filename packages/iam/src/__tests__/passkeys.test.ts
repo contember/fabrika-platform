@@ -386,6 +386,59 @@ for (const { name, engine, skip } of engines) {
 				expect(actions).toEqual(['iam.passkey.register', 'iam.passkey.remove'])
 			})
 
+			test('removing a passkey ends exactly what it confirmed, recorded once under the person', async () => {
+				const i = await installation(engine())
+				const person = await i.person()
+				const laptop = await TestAuthenticator.create()
+				expect(await added(i, person, laptop)).toBe('passkey_added')
+				expect(await added(i, person, await TestAuthenticator.create(), { label: 'Phone', confirmWith: laptop })).toBe('passkey_added')
+				const [removed, kept] = await i.repositories.passkeys.list(person)
+				if (removed === undefined || kept === undefined) throw new Error('passkeys')
+				const ended = await confirmedAgentGrant(i, person, removed.credential_id)
+				const stays = await confirmedAgentGrant(i, person, kept.credential_id)
+				// An approval the removed passkey confirmed and no agent redeemed yet is denied; the other one's stays.
+				const now = unixNow()
+				const sessionId = await i.repositories.sessions.createSession({
+					tokenHash: await hashToken(randomToken(32)),
+					principalId: person,
+					authenticationMethod: 'password',
+					expiresAt: now + 3600,
+				})
+				const approved = async (credentialId: string) => {
+					const id = uuidv7()
+					const attempt = {
+						device_code_hash: `device-${id}`,
+						user_code_hash: `user-${id}`,
+						client_id: AGENT_CLIENT_ID,
+						app: 'notes@prod',
+						resources: '["https://notes.example.test"]',
+						scopes: '["write"]',
+						interval_seconds: 5,
+						agent_label: null,
+						created_at: now,
+						expires_at: now + 300,
+					}
+					await i.repositories.oauth.startDeviceAuthorization(attempt)
+					const approval = { principalId: person, sessionId, grantExpiresAt: now + 3600, passkey: { at: now, credentialId } }
+					expect(await i.repositories.oauth.approveDeviceAuthorization(attempt.user_code_hash, approval, now)).toBe(true)
+					return attempt.device_code_hash
+				}
+				const denied = await approved(removed.credential_id)
+				const pending = await approved(kept.credential_id)
+
+				const page = await ceremonyOf(await i.post(person, PASSKEYS_PATH, { step: 'remove', passkey: removed.id }))
+				expect(outcome(await answerPage(i, person, PASSKEYS_PATH, page, await laptop.assert(request(page), ISSUER)))).toBe('passkey_removed')
+				expect(await i.labels(person)).toEqual(['Phone'])
+				expect((await i.repositories.oauth.grant(ended))?.revoked_at).toBeNumber()
+				expect((await i.repositories.oauth.grant(stays))?.revoked_at).toBeNull()
+				expect((await i.repositories.oauth.deviceAuthorization(denied))?.status).toBe('denied')
+				expect((await i.repositories.oauth.deviceAuthorization(pending))?.status).toBe('approved')
+				const revocations = await i.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: person, limit: 5 })
+				expect(revocations.map((event) => [event.principal_id, JSON.parse(event.metadata ?? 'null')])).toEqual([
+					[person, { reason: 'passkey_removed', passkeyId: removed.id }],
+				])
+			})
+
 			test('a POST from another origin changes nothing, and a browser without a login is sent to sign in', async () => {
 				const i = await installation(engine())
 				const person = await i.person()
