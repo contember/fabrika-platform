@@ -30,7 +30,15 @@ import { cloudFormationClient } from '../aws/cloudformation'
 import { codeBuildClient } from '../aws/codebuild'
 import { ecrClient } from '../aws/ecr'
 import { ecsPlatformTasks } from '../aws/ecs'
-import { AWS_IAM_ORIGIN, AWS_IAM_SIGNING_REGION, ECS_SERVICE_LINKED_ROLE, type IamServiceLinkedRoles, iamServiceLinkedRoles } from '../aws/iam'
+import {
+	AWS_IAM_ORIGIN,
+	AWS_IAM_SIGNING_REGION,
+	ECS_SERVICE_LINKED_ROLE,
+	type IamGithubIdentity,
+	iamGithubIdentity,
+	type IamServiceLinkedRoles,
+	iamServiceLinkedRoles,
+} from '../aws/iam'
 import { CODEBUILD, ECR, ECS, SSM } from '../aws/json'
 import { CLOUDFORMATION } from '../aws/query'
 import { s3BucketOrigin, s3PartWriter } from '../aws/s3'
@@ -96,6 +104,8 @@ export interface AwsPlatformClients {
 	readonly sts: Pick<StsClient, 'callerAccount'>
 	readonly acm: Pick<AcmPlatformCertificates, 'describeCertificate' | 'findCertificates' | 'requestCertificate'>
 	readonly iam: IamServiceLinkedRoles
+	/** GitHub's OIDC provider, which `init` ensures for the deployer. */
+	readonly githubIdentity: IamGithubIdentity
 	readonly cloudFormation: AwsPlatformApplyInput['cloudFormation']
 	readonly tasks: AwsPlatformApplyInput['tasks']
 	readonly secrets: SsmPlatformSecrets
@@ -114,6 +124,7 @@ export function awsPlatformClients(where: Pick<AwsCommonOptions, 'accountId' | '
 		acm: acmPlatformCertificates(options(ACM)),
 		// IAM is global: one endpoint, signed for its own region whatever the installation's.
 		iam: iamServiceLinkedRoles({ origin: AWS_IAM_ORIGIN, region: AWS_IAM_SIGNING_REGION, credentials }),
+		githubIdentity: iamGithubIdentity({ origin: AWS_IAM_ORIGIN, region: AWS_IAM_SIGNING_REGION, credentials }),
 		cloudFormation: cloudFormationClient(options(CLOUDFORMATION)),
 		tasks: ecsPlatformTasks(options(ECS)),
 		secrets: ssmPlatformSecrets(options(SSM)),

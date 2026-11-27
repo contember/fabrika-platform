@@ -103,3 +103,34 @@ Name a certificate (`--control-certificate=<ARN>`, after renewing it under a new
 it; the run names the change before it asks. A changed network range, host or environment name is refused: those
 would replace the networks or rewrite what every service derives. An upgrade requests no certificate: each one, the
 record's or the one named, must be issued, so one that expired or was revoked is refused until you name another.
+
+## Upgrade from GitHub (the sidecar)
+
+From then on, a GitHub workflow can run the upgrade for you, in a private repository of your own, with no key stored
+anywhere. With `gh` signed in (rights to create the repository) and your own credentials exported:
+
+```bash
+fabrika platform init --provider=aws --account-id=<12 digits> --region=<region> \
+  --repo=<owner>/<name> --tag=<published tag> --base-image=<image@sha256:...>
+```
+
+It asks before each step:
+
+1. It creates the repository, or refreshes it, with the workflow and `fabrika.ref`, which pins the release.
+2. It sets the repository's OIDC subject to its numeric ids, and applies the deployer: the role AWS gives to a job of
+   that repository running in the installation's GitHub Environment (named after its environment) alone.
+3. It writes that Environment's four variables (the account, the region, the role's ARN, the base image). There is no
+   secret to write.
+
+To upgrade, bump `fabrika.ref` to a newer tag and push.
+
+**Require a person to approve every upgrade.** The deployer is an administrator of the account inside the installation's
+ceiling: it can make no IAM user, key or identity provider, can neither widen nor re-trust itself, and passes roles only
+to the installation's services. Whoever can run the workflow in that Environment can still do what the platform's
+stacks can. In particular, a role it makes may be given a trust pointing outside the account, and whoever takes it gets
+the ceiling and no more. So add yourself as a required reviewer of the Environment (init prints the `gh` command), keep
+it restricted to `main`, and keep the account for the installation alone: in an account shared with other workloads,
+the deployer could change what they run.
+
+A release that changes the ceilings (the boundaries every platform role carries) stops the workflow before anything
+moves. Run that one upgrade yourself, with your own credentials; the workflow runs the next ones.

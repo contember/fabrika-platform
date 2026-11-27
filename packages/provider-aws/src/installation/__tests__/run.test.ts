@@ -118,6 +118,8 @@ function clientsOf(account: FakeAccount): AwsPlatformClients {
 				return 'created'
 			},
 		},
+		// Install and upgrade never touch GitHub's provider: `init` alone does.
+		githubIdentity: { ensureGithubOidcProvider: unexpected },
 		acm: {
 			describeCertificate: async (arn) => account.certificates.get(arn) ?? null,
 			findCertificates: async (host) =>
@@ -498,7 +500,7 @@ describe("the AWS installation's commands", () => {
 	test('the module the CLI loads: install, upgrade and the guide', async () => {
 		expect(isInstallationCli(installationCli)).toBe(true)
 		expect(installationCli.provider).toBe('aws')
-		expect([...installationCli.commands]).toEqual(['install', 'upgrade', 'admin', 'guide'])
+		expect([...installationCli.commands]).toEqual(['install', 'upgrade', 'admin', 'init', 'guide'])
 		expect(await readAwsInstallationGuide()).toContain('# Installing Fabrika on AWS')
 		await expect(installationCli.run('deploy', [])).rejects.toThrow('does not support `platform deploy`')
 	})
