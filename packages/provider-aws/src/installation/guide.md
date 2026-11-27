@@ -13,10 +13,9 @@ admit the first administrator.
    CloudWatch log groups, a Lambda function, S3 buckets, Parameter Store values, CloudFormation stacks, and the ECS
    service-linked role on a fresh account. Export your credentials as the standard variables:
    `eval "$(aws configure export-credentials --format env)"`. The run checks first that they are the account you name.
-2. **Four hosts and their certificates in that region** (ACM, DNS-validated, each for exactly its host): IAM's,
-   Control's (the console), Operations', and the applications' listener's default host. Request each with
-   `aws acm request-certificate --domain-name <host> --validation-method DNS`, add the record it names, and wait
-   until it is `ISSUED`.
+2. **Four hosts, and access to their DNS**: IAM's, Control's (the console), Operations', and the applications'
+   listener's default host, which must be none of the other three. Each gets a certificate of exactly its host (ACM,
+   validated by DNS, in the installation's region): the install requests them, and you add the records it prints.
 3. **The release**: its full commit id (`git rev-parse <tag>^{commit}` in your checkout of the release's tag), and
    the Bun image applications build from, by digest (`docker.io/oven/bun@sha256:...`).
 
@@ -25,12 +24,16 @@ admit the first administrator.
 ```bash
 fabrika platform install --provider=aws \
   --account-id=<12 digits> --region=<region> --environment=production \
-  --iam-host=<host> --iam-certificate=<ARN> \
-  --control-host=<host> --control-certificate=<ARN> \
-  --operations-host=<host> --operations-certificate=<ARN> \
-  --apps-host=<host> --apps-certificate=<ARN> \
+  --iam-host=<host> --control-host=<host> --operations-host=<host> --apps-host=<host> \
   --commit=<40 hex> --base-image=<image@sha256:...>
 ```
+
+**The certificates first.** For each host the run takes the account's newest certificate of exactly that host,
+issued or waiting for its record; for a host with none it asks, then requests one. Until every one is issued it prints
+the DNS records to add (`CNAME <name> -> <value>`) and stops before anything else. Add them, and keep them: ACM renews
+each certificate with its record. Run the same command again once ACM has issued them (minutes, once the records
+resolve); it finds the same certificates and goes on. To use a certificate you already have, name it
+(`--iam-certificate=<ARN>`, and so on): it must be this account's and region's, of exactly its host, and issued.
 
 It records these choices in the account (`/fabrika/platform/installation/record`), asks once, then applies the
 platform's stacks in order, builds the release's two images, runs the database setup and starts the services. It
@@ -95,4 +98,5 @@ back. The ranges must be the networks' own, and the hosts and the environment's 
 or it refuses. A sign-in method or a mailer you changed by hand stays as you set it.
 Name a certificate (`--control-certificate=<ARN>`, after renewing it under a new ARN) or `--mcp-authoring` to change
 it; the run names the change before it asks. A changed network range, host or environment name is refused: those
-would replace the networks or rewrite what every service derives.
+would replace the networks or rewrite what every service derives. An upgrade requests no certificate: each one, the
+record's or the one named, must be issued, so one that expired or was revoked is refused until you name another.

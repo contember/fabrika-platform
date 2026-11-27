@@ -25,6 +25,11 @@ below and records them in the account; an upgrade takes every choice it does not
 changed network range, host or environment name, and names a changed certificate or MCP switch before it asks. Each
 asks once before it writes anything; ${UNATTENDED_FLAG} answers yes for a run nobody watches.
 
+Certificates: an install takes, for a host it names no certificate for, the account's certificate of exactly that
+host, or asks and requests one (ACM, validated by DNS). Until every one is issued it prints the DNS records to add
+and stops; run it again once ACM has issued them. A named certificate must be this account's and region's, of exactly its host,
+and issued. An upgrade requests none.
+
 Both (each also from the variable beside it):
   --account-id=<12 digits>          FABRIKA_AWS_ACCOUNT_ID
   --region=<region>                 FABRIKA_AWS_REGION
@@ -33,7 +38,7 @@ Both (each also from the variable beside it):
   --base-image=<image@sha256:...>   the Bun image applications build from (FABRIKA_AWS_BASE_IMAGE)
   ${UNATTENDED_FLAG}
 
-The installation's choices (an install names each; an upgrade only what it changes):
+The installation's choices (an install names each but the certificates; an upgrade only what it changes):
   --iam-host, --control-host, --operations-host=<host>
                                     FABRIKA_PLATFORM_IAM_HOST, _CONTROL_HOST, _OPERATIONS_HOST
   --iam-certificate, --control-certificate, --operations-certificate=<ACM ARN>
