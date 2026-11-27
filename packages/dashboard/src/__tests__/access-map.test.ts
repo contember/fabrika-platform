@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { roleSummary } from '../components/AccessMap'
 import { AccessMapSection } from '../components/app-detail/AccessMapSection'
 import type { AccessMapActionDto, AccessMapDto, AccessMapRoleDto, AppEnvDto } from '../lib/api'
-import { readRoleHolders, type RoleHolders } from '../lib/role-holders'
+import { readRoleHolders, type RoleHolders, roleHoldersTarget } from '../lib/role-holders'
 
 const EDITOR: AccessMapRoleDto = {
 	role: 'editor',
@@ -163,5 +163,17 @@ describe('reading the holders of each role', () => {
 		const notFound = () => Response.json({ error: { type: 'not_found', message: 'no application whose people you administer' } }, { status: 404 })
 		expect(await readRoleHolders('notes@prod', answering(notFound))).toBeNull()
 		expect(await readRoleHolders('notes@prod', answering(() => new Response('down', { status: 503 })))).toBeNull()
+	})
+
+	test('the Access tab reads counts only for one of the application environments, and only for a caller who may see them', () => {
+		const target = (over: Partial<Parameters<typeof roleHoldersTarget>[0]>) =>
+			roleHoldersTarget({ appId: 'notes', env: 'prod', envs: ['prod', 'stage'], iam: false, peopleApps: [], ...over })
+		expect(target({})).toBeNull()
+		expect(target({ peopleApps: ['notes@stage'] })).toBeNull()
+		expect(target({ peopleApps: ['notes@prod'] })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'installation' } })).toBe('notes@prod')
+		// IAM's `me` did not answer: ask, and IAM decides.
+		expect(target({ iam: null })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'installation' }, env: 'dev' })).toBeNull()
 	})
 })

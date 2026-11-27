@@ -6,7 +6,7 @@ import { DeviationsSection } from '../../components/app-detail/DeviationsSection
 import { SurfaceSection } from '../../components/app-detail/SurfaceSection'
 import { AppFrame, loadAppFrame, useEnvironmentStates } from '../../components/app/AppFrame'
 import { EmptyState } from '../../components/Table'
-import { readRoleHolders } from '../../lib/role-holders'
+import { readRoleHolders, roleHoldersTarget } from '../../lib/role-holders'
 import { readSelfAdmin } from '../../lib/self-admin'
 import { consoleSession } from '../../lib/session'
 
@@ -15,11 +15,12 @@ export default createPage()
 	.loader(async ({ params }) => {
 		const [frame, session] = await Promise.all([loadAppFrame(params.id), consoleSession()])
 		const peopleApps = session.peopleApps ?? []
-		// One IAM read per environment opened, which IAM records: for an IAM administrator, or one of the environment's people.
-		const shown = frame.envs.some((env) => env.env === params.env) ? appEnvironmentId(params.id, params.env) : null
+		const envs = frame.envs.map((env) => env.env)
+		// One IAM read per environment opened, which IAM records.
+		const counted = roleHoldersTarget({ appId: params.id, env: params.env, envs, iam: session.iam, peopleApps })
 		const [selfAdmin, holders] = await Promise.all([
-			readSelfAdmin(params.id, frame.envs.map((env) => env.env), session),
-			shown !== null && (session.iam !== false || peopleApps.includes(shown)) ? readRoleHolders(shown) : null,
+			readSelfAdmin(params.id, envs, session),
+			counted === null ? null : readRoleHolders(counted),
 		])
 		return { ...frame, selfAdmin, peopleApps, holders }
 	})

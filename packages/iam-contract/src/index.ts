@@ -839,8 +839,9 @@ export interface AppPeopleDto {
 }
 
 /**
- * How many principals hold each role of the application now, as `appPeople.list` lists them: an active grant of the
- * role, global or in a value, of a principal not disabled. A role nobody holds is absent.
+ * How many principals hold each role of the application now: an active grant of the role, global or in a value, as
+ * `appPeople.list` reads them, but only of principals not disabled, which the list shows marked. A role nobody holds is
+ * absent.
  */
 export interface RoleHoldersDto {
 	app: string

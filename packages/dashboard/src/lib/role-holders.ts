@@ -1,8 +1,27 @@
 import type { RpcFetch } from '@fabrika/app'
+import { appEnvironmentId } from '@fabrika/auth-core'
 import { quietIamClient } from './iam'
+import type { ConsoleSession } from './session'
 
 /** How many principals hold each role, by role key. A role absent from it has no holder. */
 export type RoleHolders = ReadonlyMap<string, number>
+
+/**
+ * The IAM application whose counts the Access tab reads for `env`, or null when it reads none: the environment must be
+ * one of the application's, and the caller an IAM administrator (or unknown to be none) or one who administers the
+ * environment's people. IAM decides again and records the read.
+ */
+export function roleHoldersTarget(input: {
+	readonly appId: string
+	readonly env: string
+	readonly envs: readonly string[]
+	readonly iam: ConsoleSession['iam']
+	readonly peopleApps: readonly string[]
+}): string | null {
+	if (!input.envs.includes(input.env)) return null
+	const app = appEnvironmentId(input.appId, input.env)
+	return input.iam !== false || input.peopleApps.includes(app) ? app : null
+}
 
 /**
  * The holders of every role of one IAM application (`<app>@<env>`), in one read IAM records. Null when IAM refuses or
