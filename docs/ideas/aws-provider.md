@@ -706,7 +706,14 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          awaits it. An upgrade redeploys none.
        - **The operator's Parameter Store calls** (`aws/ssm.ts`'s `ssmPlatformSecrets`) write once, replace and read
          back a parameter under `/fabrika/platform/`, and refuse any other. Control's client stays without a read.
-       - What the images are built from and what each task's parameters hold come next, each its own change.
+       - **Each task's parameters** (built, `installation/parameters.ts`): `installation-init`'s names and values, the
+         same as on every cloud, under each task's own path, and the AWS provider's beside them (Control's
+         coordinates, the account's S3 signed with the task role, so no storage key is written). Generated secrets
+         are written once, one value across their readers, and a run refuses to go on when two readers differ. How
+         people sign in and the mail are the install's, written once, so an operator's change survives an upgrade.
+         What a deploy derives is rewritten when it differs. The console's table digest and OAuth configuration come
+         from the platform proxy's manifest, which the images' piece resolves.
+       - What the images are built from comes next, its own change.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:

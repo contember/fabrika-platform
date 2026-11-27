@@ -32,7 +32,7 @@ import type { CloudFormationClient } from '../aws/cloudformation'
 import { type EcsPlatformService, type EcsPlatformTasks, type EcsTaskRun, TASK_DEFINITION_ARN } from '../aws/ecs'
 import type { SsmPlatformSecrets } from '../aws/ssm'
 import { type AwsStack, ensureStack, readAgainLater, UNREAD } from '../stack'
-import { AWS_PLATFORM_CLUSTER, awsAccessStack } from './access'
+import { AWS_PLATFORM_CLUSTER, type AwsAccessInput, awsAccessStack } from './access'
 import {
 	AWS_PLATFORM_SERVICES,
 	type AwsBalancersInput,
@@ -120,6 +120,20 @@ export interface AwsPlatformApplied extends AwsPlatformState {
 	readonly images: AwsPlatformImages
 }
 
+/** The access stack's input from what the stacks before it answered: also what Control's coordinates are read from. */
+export function awsPlatformAccessInput(state: Pick<AwsPlatformState, 'plan' | 'apps' | 'balancers' | 'runtime'>): AwsAccessInput {
+	const { plan } = state
+	return {
+		accountId: plan.accountId,
+		region: plan.region,
+		appsListenerArn: state.balancers.appsListenerArn,
+		vpcId: state.apps.vpcId,
+		taskSubnetIds: state.apps.taskSubnetIds,
+		installationHosts: [...AWS_PLATFORM_SERVICES.map((service) => plan.hosts[service]), plan.appsDefault.host],
+		platformNamespaceArn: state.runtime.namespaceArn,
+	}
+}
+
 /** A password of letters and digits from the platform's random source, without the bias of a modulo. */
 export function awsDatabasePassword(): string {
 	const limit = 256 - (256 % PASSWORD_ALPHABET.length)
@@ -174,15 +188,7 @@ export async function applyAwsPlatform(input: AwsPlatformApplyInput): Promise<Aw
 			}),
 		),
 	)
-	await apply(awsAccessStack({
-		accountId: plan.accountId,
-		region: plan.region,
-		appsListenerArn: balancers.appsListenerArn,
-		vpcId: apps.vpcId,
-		taskSubnetIds: apps.taskSubnetIds,
-		installationHosts: [...AWS_PLATFORM_SERVICES.map((service) => plan.hosts[service]), plan.appsDefault.host],
-		platformNamespaceArn: runtime.namespaceArn,
-	}))
+	await apply(awsAccessStack(awsPlatformAccessInput({ plan, apps, balancers, runtime })))
 	await apply(awsImagesStack({ accountId: plan.accountId, region: plan.region }))
 	const state: AwsPlatformState = { plan, apps, platform, balancers, database, runtime }
 	const images = await input.images(state)

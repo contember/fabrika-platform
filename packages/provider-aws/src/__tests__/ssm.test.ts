@@ -172,6 +172,19 @@ describe("ssmPlatformSecrets, the operator's own", () => {
 		await expect(secrets.putSecret('/fabrika/apps/notes/prod/STRIPE_KEY', VALUE)).rejects.toThrow('not one of the platform')
 		await expect(secrets.putSecretOnce('/fabrika/platformer/x', VALUE)).rejects.toThrow('not one of the platform')
 		await expect(secrets.readSecret(NAME)).rejects.toThrow('not one of the platform')
+		await expect(secrets.listNames(PATH)).rejects.toThrow('not one of the platform')
+		await expect(secrets.listNames('/fabrika/platformer')).rejects.toThrow('not one of the platform')
 		expect(calls).toEqual([])
+	})
+
+	test("lists the names one level below a platform task's path", async () => {
+		const { options, calls } = fakeAws(SSM, {
+			DescribeParameters: () => ({ Parameters: [{ Name: '/fabrika/platform/iam/ISSUER' }, { Name: '/fabrika/platform/iam/ENVIRONMENT' }] }),
+		})
+		expect(await ssmPlatformSecrets(options).listNames('/fabrika/platform/iam')).toEqual([
+			'/fabrika/platform/iam/ENVIRONMENT',
+			'/fabrika/platform/iam/ISSUER',
+		])
+		expect(calls[0]?.body).toMatchObject({ ParameterFilters: [{ Key: 'Path', Option: 'OneLevel', Values: ['/fabrika/platform/iam'] }] })
 	})
 })
