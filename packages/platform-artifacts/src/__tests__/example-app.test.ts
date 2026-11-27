@@ -368,8 +368,8 @@ const assertSubmittedDescriptor = (recorded: Recorded): void => {
 					// The provisioning credential is the service's superuser on the direct port (ADR-0017, zerops-platform.md).
 					FABRIKA_APP_DATABASE_URL:
 						`postgresql://\${${NOTES_DATABASE_SERVICE}_superUser}:\${${NOTES_DATABASE_SERVICE}_superUserPassword}@\${${NOTES_DATABASE_SERVICE}_hostname}:\${${NOTES_DATABASE_SERVICE}_port}/\${${NOTES_DATABASE_SERVICE}_dbName}?sslmode=disable`,
-					// 50 connections at the raised 1 GB, 12 kept from the processes, over 2 × 4 containers and 2 jobs.
-					FABRIKA_APP_DATABASE_CONNECTIONS: '3',
+					// 50 connections at the raised 1 GB, 8 kept from the processes, over 2 × 4 containers and 2 jobs.
+					FABRIKA_APP_DATABASE_CONNECTIONS: '4',
 					// The bucket reaches the runtime as references Zerops resolves; no storage credential passes through Fabrika.
 					FABRIKA_APP_STORAGE_BUCKET: `\${${NOTES_FILES_SERVICE}_bucketName}`,
 				},
@@ -470,7 +470,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 			`[dry-run] would write service variables on ${TARGET.serviceId}: FABRIKA_PROXY_SECRET`,
 			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_IAM_RPC_URL, FABRIKA_IAM_RPC_KEY, FABRIKA_APP_ORIGIN, FABRIKA_TOKEN_KEYS, FABRIKA_SOURCE_MAP_UPLOAD_KEY`,
 			`[dry-run] would remove every other job, webhook, connector, mail and platform variable on ${TARGET.serviceId}`,
-			`[dry-run] would raise the minimum RAM of ${NOTES_SERVICE} to 0.5 GB where it is lower`,
+			`[dry-run] would raise the minimum RAM of ${NOTES_SERVICE} to 0.25 GB where it is lower`,
 			`[dry-run] would size each process of ${NOTES_SERVICE} to the connection limit of ${NOTES_DATABASE_SERVICE}`,
 			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,
 			'[dry-run] would upload the resolved repository snapshot to the reserved app version',
@@ -545,7 +545,7 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			'getAppVersion',
 			'readBuildLog',
 		])
-		expect(rec.minRams).toEqual([['svc-api', 0.5], ['svc-db', 1]])
+		expect(rec.minRams).toEqual([['svc-api', 0.25], ['svc-db', 1]])
 		expect(rec.resolves).toEqual([{ requestedRef: 'refs/heads/main', descriptorSha256: SOURCE_DESCRIPTOR.sha256 }])
 		expect(rec.creates).toEqual([{ serviceId: TARGET.serviceId, name: RUN_ID }])
 		expect(rec.uploads).toEqual([{

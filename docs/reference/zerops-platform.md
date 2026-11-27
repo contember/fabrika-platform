@@ -1555,9 +1555,9 @@ the CRM example (133 cases), within about 1.5 s, beside some 45 MiB of Bun's map
 anonymous. Vertical autoscaling reacts in 10–20 s, so a spike this fast is killed before it scales.
 
 So a deploy raises the deploy service's minimum RAM (`raise-start-memory`, `packages/provider-zerops/src/provider.ts`)
-to `zeropsStartMinRam` (`src/execution.ts`): 0.5 GB for an application with a database, 2 GB for one that scans, before
-it reserves the version. The init commands now run only `migrate` (and `codegen --verify` on a build base not known to
-carry PostgreSQL 18); the floor stays as measured above with the isolation tests until it is measured for them alone. Measured on an `alpine/bun@1.3` service imported with `minContainers: 1, maxContainers: 2`:
+to `zeropsStartMinRam` (`src/execution.ts`): 0.25 GB for an application with a database (0.5 GB until 2026-11, while
+the init commands ran the isolation tests; measured below), 2 GB for one that scans, before it reserves the version.
+Measured on an `alpine/bun@1.3` service imported with `minContainers: 1, maxContainers: 2`:
 
 | Call                                                                                                                                                     | Result                                                                                                                                                                                       |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1571,6 +1571,49 @@ The step therefore sends the custom object it read WHOLE, under `verticalAutosca
 only `minResource.memoryGBytes` changed, and decides by reading `currentAutoscaling` back; anything short of the
 minimum fails the deploy before a version exists. It never lowers a minimum. The `custom-autoscaling-raises-min-ram`
 fact row pins both the working body and the reset under the OpenAPI's keys.
+
+#### Measured live (2026-11-27, account `prg1`, a test installation) — the started container's RAM and connections
+
+The Notes example (`@fabrika/*` 0.8.2, one container of 1–4, a `cheap` namespace's shared `postgresql:single@18` at
+0.25 GB, `FABRIKA_APP_DATABASE_CONNECTIONS` 2), loaded through its namespace proxy with a `px_` key of the `author`
+role: notes created at 50 at once, small text attachments uploaded at 20 and 50 at once, `notes.list` (200 rows) at
+100 at once, and a mix (70 % list, 20 % create, 10 % upload) at 200 at once; about 23 000 requests in four runs, 60–200
+requests a second. A sampler in the container (over SSH, through the project VPN) read every ~100 ms the `RssAnon` and
+`VmRSS` of the launcher and the application process, the container cgroup's `memory.current`, and the established
+sockets to port 5432 with their inodes; `memory.max`, `memory.events` and `VmHWM` were read before and after.
+
+| Measurement                                                                         | Result                                                                                                         |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| At rest: launcher, application (anonymous / resident)                               | 34 / 55 MiB, 50 / 74 MiB; the container's cgroup 115 MiB anonymous (Zerops' own processes included)            |
+| Restart at a 0.25 GB minimum (init: `migrate`, `codegen --verify`, then the server) | Started; no OOM event; the container held 115 MiB anonymous at rest                                            |
+| Load at the 0.5 GB minimum, peak                                                    | application 183 / 208 MiB, the pair 217 / 263 MiB; the cgroup 332 MiB with page cache; no OOM event            |
+| Load at the 0.25 GB minimum (256 MiB), peak                                         | every request answered; no OOM kill; `memory.max` raised to 384 MiB about 14 s in; 34 MiB swapped at the peak  |
+| Fastest growth of the pair's anonymous memory                                       | 50 MiB in 10 s                                                                                                 |
+| PostgreSQL connections of the container                                             | exactly 2 at rest and in every sample under load, both the application process's pool; the launcher holds none |
+
+A count above 2 appeared in 5 of about 8 000 samples, each listing the same two socket inodes twice or three times:
+a read of `/proc/net/tcp6` is not atomic while sockets churn, so count sockets by inode. 14 uploads of the 200-at-once
+mix answered 500 `request_cancelled`: they waited past the request budget for one of the 2 pooled connections.
+
+So `ZEROPS_START_MIN_RAM_GB` is 0.25 GB: the started container holds about half of it at rest, and a burst above it
+is vertical autoscaling's, which reacted within its 10–20 s while swap absorbed the growth. `ZEROPS_START_CONNECTIONS`
+is 1: the init commands open one connection at a time (measured locally, 2026-11-21, on 0.9.0-dev.22: `migrate`
+opens the provisioning connection, closes it, then the migration role's; `codegen --verify` one), and every release's
+init commands the platform renders run only those two, so no release in the support window holds more at start. The
+serving process holds its pool and nothing else, which the holders already count.
+
+**An existing installation.** Both constants are Control's code, so `fabrika platform upgrade` and an application's
+next deploy apply them; no application update is needed. Neither step ever lowers a minimum RAM:
+
+- A deploy service raised to 0.5 GB by an earlier release keeps 0.5 GB. To pay for 0.25 GB, lower its minimum RAM in
+  the Zerops GUI (the service's automatic scaling). A runtime's minimum can be lowered (verified 2026-11-27); change it
+  with an update that sends the whole custom autoscaling. `zops scale set --min-ram` reset the whole custom autoscaling
+  instead (observed 2026-11-27: the minimum fell to 0.125 GB and the container range to 1–10), the same reset as the
+  OpenAPI's `…Nullable` keys above; check the container range after any change.
+- An application's database keeps the minimum RAM a deploy raised it to. The next deploy sizes each process from
+  that limit with 4 more connections to share (`FABRIKA_APP_DATABASE_CONNECTIONS` rises, never above 10), and raises
+  no database a smaller step now fits. fabrika never lowers a database's minimum RAM, and Zerops is not known to
+  (UNVERIFIED); to return a database to a smaller step, create a new service and restore a backup into it.
 
 #### Measured in production (2026-10-16) — an application's database connections
 
@@ -1606,9 +1649,10 @@ of the Notes example (38 cases) and of the CRM example (133 cases): 5 with the t
 one provisioning connection per file for the schema's lock and the catalog. None is left once the run ended.
 
 So a deploy sizes each process's connections in `size-database` (`packages/provider-zerops/src/database-budget.ts`):
-of `max_connections` at the database's minimum RAM, 7 are never the application's and 5 are one container's init
-commands (measured above with the isolation tests, and kept until measured again for today's init commands); the rest is shared by twice the deploy service's maximum container count and one process per crontab job, at
-most 10 each, and handed over as `FABRIKA_APP_DATABASE_CONNECTIONS`. Below 2 each, it raises the application's own
+of `max_connections` at the database's minimum RAM, 7 are never the application's and 1 is one container's init
+commands (5 until 2026-11, while they ran the isolation tests; measured above); the rest is shared by twice the deploy
+service's maximum container count and one process per crontab job, at most 10 each, and handed over as
+`FABRIKA_APP_DATABASE_CONNECTIONS`. Below 2 each, it raises the application's own
 database to the smallest step that gives 2 (the Notes example, 4 containers and 2 jobs: 0.25 → 1 GB; Zerops charges
 $0.75 per 0.25 GB and 30 days); a namespace's shared `postgres` is never raised. The test kit waits up to 60 s for a
 slot on SQLSTATE 53300 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)).

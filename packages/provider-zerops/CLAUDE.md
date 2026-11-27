@@ -190,10 +190,9 @@ bun test
   log (`readSourceMapUploadReport`): a succeeded run reports `artifactState: 'complete'` only when that line said so, else
   `incomplete`. Every build command, the authored ones included, can read the bearer, and so can the runtime until the
   next deploy replaces it: it reaches only this run's release and expires two hours after the run started.
-- **`raise-start-memory` raises the deploy service's minimum RAM before a version is reserved (ADR-0043).** The init
-  commands peaked above the runtime's 0.125 GB faster than vertical autoscaling reacts when they also ran the isolation
-  tests, so `zeropsStartMinRam` (`src/execution.ts`) names the floor: 0.5 GB with a database, 2 GB with a scanner. The
-  values are kept as measured then until they are measured again for migrate and codegen alone. An import
+- **`raise-start-memory` raises the deploy service's minimum RAM before a version is reserved (ADR-0043).** A started
+  container holds more than the runtime's 0.125 GB, so `zeropsStartMinRam` (`src/execution.ts`) names the floor: 0.25 GB
+  with a database (measured live 2026-11-27: ~115 MiB at rest, a burst above it autoscaled), 2 GB with a scanner. An import
   cannot change an existing service, so the step reads `customAutoscaling` back, sends it WHOLE with only
   `minResource.memoryGBytes` changed, under the keys `verticalAutoscaling` / `horizontalAutoscaling`, and decides by
   reading `currentAutoscaling` back. Measured live: a field left out, and the whole object under the published OpenAPI's
@@ -201,8 +200,8 @@ bun test
   and the step then refuses rather than reset a field. It only raises.
 - **`size-database` sizes each process's database connections before a version is reserved (ADR-0043).** Pure in
   `src/database-budget.ts`: `max_connections` follows the database's minimum RAM step and profile; 7 are never an
-  application role's and 5 are one container's init commands (measured when they also ran the isolation tests, and
-  kept until measured again); the rest is shared by twice the deploy service's maximum
+  application role's and 1 is one container's init commands (they open one connection at a time: measured locally 2026-11-21, on Zerops 2026-11-27);
+  the rest is shared by twice the deploy service's maximum
   container count (10 when it reads none) and one process per crontab job (`zeropsJobProcesses`, the same list the
   crontab is rendered from), at most 10 each. Below 2 the step raises the application's OWN database through the same
   read-modify-write as `raise-start-memory` (`raiseMinRam`); measured live, `max_connections` follows in ~15 s through

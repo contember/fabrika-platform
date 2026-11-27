@@ -50,12 +50,11 @@ export interface ZeropsContractJob {
 export const ZEROPS_SCAN_MIN_RAM_GB = 2
 
 /**
- * The RAM in GB a container of an application with a database starts with. It was measured when the init commands
- * also ran `fabrika db test-isolation` (161 MiB for the Notes example, 225 MiB for the CRM one, 2026-10-15), which
- * Zerops' 0.125 GB floor killed within a second. They now only migrate on a known build base, and migrate and run
- * `codegen --verify` on any other (`zeropsSchemaChecks`); neither is measured, so the floor stays for both.
+ * The RAM in GB a container of an application with a database starts with. Zerops' 0.125 GB floor is below what the
+ * started container holds: the Notes example's held 115 MiB anonymous at rest on Zerops (2026-11-27), its init
+ * commands about 40 MiB before it. Load beyond the start is vertical autoscaling's.
  */
-export const ZEROPS_START_MIN_RAM_GB = 0.5
+export const ZEROPS_START_MIN_RAM_GB = 0.25
 
 /** The minimum RAM in GB the deploy service's containers need to start, or null when Zerops' floor suffices. */
 export function zeropsStartMinRam(execution: ZeropsLockedExecution): number | null {

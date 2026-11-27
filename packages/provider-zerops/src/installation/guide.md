@@ -69,13 +69,13 @@ reach: if Zerops tags each one `daily`, the retention's daily count counts hours
 keeps the daily default: its error history does not need that schedule.
 
 **Presets.** The choices below combine into three shapes. Prices are the idle floor for three applications in
-one production namespace; an application with a database runs at a 0.5 GB floor, about $2.10 per container.
+one production namespace; an application with a database runs at a 0.25 GB floor, about $1.35 per container.
 
 | Preset     | Platform tier | Production namespace                                                                                | Idle floor | A lost node costs                                                 |
 | ---------- | ------------- | --------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
-| evaluation | `light`       | `cheap`, single-node PostgreSQL, one container each                                                 | about $16  | the data written since that database's last backup, and an outage |
-| data       | `light`       | `cheap` with `--postgres-type=postgresql:ha@18 --postgres-profile=oltp-staging`, one container each | about $26  | applications' data survives; platform data since its last backup  |
-| stable     | `standard`    | `cheap` HA as above, `--core-package=SERIOUS`, two containers of each application                   | $130+      | a short failover; the namespace proxy has one container           |
+| evaluation | `light`       | `cheap`, single-node PostgreSQL, one container each                                                 | about $14  | the data written since that database's last backup, and an outage |
+| data       | `light`       | `cheap` with `--postgres-type=postgresql:ha@18 --postgres-profile=oltp-staging`, one container each | about $24  | applications' data survives; platform data since its last backup  |
+| stable     | `standard`    | `cheap` HA as above, `--core-package=SERIOUS`, two containers of each application                   | $125+      | a short failover; the namespace proxy has one container           |
 
 A staging namespace (`cheap`, single-node) adds about $9 to any of them.
 
@@ -91,8 +91,8 @@ the type is fixed once the namespace exists, the profile is not.
 | `full`          | The namespace belongs to ONE application (`--exclusive-app=<id>`)       | an application that must be isolated |
 
 **3. The application's database** (the application's `fabrika.config.ts`, before step 5). The example
-declares `postgresql:single@18` at `oltp-hobby`, about $1.45, plus its runtime at about $2.10 per
-container (a deploy raises the floor of an application with a database to 0.5 GB). `postgresql:ha@18` survives a node failure: about $11 at `oltp-staging` (shared CPU), about $72 at
+declares `postgresql:single@18` at `oltp-hobby`, about $1.45, plus its runtime at about $1.35 per
+container (a deploy raises the floor of an application with a database to 0.25 GB). `postgresql:ha@18` survives a node failure: about $11 at `oltp-staging` (shared CPU), about $72 at
 `oltp-production` (dedicated). Single to HA later means a new service and a data migration.
 
 **4. Namespace core package** (`--core-package=LIGHT|SERIOUS`, step 5). `LIGHT` is free and the default on
