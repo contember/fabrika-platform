@@ -17,8 +17,12 @@ function fakeStore() {
 	const store = new Map<string, string>()
 	for (const service of ['iam', 'control', 'operations']) store.set(`/fabrika/platform/database/${service}-password`, PASSWORD(service))
 	const replaced: string[] = []
+	/** What another run writes at the same moment, just before this one's write of `name`. */
+	const meanwhile = new Map<string, string>()
 	const secrets: SsmPlatformSecrets = {
 		putSecretOnce: async (name, value) => {
+			const other = meanwhile.get(name)
+			if (other !== undefined) store.set(name, other)
 			if (store.has(name)) return false
 			store.set(name, value)
 			return true
@@ -30,7 +34,7 @@ function fakeStore() {
 		readSecret: async (name) => store.get(name) ?? null,
 		listNames: async (path) => [...store.keys()].filter((name) => name.startsWith(`${path}/`) && !name.slice(path.length + 1).includes('/')).sort(),
 	}
-	return { store, secrets, replaced }
+	return { store, secrets, replaced, meanwhile }
 }
 
 const BRING_UP: AwsParametersInput['bringUp'] = { authentication: { passwordEnabled: true }, email: { kind: 'none' } }
@@ -122,11 +126,95 @@ describe("each platform task's parameters", () => {
 				variables: names,
 			})
 		).not.toThrow()
-		// Names only, never a value.
+		// Names only, never a value: no line holds any value the store holds (a short one like `true` aside).
 		const logged = lines.join('\n')
-		for (const value of [PASSWORD('iam'), at('iam', 'FABRIKA_IAM_RPC_KEY') ?? '', at('control', 'FABRIKA_CONTROL_VAULT_KEY') ?? '']) {
-			expect(logged).not.toContain(value)
+		for (const value of store.values()) {
+			if (value.length >= 8) expect(logged).not.toContain(value)
 		}
+	})
+
+	test("an OIDC client and a mailer are the install's, written once and kept on an upgrade", async () => {
+		const { store, secrets } = fakeStore()
+		const lines: string[] = []
+		await writeAwsParameters({
+			...input(secrets, lines),
+			bringUp: {
+				authentication: { passwordEnabled: false, oidc: { issuer: 'https://login.example.com', clientId: 'fabrika', clientSecret: 'oidc-secret-value' } },
+				email: {
+					kind: 'provider',
+					variables: new Map([['FABRIKA_EMAIL_PROVIDER', 'smtp'], ['FABRIKA_EMAIL_FROM', 'noreply@example.com']]),
+					secretNames: new Set(),
+				},
+			},
+		})
+		const at = (task: string, name: string) => store.get(`/fabrika/platform/${task}/${name}`)
+		expect([at('iam', 'FABRIKA_IAM_OIDC_ENABLED'), at('iam', 'FABRIKA_IAM_PASSWORD_ENABLED')]).toEqual(['true', 'false'])
+		expect([at('iam', 'OIDC_ISSUER'), at('iam', 'OIDC_CLIENT_ID'), at('iam', 'OIDC_CLIENT_SECRET')]).toEqual([
+			'https://login.example.com',
+			'fabrika',
+			'oidc-secret-value',
+		])
+		for (const task of ['iam', 'control']) expect(at(task, 'FABRIKA_EMAIL_FROM')).toBe('noreply@example.com')
+		expect(at('operations', 'FABRIKA_EMAIL_FROM')).toBeUndefined()
+		expect(lines.join('\n')).not.toContain('oidc-secret-value')
+		// An operator rotates the client secret by hand; an upgrade, which names no bring-up, keeps it.
+		store.set('/fabrika/platform/iam/OIDC_CLIENT_SECRET', 'rotated-by-hand')
+		const names = await writeAwsParameters(input(secrets, []))
+		expect(at('iam', 'OIDC_CLIENT_SECRET')).toBe('rotated-by-hand')
+		expect(names.iam).toContain('OIDC_CLIENT_SECRET')
+		expect(names.control).toContain('FABRIKA_EMAIL_FROM')
+	})
+
+	test("the proxy's secret for IAM is one value on both, and the manifest's OAuth reaches IAM and Operations", async () => {
+		const { store, secrets } = fakeStore()
+		await writeAwsParameters({
+			...install(secrets, []),
+			manifest: {
+				controlTableDigest: 'd'.repeat(64),
+				oauthConfig: { resources: [], hosts: ['iam.example.com', 'control.example.com', 'operations.example.com'] },
+				operationsOAuthResource: 'https://operations.example.com/rpc',
+			},
+		})
+		const at = (task: string, name: string) => store.get(`/fabrika/platform/${task}/${name}`)
+		expect(at('iam', 'FABRIKA_INSTALLATION_PROXY_SECRET_IAM')).toBeDefined()
+		expect(at('proxy', 'FABRIKA_INSTALLATION_PROXY_SECRET_IAM')).toBe(at('iam', 'FABRIKA_INSTALLATION_PROXY_SECRET_IAM'))
+		expect(at('iam', 'FABRIKA_IAM_OAUTH_CONFIG')).toBe(
+			JSON.stringify({ resources: [], hosts: ['iam.example.com', 'control.example.com', 'operations.example.com'] }),
+		)
+		expect(at('operations', 'FABRIKA_OPERATIONS_OAUTH_RESOURCE')).toBe('https://operations.example.com/rpc')
+		expect(at('control', 'FABRIKA_SERVICE_TABLE_DIGEST')).toBe('d'.repeat(64))
+	})
+
+	test('an upgrade never makes a key the install made: a lost vault key is refused, IAM data key alone is added', async () => {
+		const lost = fakeStore()
+		await writeAwsParameters(install(lost.secrets, []))
+		lost.store.delete('/fabrika/platform/control/FABRIKA_CONTROL_VAULT_KEY')
+		const before = new Map(lost.store)
+		await expect(writeAwsParameters(input(lost.secrets, []))).rejects.toThrow(
+			"aws: the platform's vaultKey is in none of /fabrika/platform/control/FABRIKA_CONTROL_VAULT_KEY; an upgrade never makes a new one",
+		)
+		// Refused before any write.
+		expect(lost.store).toEqual(before)
+		for (const name of ['iam/FABRIKA_IAM_SIGNING_KEYS', 'iam/FABRIKA_IAM_PROVISIONING_KEY']) {
+			const one = fakeStore()
+			await writeAwsParameters(install(one.secrets, []))
+			for (const task of ['iam', 'control']) one.store.delete(`/fabrika/platform/${task}/${name.split('/')[1]}`)
+			await expect(writeAwsParameters(input(one.secrets, []))).rejects.toThrow('an upgrade never makes a new one')
+		}
+		// An installation made before IAM had a data key gets one.
+		const older = fakeStore()
+		await writeAwsParameters(install(older.secrets, []))
+		older.store.delete('/fabrika/platform/iam/FABRIKA_IAM_DATA_KEY')
+		await writeAwsParameters(input(older.secrets, []))
+		expect(older.store.get('/fabrika/platform/iam/FABRIKA_IAM_DATA_KEY')).toBeDefined()
+	})
+
+	test('a shared key another run wrote meanwhile into one reader stops this run, naming the parameter', async () => {
+		const { secrets, meanwhile } = fakeStore()
+		meanwhile.set('/fabrika/platform/control/FABRIKA_IAM_PROVISIONING_KEY', 'px_the-other-run')
+		const failure = await writeAwsParameters(install(secrets, [])).catch((error: unknown) => error)
+		expect(String(failure)).toContain('aws: /fabrika/platform/control/FABRIKA_IAM_PROVISIONING_KEY holds another value than its readers settled on')
+		expect(String(failure)).not.toContain('px_the-other-run')
 	})
 
 	test('an upgrade keeps every generated value and what an operator set by hand, and converges what it derives', async () => {

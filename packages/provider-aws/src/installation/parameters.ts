@@ -9,7 +9,10 @@
 //   vault and data keys, and Control's copy of the proxy key for the namespace proxies): written once and never
 //   replaced. A secret several services read is one value in each reader's path, so a run that stopped part way takes
 //   the value an earlier run wrote from any reader that holds it, and refuses to go on when two readers hold different
-//   ones. Losing the vault key loses every application's secrets, so nothing here ever writes over one.
+//   ones. Losing the vault key loses every application's secrets, so nothing here ever writes over one: a generated
+//   name is refused on the path that replaces values, and an upgrade refuses a key no reader holds rather than make a
+//   new one that would hide the loss (IAM's data key alone may be added, as Zerops' deploy adds it). A write that finds
+//   the parameter already there (a run at the same time) is read back and must hold the settled value.
 // - **Bring-up only** (how people sign in, the outbound mail): written once, on install, so a sign-in method or a
 //   mailer an operator changed by hand survives every upgrade, as on Zerops. An upgrade names none.
 // - **Derived** (where the installation answers, each service's database URL from its password, the buckets, Control's
@@ -69,6 +72,12 @@ const GENERATED_READERS: Readonly<Record<PlatformService, readonly string[]>> = 
 	control: [...INSTALLATION_SECRET_VARIABLES.control, 'FABRIKA_AWS_PROXY_IAM_KEY'],
 }
 
+/**
+ * The generated keys an upgrade may make when no reader holds one, as Zerops' deploy makes IAM's data key: a key a
+ * release added after the installation was made. Every other key is the install's alone, and its absence a loss.
+ */
+const UPGRADE_MAY_ADD: ReadonlySet<keyof InstallationSecrets> = new Set(['dataKey'])
+
 /** What the run settles before it writes: where the stacks are, and the release the installation runs. */
 export interface AwsParametersInput {
 	readonly state: AwsPlatformState
@@ -111,6 +120,12 @@ async function settledSecrets(input: AwsParametersInput): Promise<InstallationSe
 		}
 		if (held.size > 1) {
 			throw new Error(`aws: the platform's ${field} differs between ${parameters.join(', ')}; an operator must make them one before a run writes more`)
+		}
+		// An upgrade makes no key the install made: one no reader holds was lost, and a new one would hide that.
+		if (held.size === 0 && input.bringUp === undefined && !UPGRADE_MAY_ADD.has(field)) {
+			throw new Error(
+				`aws: the platform's ${field} is in none of ${parameters.join(', ')}; an upgrade never makes a new one, so restore it from where it was kept`,
+			)
 		}
 		settled.set(field, [...held][0] ?? fresh[field])
 	}
@@ -203,6 +218,9 @@ export async function desiredAwsParameters(input: AwsParametersInput): Promise<D
 			else if (input.bringUp !== undefined) taskOnce.set(name, value)
 		}
 		for (const [name, value] of deployed[task]) taskDerived.set(name, value)
+		// A generated key is never on the path that replaces values, whatever a later `installation-init` derives.
+		const replaced = [...taskDerived.keys()].find((name) => generated.has(name))
+		if (replaced !== undefined) throw new Error(`aws: the ${task} task's generated ${replaced} would be replaced by a derived value`)
 		once.set(task, taskOnce)
 		derived.set(task, taskDerived)
 	}
@@ -219,7 +237,13 @@ export async function writeAwsParameters(input: AwsParametersInput): Promise<Aws
 	for (const task of TASKS) {
 		const written: string[] = []
 		for (const [name, value] of desired.once.get(task) ?? []) {
-			if (await secrets.putSecretOnce(parameterOf(task, name), value, signal)) written.push(name)
+			const parameter = parameterOf(task, name)
+			if (await secrets.putSecretOnce(parameter, value, signal)) {
+				written.push(name)
+			} else if (GENERATED_READERS[task].includes(name) && (await secrets.readSecret(parameter, signal)) !== value) {
+				// Settled from its readers, yet another value is there: a run at the same time won this reader's path.
+				throw new Error(`aws: ${parameter} holds another value than its readers settled on; run again once no other run writes`)
+			}
 		}
 		for (const [name, value] of desired.derived.get(task) ?? []) {
 			const parameter = parameterOf(task, name)
