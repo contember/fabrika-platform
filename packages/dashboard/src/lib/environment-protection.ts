@@ -74,7 +74,7 @@ export function setEnvironmentProtection(
 	)
 }
 
-/** What the editor's save bar says: never a count of changes to save while one waits for its passkey, which reads as saved. */
+/** What the editor's save bar says; while a change waits for its passkey, that it is not saved yet. */
 export function saveStatus(changes: number, waitingForPasskey: boolean): string {
 	if (waitingForPasskey) return 'Not saved yet: the change waits for your passkey'
 	if (changes === 0) return 'No changes'

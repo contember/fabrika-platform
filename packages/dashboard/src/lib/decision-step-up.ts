@@ -5,6 +5,7 @@
 
 import { RpcError } from '@fabrika/app'
 import type { ApprovalStepUp, ApprovalStepUpChallenge, StepUpMode } from '@fabrika/control-contract'
+import { PASSKEY_CHALLENGE_TTL_SECONDS } from '@fabrika/iam-contract'
 
 /** What a step-up confirms: a decision of a pending item, or a change of an environment's protection. */
 export type StepUpSubject = 'decision' | 'change'
@@ -20,14 +21,11 @@ export class NoPasskeyError extends Error {
 	}
 }
 
-/**
- * A decision waiting for its passkey check on IAM's page: `post` sends it with the challenge's id, once the person is back;
- * `renew` asks for a new challenge bound to the same decision, for a check that expired.
- */
+/** A decision waiting for its passkey check on IAM's page: `post` sends it once the person is back, `renew` asks for a new check. */
 export interface PasskeyCheck<T> {
 	readonly url: string
-	/** Epoch seconds. */
-	readonly expiresAt: number
+	/** Epoch milliseconds on this browser's clock, which may differ from IAM's, so not IAM's `expiresAt`. */
+	readonly deadline: number
 	readonly what: StepUpSubject
 	post(): Promise<T>
 	renew(): Promise<PasskeyCheck<T>>
@@ -57,8 +55,9 @@ async function issueCheck<T>(
 ): Promise<PasskeyCheck<T>> {
 	const issued = await challenge()
 	if (issued.kind === 'no-passkey') throw new NoPasskeyError(what)
-	const { challengeId, expiresAt, url } = issued.challenge
-	return { url, expiresAt, what, post: () => post({ challengeId }), renew: () => issueCheck(challenge, post, what) }
+	const { challengeId, url } = issued.challenge
+	const deadline = Date.now() + PASSKEY_CHALLENGE_TTL_SECONDS * 1000
+	return { url, deadline, what, post: () => post({ challengeId }), renew: () => issueCheck(challenge, post, what) }
 }
 
 /** Why a decision was not recorded, in the console's words; `noPasskey` adds the way to add one. */

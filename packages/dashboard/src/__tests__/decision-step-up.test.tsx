@@ -6,6 +6,7 @@ import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/r
 import { BuzolaProvider } from '@buzola/router/react'
 import { RpcError } from '@fabrika/app'
 import type { ApprovalStepUp, ApprovalStepUpChallenge } from '@fabrika/control-contract'
+import { PASSKEY_CHALLENGE_TTL_SECONDS } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -51,7 +52,8 @@ describe('the decision', () => {
 		expect(f.steps).toEqual(['challenge'])
 		if (started.kind !== 'confirm') throw new Error('expected a passkey check')
 		expect(started.check.url).toBe(URL_OF_CHECK)
-		expect(started.check.expiresAt).toBe(1_700_000_000)
+		// IAM's expiry is on IAM's clock (here long past): the page counts the challenge's lifetime from when it received it.
+		expect(Math.abs(started.check.deadline - (Date.now() + PASSKEY_CHALLENGE_TTL_SECONDS * 1000))).toBeLessThan(1000)
 
 		expect(await started.check.post()).toBe('recorded')
 		expect(f.steps).toEqual(['challenge', 'decision'])
@@ -87,10 +89,10 @@ describe('the decision', () => {
 })
 
 describe('the passkey check', () => {
-	const inFiveMinutes = () => Math.floor(Date.now() / 1000) + 300
-	const pending = (what: 'change' | 'decision', expiresAt: number) => ({
+	const inFiveMinutes = () => Date.now() + 300_000
+	const pending = (what: 'change' | 'decision', deadline: number) => ({
 		url: URL_OF_CHECK,
-		expiresAt,
+		deadline,
 		what,
 		post: () => Promise.reject(new Error('not continued')),
 		renew: () => Promise.reject(new Error('not renewed')),
@@ -102,7 +104,7 @@ describe('the passkey check', () => {
 		expect(markup).toContain('<strong>Not saved yet.</strong>')
 		expect(markup).toContain(`href="${URL_OF_CHECK}" target="_blank" rel="noopener noreferrer"`)
 		expect(markup).toContain('Open the passkey check')
-		expect(markup).toContain(`The check expires at ${fmtTimeMs(check.expiresAt * 1000)}.`)
+		expect(markup).toContain(`The check expires at ${fmtTimeMs(check.deadline)}.`)
 		expect(markup).toContain('>Continue</button>')
 		expect(markup).toContain('>Cancel</button>')
 		expect(markup).not.toContain('role="alert"')
@@ -114,9 +116,9 @@ describe('the passkey check', () => {
 	})
 
 	test('an expired check says so and that nothing was saved, and offers a new check instead of Continue', () => {
-		const check = pending('change', Math.floor(Date.now() / 1000) - 1)
+		const check = pending('change', Date.now() - 1000)
 		const markup = renderToStaticMarkup(<PasskeyCheckPrompt check={check} onDone={() => {}} onCancel={() => {}} />)
-		expect(markup).toContain(`The passkey check expired at ${fmtTimeMs(check.expiresAt * 1000)}, so nothing was saved.`)
+		expect(markup).toContain(`The passkey check expired at ${fmtTimeMs(check.deadline)}, so nothing was saved.`)
 		expect(markup).toContain('>Start a new check</button>')
 		expect(markup).not.toContain('>Continue</button>')
 		expect(markup).not.toContain(URL_OF_CHECK)
@@ -140,7 +142,7 @@ describe('the passkey check', () => {
 		if (started.kind !== 'confirm') throw new Error('expected a passkey check')
 		const renewed = await started.check.renew()
 		expect(renewed.url).toBe(`${URL_OF_CHECK}-2`)
-		expect(renewed.expiresAt).toBe(1_700_000_300)
+		expect(renewed.deadline).toBeGreaterThan(Date.now())
 		expect(await renewed.post()).toBe('recorded')
 		expect(posted).toEqual([{ challengeId: 'challenge-2' }])
 	})

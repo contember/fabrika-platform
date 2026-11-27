@@ -149,7 +149,10 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 				{check !== null && (
 					<PasskeyCheckPrompt
 						check={check}
-						onDone={onDone}
+						onDone={() => {
+							setCheck(null)
+							onDone()
+						}}
 						onCancel={() => setCheck(null)}
 						describeFailure={(cause) => protectionChangeFailure(cause, env.env, 'webauthn')}
 					/>
@@ -416,12 +419,15 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 				onSettings={setSettings}
 				onTtl={chooseTtl}
 			/>
-			{/* The passkey check stays beside Save, in view while the rules scroll: below them, it went unseen. */}
+			{/* The passkey check stays beside Save, in view while the rules scroll. */}
 			<div className="save-dock">
 				{check !== null && (
 					<PasskeyCheckPrompt
 						check={check}
-						onDone={onDone}
+						onDone={() => {
+							setCheck(null)
+							onDone()
+						}}
 						onCancel={() => setCheck(null)}
 						describeFailure={(cause) => protectionChangeFailure(cause, env.env, 'webauthn')}
 					/>

@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { type DecisionFailure, decisionFailure, type PasskeyCheck } from '../lib/decision-step-up'
 import { fmtTimeMs } from '../lib/format'
 import { DecisionFailureNotice } from './DecisionFailureNotice'
 
 /**
- * A decision waiting for its passkey check: the person opens IAM's step-up page in a new tab, confirms there, comes back
- * and continues, which posts the decision with the challenge's id. A plain link, not a popup: the console's
- * `Cross-Origin-Opener-Policy: same-origin` severs any handle to a window it opens. Until then the prompt says plainly
- * that nothing is saved, and once the check expires, that it expired and nothing was saved.
+ * A decision waiting for its passkey check, which says plainly that nothing is saved yet, how to finish and until when.
+ * IAM's page opens through a plain link: the console's `Cross-Origin-Opener-Policy: same-origin` severs a popup's handle.
  */
 export function PasskeyCheckPrompt<T>({ check: issued, onDone, onCancel, describeFailure = decisionFailure }: {
 	check: PasskeyCheck<T>
@@ -17,8 +15,8 @@ export function PasskeyCheckPrompt<T>({ check: issued, onDone, onCancel, describ
 }) {
 	const [check, setCheck] = useState(issued)
 	const [busy, setBusy] = useState(false)
-	const [failure, setFailure] = useState<DecisionFailure | null>(null)
-	const expired = useExpired(check.expiresAt)
+	const [failure, setFailure] = useState<{ readonly of: 'continue' | 'renew'; readonly failure: DecisionFailure } | null>(null)
+	const expired = useExpired(check.deadline)
 	const lead = useRef<HTMLParagraphElement>(null)
 	const unsaved = check.what === 'change' ? 'saved' : 'recorded'
 
@@ -28,7 +26,7 @@ export function PasskeyCheckPrompt<T>({ check: issued, onDone, onCancel, describ
 		lead.current?.focus({ preventScroll: true })
 	}, [check, expired])
 
-	// Leaving the page while the check waits loses the change, and nothing on the next load would say it was pending.
+	// A reload or a closed tab loses the waiting change; the next load would not say it was pending.
 	useEffect(() => {
 		const warn = (event: BeforeUnloadEvent) => event.preventDefault()
 		window.addEventListener('beforeunload', warn)
@@ -42,7 +40,7 @@ export function PasskeyCheckPrompt<T>({ check: issued, onDone, onCancel, describ
 			const value = await check.post()
 			onDone(value)
 		} catch (cause) {
-			setFailure(describeFailure(cause))
+			setFailure({ of: 'continue', failure: describeFailure(cause) })
 			setBusy(false)
 		}
 	}
@@ -53,12 +51,12 @@ export function PasskeyCheckPrompt<T>({ check: issued, onDone, onCancel, describ
 		try {
 			setCheck(await check.renew())
 		} catch (cause) {
-			setFailure(describeFailure(cause))
+			setFailure({ of: 'renew', failure: describeFailure(cause) })
 		}
 		setBusy(false)
 	}
 
-	const until = fmtTimeMs(check.expiresAt * 1000)
+	const until = fmtTimeMs(check.deadline)
 	return (
 		<div className="notice passkey-check" role="group" aria-label="Passkey check">
 			<div className="passkey-check-body">
@@ -101,23 +99,29 @@ export function PasskeyCheckPrompt<T>({ check: issued, onDone, onCancel, describ
 						)}
 					<button type="button" className="ghost" disabled={busy} onClick={onCancel}>Cancel</button>
 				</div>
-				{failure !== null && <PasskeyCheckFailure failure={failure} />}
+				{failure !== null && (failure.of === 'continue'
+					? <PasskeyCheckFailure failure={failure.failure} />
+					: <DecisionFailureNotice failure={failure.failure} />)}
 			</div>
 		</div>
 	)
 }
 
-/** Whether a check past `expiresAt` (epoch seconds) expired; turns true at that moment while the page is open. */
-function useExpired(expiresAt: number): boolean {
-	const [expired, setExpired] = useState(() => Date.now() >= expiresAt * 1000)
+/**
+ * Whether `deadline` (epoch milliseconds) has passed, read at each render; a timer and the tab becoming visible again
+ * render once more, since a background tab may run the timer late.
+ */
+function useExpired(deadline: number): boolean {
+	const [, rerender] = useReducer((count: number) => count + 1, 0)
 	useEffect(() => {
-		const left = expiresAt * 1000 - Date.now()
-		setExpired(left <= 0)
-		if (left <= 0) return
-		const timer = setTimeout(() => setExpired(true), left)
-		return () => clearTimeout(timer)
-	}, [expiresAt])
-	return expired
+		const timer = setTimeout(rerender, Math.max(0, deadline - Date.now()))
+		document.addEventListener('visibilitychange', rerender)
+		return () => {
+			clearTimeout(timer)
+			document.removeEventListener('visibilitychange', rerender)
+		}
+	}, [deadline])
+	return Date.now() >= deadline
 }
 
 /** Why Continue recorded nothing. IAM spends a check on its first use, so one confirmed already cannot be continued again. */
