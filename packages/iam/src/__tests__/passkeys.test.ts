@@ -161,8 +161,8 @@ async function installation(engine: Engine) {
 
 type Installation = Awaited<ReturnType<typeof installation>>
 
-/** A live agent `write` grant of `principalId` that the passkey `credentialId` confirmed. */
-async function confirmedAgentGrant(i: Installation, principalId: string, credentialId: string): Promise<string> {
+/** A live agent `write` grant of `principalId` that the passkey `credentialId` confirmed; null names none, as before migration 0049. */
+async function confirmedAgentGrant(i: Installation, principalId: string, credentialId: string | null): Promise<string> {
 	const now = unixNow()
 	const id = uuidv7()
 	const sessionId = await i.repositories.sessions.createSession({
@@ -394,8 +394,8 @@ for (const { name, engine, skip } of engines) {
 				expect(await added(i, person, await TestAuthenticator.create(), { label: 'Phone', confirmWith: laptop })).toBe('passkey_added')
 				const [removed, kept] = await i.repositories.passkeys.list(person)
 				if (removed === undefined || kept === undefined) throw new Error('passkeys')
-				const ended = await confirmedAgentGrant(i, person, removed.credential_id)
-				const stays = await confirmedAgentGrant(i, person, kept.credential_id)
+				const ended = [await confirmedAgentGrant(i, person, removed.credential_id), await confirmedAgentGrant(i, person, removed.credential_id)]
+				const stays = [await confirmedAgentGrant(i, person, kept.credential_id), await confirmedAgentGrant(i, person, null)]
 				// An approval the removed passkey confirmed and no agent redeemed yet is denied; the other one's stays.
 				const now = unixNow()
 				const sessionId = await i.repositories.sessions.createSession({
@@ -429,8 +429,8 @@ for (const { name, engine, skip } of engines) {
 				const page = await ceremonyOf(await i.post(person, PASSKEYS_PATH, { step: 'remove', passkey: removed.id }))
 				expect(outcome(await answerPage(i, person, PASSKEYS_PATH, page, await laptop.assert(request(page), ISSUER)))).toBe('passkey_removed')
 				expect(await i.labels(person)).toEqual(['Phone'])
-				expect((await i.repositories.oauth.grant(ended))?.revoked_at).toBeNumber()
-				expect((await i.repositories.oauth.grant(stays))?.revoked_at).toBeNull()
+				for (const id of ended) expect((await i.repositories.oauth.grant(id))?.revoked_at).toBeNumber()
+				for (const id of stays) expect((await i.repositories.oauth.grant(id))?.revoked_at).toBeNull()
 				expect((await i.repositories.oauth.deviceAuthorization(denied))?.status).toBe('denied')
 				expect((await i.repositories.oauth.deviceAuthorization(pending))?.status).toBe('approved')
 				const revocations = await i.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: person, limit: 5 })
