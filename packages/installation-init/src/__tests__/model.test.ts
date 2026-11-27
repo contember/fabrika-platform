@@ -132,10 +132,11 @@ describe('the installation model', () => {
 	})
 
 	test('the static environment spells each address at the host the renderer gives', () => {
-		expect(staticEnvironment(model, 'operations')).toEqual([
+		expect(staticEnvironment(model, 'control')).toEqual([
 			['PORT', '3000'],
+			['FABRIKA_CONTROL_ASSETS_DIR', 'packages/dashboard/dist'],
 			['FABRIKA_IAM_RPC_URL', 'http://iam:3000'],
-			['FABRIKA_CONTROL_URL', 'http://control:3000'],
+			['FABRIKA_OPERATIONS_URL', 'http://operations:3000'],
 		])
 		expect(staticEnvironment(model, 'iam', (service) => `${service}.internal`)).toEqual([
 			['PORT', '3000'],

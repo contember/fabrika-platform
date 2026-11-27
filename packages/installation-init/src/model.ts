@@ -203,11 +203,11 @@ export const platformInstallationModel = (input: PlatformInstallationModelInput)
 				'operations',
 				{ migrate: 'packages/operations/src/node/migrate.ts', server: 'packages/operations/src/node/server.ts' },
 				{ command: 'packages/operations/src/node/cron.ts', schedule: '* * * * *' },
-				['iam', 'control'],
+				// Control calls Operations (the catalog sync); Operations' Bun runtime calls IAM alone.
+				['iam'],
 				[
 					PORT,
 					address('FABRIKA_IAM_RPC_URL', 'iam'),
-					address('FABRIKA_CONTROL_URL', 'control'),
 					{ kind: 'data', name: 'FABRIKA_OPERATIONS_DATABASE_URL', database: 'operations' },
 					{ kind: 'data', prefix: 'FABRIKA_OPERATIONS_BLOB', bucket: 'operationsBlobs' },
 					derived('FABRIKA_OPERATIONS_PUBLIC_HOST'),

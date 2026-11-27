@@ -293,7 +293,10 @@ const operations: ZeropsYamlSetupSpec = {
 		cache: ['node_modules'],
 	},
 	deploy: zeropsReadiness(MODEL.operations, READINESS_WITH_MIGRATIONS),
-	run: zeropsServiceRun(MODEL.operations, LIVENESS, 'alpine/bun@1.3'),
+	// `FABRIKA_CONTROL_URL` is read by nothing in Operations' Bun runtime (only the Cloudflare worker's config reads a
+	// variable of that name, as the console's public origin), so the installation model does not name it. It stays here
+	// because removing it changes the generated `zerops.yaml`, which this change keeps byte for byte; drop it on its own.
+	run: zeropsServiceRun(MODEL.operations, LIVENESS, 'alpine/bun@1.3', { FABRIKA_CONTROL_URL: 'http://control:3000' }),
 }
 
 /**

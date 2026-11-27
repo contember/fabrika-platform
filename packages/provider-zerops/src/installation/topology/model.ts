@@ -76,6 +76,8 @@ export const zeropsServiceRun = (
 	service: ModelService,
 	liveness: Omit<ZeropsHealthCheckSpec, 'httpGet' | 'exec'>,
 	base: string,
+	/** Fixed variables Zerops writes beyond the model's, after them. */
+	extraEnvironment: Readonly<Record<string, string>> = {},
 ): ZeropsYamlRunSpec => {
 	const { entry } = service
 	if (entry === undefined) throw new Error(`zerops: ${service.name} starts from its artifact and has no Bun entry`)
@@ -91,6 +93,6 @@ export const zeropsServiceRun = (
 		// `allContainers: false`: a job runs once per schedule across a horizontally scaled service.
 		crontab: service.jobs.map((job) => ({ timing: job.schedule, command: `bun ${job.command}`, allContainers: false })),
 		// A Zerops hostname is the service's name, so a private address is `http://<service>:<port>`.
-		envVariables: Object.fromEntries(staticEnvironment(zeropsInstallationModel, service.name)),
+		envVariables: { ...Object.fromEntries(staticEnvironment(zeropsInstallationModel, service.name)), ...extraEnvironment },
 	}
 }
