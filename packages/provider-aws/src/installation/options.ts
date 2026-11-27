@@ -4,8 +4,9 @@
 //
 // - **Both** name the account and the region (checked here, before any call) and the release: its commit, its
 //   repository, the applications' base image.
-// - **An install** names every choice of the installation (`record.ts`): its two networks' ranges, its hosts and their
-//   certificates, its environment's name, MCP authoring; and how people sign in and the outbound mail.
+// - **An install** names every choice of the installation (`record.ts`): its two networks' ranges, its hosts, its
+//   environment's name, MCP authoring; and how people sign in and the outbound mail. A certificate left out is the
+//   run's to find or request for exactly its host (`certificates.ts`).
 // - **An upgrade** names only what it changes: every choice it leaves out is the installation's own, read from its
 //   record. It takes no sign-in method and no mailer, which stay as the install or an operator set them.
 
@@ -32,6 +33,7 @@ import {
 	setting,
 	UNATTENDED_FLAG,
 } from '@fabrika/installation-init'
+import { AWS_CERTIFICATE_SLOTS, type AwsCertificateSlot } from './certificates'
 import { AWS_DEFAULT_PLATFORM_VPC_CIDR, AWS_DEFAULT_VPC_CIDR } from './network'
 import type { AwsInstallationChoices } from './record'
 import { AWS_ACCOUNT_ID_FORM, AWS_REGION_FORM } from './runtime'
@@ -89,10 +91,36 @@ export interface AwsCommonOptions {
 	readonly unattended: boolean
 }
 
-/** An install: every choice, and how people sign in and the mail. */
+/**
+ * An install: every choice but the certificates, which it may leave to the run (`certificates.ts`), and how people sign
+ * in and the mail.
+ */
 export interface AwsInstallOptions extends AwsCommonOptions {
-	readonly choices: AwsInstallationChoices
+	/** The choices named; every one but the certificates is there, or the parse refused. */
+	readonly named: Readonly<Partial<Record<ChoiceKey, string>>>
+	/** Each certificate's host. */
+	readonly hosts: Readonly<Record<AwsCertificateSlot, string>>
+	/** The certificates named; the run finds or requests the others. */
+	readonly certificates: Readonly<Partial<Record<AwsCertificateSlot, string>>>
 	readonly bringUp: { readonly authentication: InstallationAuthentication; readonly email: InstallationEmail }
+}
+
+/** Each slot's host and certificate among the choices. */
+const SLOT_KEYS: Readonly<Record<AwsCertificateSlot, { readonly host: ChoiceKey; readonly certificate: ChoiceKey }>> = {
+	iam: { host: 'iamHost', certificate: 'iamCertificate' },
+	control: { host: 'controlHost', certificate: 'controlCertificate' },
+	operations: { host: 'operationsHost', certificate: 'operationsCertificate' },
+	apps: { host: 'appsHost', certificate: 'appsCertificate' },
+}
+
+/** An install's choices once each certificate is settled: the named ones over the settled ones. */
+export function awsInstallChoices(
+	options: AwsInstallOptions,
+	certificates: Readonly<Record<AwsCertificateSlot, string>>,
+): AwsInstallationChoices {
+	const named: Partial<Record<ChoiceKey, string>> = { ...options.named }
+	for (const slot of AWS_CERTIFICATE_SLOTS) named[SLOT_KEYS[slot].certificate] = options.certificates[slot] ?? certificates[slot]
+	return awsChoicesFrom(options, named)
 }
 
 /** An upgrade: the choices it names, every other one the installation's own. */
@@ -209,13 +237,31 @@ function readAuthentication(argv: readonly string[], env: Env): InstallationAuth
 
 const flagNames = (flags: Readonly<Record<string, readonly [string, string]>>) => Object.values(flags).map(([flag]) => flag)
 
-/** `install`'s arguments and environment: every choice named, a range unnamed taking its default. */
+/**
+ * `install`'s arguments and environment: every choice named but the certificates, which the run finds or requests
+ * when left out, a range unnamed taking its default.
+ */
 export function parseAwsInstallArgs(argv: readonly string[], env: Env): AwsInstallOptions {
 	assertKnownArguments(argv, [...flagNames(COMMON_FLAGS), ...flagNames(CHOICE_FLAGS), ...INSTALL_FLAGS])
 	const common = readCommon(argv, env)
+	const named = readNamedChoices(argv, env)
+	const present = (key: ChoiceKey): string => {
+		const value = named[key]
+		if (value === undefined) throw new Error(`${CHOICE_FLAGS[key][0]}=<value> or ${CHOICE_FLAGS[key][1]} is required`)
+		return value
+	}
+	present('environment')
+	const hosts = { iam: present('iamHost'), control: present('controlHost'), operations: present('operationsHost'), apps: present('appsHost') }
+	const certificates: Partial<Record<AwsCertificateSlot, string>> = {}
+	for (const slot of AWS_CERTIFICATE_SLOTS) {
+		const arn = named[SLOT_KEYS[slot].certificate]
+		if (arn !== undefined) certificates[slot] = arn
+	}
 	return {
 		...common,
-		choices: awsChoicesFrom(common, readNamedChoices(argv, env)),
+		named,
+		hosts,
+		certificates,
 		bringUp: {
 			authentication: readAuthentication(argv, env),
 			email: readInstallationEmail(argv, env, { registry: builtinEmailProviders, required: false }),

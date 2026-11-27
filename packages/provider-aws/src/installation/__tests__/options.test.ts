@@ -2,9 +2,11 @@
 // from the environment alone, and each value of another form refused by its flag, never quoting it.
 
 import { describe, expect, test } from 'bun:test'
-import { AWS_PLATFORM_REPOSITORY, parseAwsInstallArgs, parseAwsUpgradeArgs } from '../options'
+import { AWS_PLATFORM_REPOSITORY, awsInstallChoices, parseAwsInstallArgs, parseAwsUpgradeArgs } from '../options'
 
 const certificate = (n: number) => `arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+/** The certificates `ARGV` names, as the run settles them. */
+const SETTLED = { iam: certificate(1), control: certificate(2), operations: certificate(3), apps: certificate(4) }
 const COMMIT = 'a'.repeat(40)
 const BASE_IMAGE = `docker.io/oven/bun@sha256:${'b'.repeat(64)}`
 const ARGV = [
@@ -26,7 +28,8 @@ const ARGV = [
 describe("the AWS installation's options", () => {
 	test('an install: the plan, the release, password sign-in and no mail unless named', () => {
 		const options = parseAwsInstallArgs(ARGV, {})
-		expect(options.choices.plan).toEqual({
+		const choices = awsInstallChoices(options, SETTLED)
+		expect(choices.plan).toEqual({
 			accountId: '123456789012',
 			region: 'eu-central-1',
 			vpcCidrs: { apps: '10.80.0.0/16', platform: '10.81.0.0/16' },
@@ -37,10 +40,30 @@ describe("the AWS installation's options", () => {
 		})
 		expect(options.release).toEqual({ repository: AWS_PLATFORM_REPOSITORY, commitSha: COMMIT })
 		expect(options.baseImage).toBe(BASE_IMAGE)
-		expect(options.choices.mcpAuthoring).toBe(false)
-		expect(options.choices.environment).toBe('production')
+		expect(choices.mcpAuthoring).toBe(false)
+		expect(choices.environment).toBe('production')
 		expect(options.unattended).toBe(false)
 		expect(options.bringUp).toEqual({ authentication: { passwordEnabled: true }, email: { kind: 'none' } })
+	})
+
+	test("an install may leave a certificate to the run, never a host; a named certificate wins over the run's", () => {
+		const bare = parseAwsInstallArgs(ARGV.filter((arg) => !arg.includes('-certificate=')), {})
+		expect(bare.certificates).toEqual({})
+		expect(bare.hosts).toEqual({
+			iam: 'iam.example.com',
+			control: 'control.example.com',
+			operations: 'operations.example.com',
+			apps: 'apps.example.com',
+		})
+		const found = { iam: certificate(5), control: certificate(6), operations: certificate(7), apps: certificate(8) }
+		expect(awsInstallChoices(bare, found).plan.certificates).toEqual({ iam: certificate(5), control: certificate(6), operations: certificate(7) })
+		const named = parseAwsInstallArgs(ARGV, {})
+		expect(named.certificates).toEqual(SETTLED)
+		expect(awsInstallChoices(named, found).plan.appsDefault.certificate).toBe(certificate(4))
+		expect(() => parseAwsInstallArgs(ARGV.filter((arg) => !arg.startsWith('--apps-host')), {})).toThrow(
+			'--apps-host=<value> or FABRIKA_AWS_APPS_HOST is required',
+		)
+		expect(() => parseAwsInstallArgs(ARGV.filter((arg) => !arg.startsWith('--environment')), {})).toThrow('--environment=<value>')
 	})
 
 	test('each value may come from its variable instead, and the OIDC secret from the environment alone', () => {
@@ -55,7 +78,7 @@ describe("the AWS installation's options", () => {
 			},
 		)
 		expect(options.region).toBe('eu-central-1')
-		expect(options.choices.plan.vpcCidrs.platform).toBe('10.90.0.0/16')
+		expect(awsInstallChoices(options, SETTLED).plan.vpcCidrs.platform).toBe('10.90.0.0/16')
 		expect(options.unattended).toBe(true)
 		expect(options.bringUp.authentication).toEqual({
 			passwordEnabled: false,

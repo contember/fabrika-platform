@@ -594,8 +594,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        applications' listener has none of its own. Its default certificate is one of its own, for a host that is none
        of the platform's (a balancer serves its default to every client whose SNI matches no other, so a platform
        host's there would let a rule Control's role writes serve that host); that host joins the installation's own
-       hosts, which no namespace takes. The four certificates are the operator's, validated before the stack is
-       applied. Control's balancer variables come from its outputs.
+       hosts, which no namespace takes. The four certificates are each of exactly its host, issued before the stack is
+       applied (the commands' step below). Control's balancer variables come from its outputs.
     3. **Access** (built, `installation/access.ts`): the apps' permissions boundary (the union of what an
        environment's and a namespace proxy's roles are granted, which a test checks against the rendered stacks),
        Control's role under `/fabrika/platform/` with the grants below in five managed policies (IAM's bound is 6,144
@@ -740,9 +740,17 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
          IAM's provisioning key from the installation's Parameter Store, the account checked first; the key is never
          typed, printed or logged. `upgrade` registers both again after the services roll, since a release may change
          them. The console's schema is rendered into this package by `@fabrika/platform-artifacts`, as the manifest is.
-         A lost record is written back by an upgrade that names every choice, its ranges checked against the networks.
-       - Still to come: requesting the certificates for exactly the hosts, the ECS service-linked role, and the sidecar
-         workflow with its GitHub OIDC role.
+         A lost record is written back by an upgrade that names every choice, its ranges, hosts and environment checked
+         against what the installation holds.
+       - **The certificates** (built, `installation/certificates.ts`, `acmPlatformCertificates` in `src/aws/acm.ts`):
+         each of the four is one ACM issued (never imported or private) of exactly its host (no wildcard, no other
+         name: `DescribeCertificate`'s `SubjectAlternativeNames` is the host alone), in the installation's account and region,
+         and issued before any stack. A named one is read back and refused otherwise. An install takes, for a host it
+         names none for, the account's certificate of exactly that host, issued before pending, the newest of each (`ListCertificates`, the operator's
+         client alone), or asks and requests one validated by DNS under a token derived from the host; until every one
+         is issued it prints the records and stops, and run again it finds them. A resumed install takes the record's.
+         An upgrade requests none, and refuses one no longer issued until another is named.
+       - Still to come: the ECS service-linked role, and the sidecar workflow with its GitHub OIDC role.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
@@ -935,7 +943,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     setup stack, its task and then the services stack install in that order. For the commands: that the database's
     stack settles within the hour the run waits, and that `RunTask` from the operator's credentials places the setup
     in the platform's cluster and subnets as named, and that a fresh install's services reach each other through
-    Service Connect after the run's one redeploy (and, without it, do not: what the redeploy rests on).
+    Service Connect after the run's one redeploy (and, without it, do not: what the redeploy rests on). For the
+    certificates: that `DescribeCertificate` answers `SubjectAlternativeNames` and `Type` for every certificate, a
+    fresh request included (the client refuses one without them), `ListCertificates`' summary fields (`Type`, `CreatedAt`, the alternative names) as the operator's
+    client reads them, that a fresh request names its DNS record within the minute the run reads it again, and that a
+    certificate requested again for a host whose record is already in DNS is issued without touching DNS.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 

@@ -11,13 +11,18 @@
 // - `describeCertificate` answers `null` only for `ResourceNotFoundException`. The validation record may be absent
 //   for a moment after a request; it is `null` then, never a guess. A record is shown to an operator, so its name and
 //   value must be DNS names of the form ACM gives.
-// - A status ACM may add later is `invalid_answer`, never a guess.
+// - A status ACM may add later is `invalid_answer`, never a guess. So is a certificate naming anything but its one host
+//   (`SubjectAlternativeNames`), or one ACM did not issue (`Type`): imported and private ones carry no validation
+//   options to say what they cover.
+// - The operator's command alone (`acmPlatformCertificates`) also lists the account's certificates, to find one it
+//   requested for an installation's host on an earlier run. Control's client has no listing.
 //
-// UNVERIFIED: the operations' input and answer fields, the statuses, the token's form and its hour follow ACM's API
-// reference; none was checked against an account.
+// UNVERIFIED: the operations' input and answer fields, the statuses, the token's form and its hour, and
+// `ListCertificates`' summary fields (`Type`, `CreatedAt`, the alternative names) follow ACM's API reference; none was
+// checked against an account.
 
 import { z } from 'zod'
-import { AwsError, awsJsonClient, type AwsJsonClientOptions, type AwsJsonService } from './json'
+import { AwsError, type AwsJsonClient, awsJsonClient, type AwsJsonClientOptions, type AwsJsonService } from './json'
 
 export const ACM: AwsJsonService = { service: 'acm', targetPrefix: 'CertificateManager', jsonVersion: '1.1' }
 
@@ -74,6 +79,10 @@ const describedSchema = z.object({
 		CertificateArn: z.string(),
 		DomainName: z.string(),
 		Status: z.string(),
+		// Both read, and required below: `DomainValidationOptions` is ACM's only for a certificate it issued, so it
+		// alone does not say what an imported or private certificate covers.
+		SubjectAlternativeNames: z.array(z.string()).optional(),
+		Type: z.string().optional(),
 		DomainValidationOptions: z
 			.array(z.object({
 				DomainName: z.string(),
@@ -108,33 +117,113 @@ export function acmClient(options: AwsJsonClientOptions): AcmClient {
 			return requested.CertificateArn
 		},
 
-		async describeCertificate(arn, signal) {
-			if (!CERTIFICATE_ARN.test(arn)) refuse('the certificate')
-			let described: z.infer<typeof describedSchema>
-			try {
-				described = await json.call('DescribeCertificate', { CertificateArn: arn }, describedSchema, signal)
-			} catch (error) {
-				if (error instanceof AwsError && error.code === 'ResourceNotFoundException') return null
-				throw error
+		describeCertificate: (arn, signal) => describe(json, arn, signal),
+	}
+}
+
+/** A certificate the account holds for exactly one host, as `ListCertificates` summarizes it. */
+export interface CertificateSummary {
+	readonly arn: string
+	readonly host: string
+	readonly status: 'PENDING_VALIDATION' | 'ISSUED'
+	/** Seconds since the epoch. */
+	readonly createdAt: number
+}
+
+/** The operator's command's own certificates: Control's two calls, and finding what the account already holds. */
+export interface AcmPlatformCertificates extends AcmClient {
+	/**
+	 * The certificates ACM issued, or will issue once validated, for exactly `host`: no other name beside it, none
+	 * imported or private. Issued ones first, newest first within each status.
+	 */
+	findCertificates(host: string, signal?: AbortSignal): Promise<readonly CertificateSummary[]>
+}
+
+const listedSchema = z.object({
+	CertificateSummaryList: z
+		.array(z.object({
+			CertificateArn: z.string(),
+			DomainName: z.string(),
+			SubjectAlternativeNameSummaries: z.array(z.string()).optional(),
+			HasAdditionalSubjectAlternativeNames: z.boolean().optional(),
+			Status: z.string().optional(),
+			Type: z.string().optional(),
+			CreatedAt: z.number().optional(),
+		}))
+		.optional(),
+	NextToken: z.string().optional(),
+})
+/** Pages one listing reads before it refuses: a thousand certificates a page. */
+const MAX_PAGES = 20
+
+/**
+ * The installation's own certificates (`installation/certificates.ts`), from the operator's credentials: `ListCertificates`
+ * on top of Control's two calls. Control never builds this; its role is granted no listing.
+ */
+export function acmPlatformCertificates(options: AwsJsonClientOptions): AcmPlatformCertificates {
+	const json = awsJsonClient(ACM, options)
+	return {
+		...acmClient(options),
+		async findCertificates(host, signal) {
+			if (!CERTIFICATE_HOST.test(host)) refuse('the host')
+			const found: CertificateSummary[] = []
+			let next: string | undefined
+			for (let page = 0; page < MAX_PAGES; page++) {
+				const listed = await json.call(
+					'ListCertificates',
+					{ CertificateStatuses: ['PENDING_VALIDATION', 'ISSUED'], MaxItems: 1000, ...(next === undefined ? {} : { NextToken: next }) },
+					listedSchema,
+					signal,
+				)
+				for (const summary of listed.CertificateSummaryList ?? []) {
+					const names = summary.SubjectAlternativeNameSummaries ?? [summary.DomainName]
+					const onlyHost = summary.DomainName === host && summary.HasAdditionalSubjectAlternativeNames !== true
+						&& names.every((name) => name === host)
+					const status = summary.Status
+					if (!onlyHost || summary.Type !== 'AMAZON_ISSUED' || !CERTIFICATE_ARN.test(summary.CertificateArn)) continue
+					if (status !== 'PENDING_VALIDATION' && status !== 'ISSUED') continue
+					found.push({ arn: summary.CertificateArn, host, status, createdAt: summary.CreatedAt ?? 0 })
+				}
+				next = listed.NextToken
+				// An issued one before any still waiting (an abandoned request must not hide a usable certificate).
+				const rank = (summary: CertificateSummary): number => (summary.status === 'ISSUED' ? 0 : 1)
+				if (next === undefined) return found.sort((a, b) => rank(a) - rank(b) || b.createdAt - a.createdAt)
 			}
-			const certificate = described.Certificate
-			const invalid = (): never => {
-				throw new AwsError('DescribeCertificate', 'invalid_answer', 200, null, false)
-			}
-			// An answer about another certificate, or one of another form, is no answer about this one.
-			if (certificate.CertificateArn !== arn || !CERTIFICATE_HOST.test(certificate.DomainName) || !isStatus(certificate.Status)) invalid()
-			const options = certificate.DomainValidationOptions ?? []
-			// One host per certificate: a record for another is no record for this one.
-			if (options.length > 1 || options.some((option) => option.DomainName !== certificate.DomainName)) invalid()
-			const record = options[0]?.ResourceRecord
-			if (record !== undefined && (record.Type !== 'CNAME' || !RECORD_NAME.test(record.Name) || !RECORD_NAME.test(record.Value))) invalid()
-			return {
-				arn,
-				host: certificate.DomainName,
-				status: isStatus(certificate.Status) ? certificate.Status : invalid(),
-				validation: record === undefined ? null : { name: record.Name, value: record.Value },
-				inUseBy: certificate.InUseBy ?? [],
-			}
+			throw new Error(`Certificate Manager: the account lists more than ${MAX_PAGES} pages of certificates`)
 		},
+	}
+}
+
+/** `DescribeCertificate`: `null` only when ACM answers there is none; an answer of another form is no answer. */
+async function describe(json: AwsJsonClient, arn: string, signal?: AbortSignal): Promise<Certificate | null> {
+	if (!CERTIFICATE_ARN.test(arn)) refuse('the certificate')
+	let described: z.infer<typeof describedSchema>
+	try {
+		described = await json.call('DescribeCertificate', { CertificateArn: arn }, describedSchema, signal)
+	} catch (error) {
+		if (error instanceof AwsError && error.code === 'ResourceNotFoundException') return null
+		throw error
+	}
+	const certificate = described.Certificate
+	const invalid = (): never => {
+		throw new AwsError('DescribeCertificate', 'invalid_answer', 200, null, false)
+	}
+	// An answer about another certificate, or one of another form, is no answer about this one.
+	if (certificate.CertificateArn !== arn || !CERTIFICATE_HOST.test(certificate.DomainName) || !isStatus(certificate.Status)) invalid()
+	// One host per certificate, and one ACM issued: its names exactly its host (a wildcard or another name would be served
+	// for that name too), never an imported or private one, whose names nothing here requested and ACM never renews.
+	const names = certificate.SubjectAlternativeNames
+	if (names === undefined || names.length !== 1 || names[0] !== certificate.DomainName || certificate.Type !== 'AMAZON_ISSUED') invalid()
+	const options = certificate.DomainValidationOptions ?? []
+	// A record for another host is no record for this one.
+	if (options.length > 1 || options.some((option) => option.DomainName !== certificate.DomainName)) invalid()
+	const record = options[0]?.ResourceRecord
+	if (record !== undefined && (record.Type !== 'CNAME' || !RECORD_NAME.test(record.Name) || !RECORD_NAME.test(record.Value))) invalid()
+	return {
+		arn,
+		host: certificate.DomainName,
+		status: isStatus(certificate.Status) ? certificate.Status : invalid(),
+		validation: record === undefined ? null : { name: record.Name, value: record.Value },
+		inUseBy: certificate.InUseBy ?? [],
 	}
 }

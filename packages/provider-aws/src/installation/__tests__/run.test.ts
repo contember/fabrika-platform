@@ -10,13 +10,14 @@ import { type Confirmations, platformProxyAppFor } from '@fabrika/installation-i
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { isInstallationCli } from '@fabrika/provider-contract/installation'
 import { describe, expect, test } from 'bun:test'
+import type { Certificate, CertificateSummary } from '../../aws/acm'
 import type { StackStatus } from '../../aws/cloudformation'
 import type { SsmPlatformSecrets } from '../../aws/ssm'
 import { AWS_PROVISIONING_KEY_PARAMETER, AwsIamUnreachableError } from '../admin'
 import type { AwsPlatformApplied, AwsPlatformApplyInput } from '../apply'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../generated/platform-proxy-manifest'
 import { installationCli, readAwsInstallationGuide } from '../index'
-import { parseAwsInstallArgs, parseAwsUpgradeArgs } from '../options'
+import { awsInstallChoices, parseAwsInstallArgs, parseAwsUpgradeArgs } from '../options'
 import { awsPlatformManifest } from '../platform-manifest'
 import { AWS_INSTALLATION_RECORD, encodeAwsInstallationRecord, parseAwsInstallationRecord } from '../record'
 import { type AwsPlatformClients, environmentCredentials, runAwsPlatform } from '../run'
@@ -38,8 +39,13 @@ const INSTALL = [
 	'--apps-host=apps.example.com',
 	`--apps-certificate=${certificate(4)}`,
 ]
+/** The certificates `INSTALL` names. */
+const NAMED = { iam: certificate(1), control: certificate(2), operations: certificate(3), apps: certificate(4) }
 /** The record an install with `INSTALL` writes. */
-const RECORD = encodeAwsInstallationRecord(parseAwsInstallArgs(INSTALL, {}).choices)
+const RECORD = encodeAwsInstallationRecord(awsInstallChoices(parseAwsInstallArgs(INSTALL, {}), NAMED))
+/** The hosts `INSTALL` names, by the certificate each takes. */
+const HOSTS = { iam: 'iam.example.com', control: 'control.example.com', operations: 'operations.example.com', apps: 'apps.example.com' }
+const issued = (arn: string, host: string): Certificate => ({ arn, host, status: 'ISSUED', validation: null, inUseBy: [] })
 
 /** One account: its Parameter Store in memory, its services' stack's status if it has one, its credentials' account. */
 interface FakeAccount {
@@ -49,6 +55,9 @@ interface FakeAccount {
 	readonly calls: string[]
 	/** The range each network stack holds. */
 	readonly networks: { readonly apps: string; readonly platform: string }
+	/** Its certificates, oldest first, and the hosts it was asked to request one for. */
+	readonly certificates: Map<string, Certificate>
+	readonly requested: string[]
 }
 
 function fakeAccount(): FakeAccount {
@@ -57,7 +66,24 @@ function fakeAccount(): FakeAccount {
 		store.set(`/fabrika/platform/database/${service}-password`, `${service.padEnd(8, 'x')}${'P'.repeat(32)}`)
 	}
 	store.set(AWS_PROVISIONING_KEY_PARAMETER, PROVISIONING_KEY)
-	return { store, services: null, callerAccount: '123456789012', calls: [], networks: { apps: '10.80.0.0/16', platform: '10.81.0.0/16' } }
+	const certificates = new Map<string, Certificate>()
+	for (const [slot, arn] of Object.entries(NAMED)) certificates.set(arn, issued(arn, HOSTS[slotOf(slot)]))
+	// Control's, renewed under a new ARN.
+	certificates.set(certificate(9), issued(certificate(9), HOSTS.control))
+	return {
+		store,
+		services: null,
+		callerAccount: '123456789012',
+		calls: [],
+		networks: { apps: '10.80.0.0/16', platform: '10.81.0.0/16' },
+		certificates,
+		requested: [],
+	}
+}
+
+function slotOf(name: string): 'iam' | 'control' | 'operations' | 'apps' {
+	if (name === 'iam' || name === 'control' || name === 'operations' || name === 'apps') return name
+	throw new Error(`no slot ${name}`)
 }
 
 const PROVISIONING_KEY = 'px_provisioning-never-logged'
@@ -84,6 +110,31 @@ function clientsOf(account: FakeAccount): AwsPlatformClients {
 			callerAccount: async () => {
 				account.calls.push('sts')
 				return account.callerAccount
+			},
+		},
+		acm: {
+			describeCertificate: async (arn) => account.certificates.get(arn) ?? null,
+			findCertificates: async (host) =>
+				[...account.certificates.values()]
+					.filter((found) => found.host === host && (found.status === 'ISSUED' || found.status === 'PENDING_VALIDATION'))
+					.map((found, index): CertificateSummary => ({
+						arn: found.arn,
+						host,
+						status: found.status === 'ISSUED' ? 'ISSUED' : 'PENDING_VALIDATION',
+						createdAt: index,
+					}))
+					.reverse(),
+			requestCertificate: async ({ host }) => {
+				account.requested.push(host)
+				const arn = certificate(100 + account.requested.length)
+				account.certificates.set(arn, {
+					arn,
+					host,
+					status: 'PENDING_VALIDATION',
+					validation: { name: `_a1.${host}.`, value: `_b2.abcdefgh.acm-validations.aws.` },
+					inUseBy: [],
+				})
+				return arn
 			},
 		},
 		cloudFormation: {
@@ -171,6 +222,12 @@ describe("the AWS installation's commands", () => {
 		const account = fakeAccount()
 		await run('install', INSTALL, account).result
 		expect(account.store.get(AWS_INSTALLATION_RECORD)).toBe(RECORD)
+		// Resumed with another host: refused as a resumed install's change, before the record's certificate is read
+		// against a host the installation does not have.
+		const otherHost = run('install', INSTALL.map((arg) => (arg.startsWith('--iam-host=') ? '--iam-host=login.example.com' : arg)), account)
+		await expect(otherHost.result).rejects.toThrow(
+			"an install that stopped part way is resumed with its own choices, and these differ: IAM's host from iam.example.com to login.example.com",
+		)
 		// Resumed with the platform network moved: refused, naming the change, before anything is applied.
 		const moved = run('install', [...INSTALL, '--platform-vpc-cidr=10.90.0.0/16'], account)
 		await expect(moved.result).rejects.toThrow('the platform network range from 10.81.0.0/16 to 10.90.0.0/16')
@@ -290,6 +347,79 @@ describe("the AWS installation's commands", () => {
 		await rebuilt.result
 		expect(rebuilt.lines).toContain('aws: changing the installation record, written back from the choices named')
 		expect(account.store.get(AWS_INSTALLATION_RECORD)).toBe(RECORD)
+	})
+
+	test('an install without certificates requests one for exactly each host, prints the records, and goes on once ACM issued them', async () => {
+		const bare = INSTALL.filter((arg) => !arg.includes('-certificate='))
+		const declining = fakeAccount()
+		declining.certificates.clear()
+		const declined = run('install', bare, declining, { confirm: async () => false })
+		expect(await declined.result).toBeNull()
+		expect(declining.requested).toEqual([])
+		expect(declined.lines).toContain('aws: nothing was changed; name a certificate for each host instead')
+
+		const account = fakeAccount()
+		account.certificates.clear()
+		const first = run('install', bare, account)
+		expect(await first.result).toBeNull()
+		expect(account.requested).toEqual(Object.values(HOSTS))
+		expect(first.applied).toEqual([])
+		expect(account.store.has(AWS_INSTALLATION_RECORD)).toBe(false)
+		expect(first.lines).toContain('aws: iam.example.com: add the DNS record CNAME _a1.iam.example.com. -> _b2.abcdefgh.acm-validations.aws.')
+		// Run again while ACM waits for the records: the same certificates found, none requested anew, still stopped.
+		const waiting = run('install', bare, account)
+		expect(await waiting.result).toBeNull()
+		expect(account.requested).toHaveLength(4)
+		expect(waiting.applied).toEqual([])
+		// Issued: found, recorded, and the install goes on.
+		for (const [arn, found] of account.certificates) account.certificates.set(arn, { ...found, status: 'ISSUED' })
+		const done = run('install', bare, account)
+		expect(await done.result).not.toBeNull()
+		expect(account.requested).toHaveLength(4)
+		expect(parseAwsInstallationRecord(account.store.get(AWS_INSTALLATION_RECORD) ?? '').plan.certificates).toEqual({
+			iam: certificate(101),
+			control: certificate(102),
+			operations: certificate(103),
+		})
+	})
+
+	test("a named certificate is refused when it is another host's or region's, missing, or no longer issued; a pending one stops the install", async () => {
+		const account = fakeAccount()
+		const swap = (flag: string, value: string) => INSTALL.map((arg) => (arg.startsWith(`${flag}=`) ? `${flag}=${value}` : arg))
+		// IAM's on the applications' listener would serve IAM's host there.
+		await expect(run('install', swap('--apps-certificate', certificate(1)), account).result).rejects.toThrow(
+			`--apps-certificate ${certificate(1)} is iam.example.com's, not apps.example.com's`,
+		)
+		await expect(run('install', swap('--apps-certificate', certificate(4).replace('eu-central-1', 'us-east-1')), account).result).rejects.toThrow(
+			'a balancer in eu-central-1 takes its own account',
+		)
+		await expect(run('install', swap('--apps-certificate', certificate(50)), account).result).rejects.toThrow(
+			`--apps-certificate ${certificate(50)} is no certificate in account 123456789012, eu-central-1`,
+		)
+		account.certificates.set(certificate(4), { ...issued(certificate(4), HOSTS.apps), status: 'EXPIRED' })
+		await expect(run('install', INSTALL, account).result).rejects.toThrow(`(${certificate(4)}) is EXPIRED; name another with --apps-certificate`)
+		const validation = { name: '_c3.apps.example.com.', value: '_d4.abcdefgh.acm-validations.aws.' }
+		account.certificates.set(certificate(4), { ...issued(certificate(4), HOSTS.apps), status: 'PENDING_VALIDATION', validation })
+		const pending = run('install', INSTALL, account)
+		expect(await pending.result).toBeNull()
+		expect(pending.applied).toEqual([])
+		expect(pending.lines).toContain(`aws: apps.example.com: add the DNS record CNAME ${validation.name} -> ${validation.value}`)
+		expect(account.requested).toEqual([])
+		expect(account.store.has(AWS_INSTALLATION_RECORD)).toBe(false)
+	})
+
+	test('an upgrade requests no certificate and refuses one no longer issued, until another is named', async () => {
+		const account = fakeAccount()
+		account.services = 'CREATE_COMPLETE'
+		account.store.set(AWS_INSTALLATION_RECORD, RECORD)
+		account.certificates.set(certificate(2), { ...issued(certificate(2), HOSTS.control), status: 'REVOKED' })
+		const upgrade = run('upgrade', WHERE, account)
+		await expect(upgrade.result).rejects.toThrow(`(${certificate(2)}) is REVOKED; name another with --control-certificate`)
+		expect(upgrade.applied).toEqual([])
+		expect(account.requested).toEqual([])
+		const renewed = run('upgrade', [...WHERE, `--control-certificate=${certificate(9)}`], account)
+		expect(await renewed.result).not.toBeNull()
+		expect(account.requested).toEqual([])
 	})
 
 	test('a declined confirmation changes nothing, the record included', async () => {

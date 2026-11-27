@@ -12,7 +12,10 @@
 // - **The installation's choices from its record** (`record.ts`): an install writes them before its first stack and
 //   is resumed against them; an upgrade takes every choice the operator leaves out from it. A changed network range,
 //   host or environment name is refused; a changed certificate or MCP authoring is named before the one question.
-// - **One confirmation**, before anything is written; `--yes` answers it for a run nobody watches.
+// - **The certificates first** (`certificates.ts`): each exactly its host's, in the account and region, and issued. An
+//   install finds or, after a question of its own, requests the ones not named, and stops, printing the DNS records,
+//   until every one is issued; an upgrade requests none and refuses one not issued.
+// - **One confirmation**, before any stack or parameter is written; `--yes` answers it for a run nobody watches.
 // - **The operator's credentials** from the standard variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 //   `AWS_SESSION_TOKEN`), as `aws configure export-credentials --format env` prints them; never logged.
 //
@@ -20,6 +23,7 @@
 
 import type { Confirmations } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
+import { ACM, type AcmPlatformCertificates, acmPlatformCertificates } from '../aws/acm'
 import { cloudFormationClient } from '../aws/cloudformation'
 import { codeBuildClient } from '../aws/codebuild'
 import { ecrClient } from '../aws/ecr'
@@ -35,9 +39,28 @@ import { awsSourcesBucket } from './access'
 import { AwsIamUnreachableError, awsProvisioningKey, awsSchemaReconciler, registerAwsPlatformApps } from './admin'
 import { applyAwsPlatform, type AwsPlatformApplied, type AwsPlatformApplyInput } from './apply'
 import { awsInstallationHosts } from './balancers'
+import {
+	awsCertificatesIssued,
+	type AwsCertificateSlot,
+	type AwsCertificatesWhere,
+	awsPlanCertificates,
+	type AwsSlotCertificate,
+	checkedAwsCertificates,
+	everyAwsCertificate,
+	requestAwsCertificates,
+	settleAwsCertificates,
+} from './certificates'
 import { type AwsImagesBuildRun, buildAwsPlatformImages } from './images-build'
 import { AWS_NETWORK_STACKS, type AwsNetworkSide } from './network'
-import { AWS_CHOICE_KEYS, awsChoiceFlag, awsChoicesFrom, type AwsCommonOptions, type AwsInstallOptions, type AwsUpgradeOptions } from './options'
+import {
+	AWS_CHOICE_KEYS,
+	awsChoiceFlag,
+	awsChoicesFrom,
+	type AwsCommonOptions,
+	awsInstallChoices,
+	type AwsInstallOptions,
+	type AwsUpgradeOptions,
+} from './options'
 import { writeAwsParameters } from './parameters'
 import { awsPlatformManifest } from './platform-manifest'
 import {
@@ -68,6 +91,7 @@ export function environmentCredentials(env: Readonly<Record<string, string | und
 /** The clients a run makes its calls with. */
 export interface AwsPlatformClients {
 	readonly sts: Pick<StsClient, 'callerAccount'>
+	readonly acm: Pick<AcmPlatformCertificates, 'describeCertificate' | 'findCertificates' | 'requestCertificate'>
 	readonly cloudFormation: AwsPlatformApplyInput['cloudFormation']
 	readonly tasks: AwsPlatformApplyInput['tasks']
 	readonly secrets: SsmPlatformSecrets
@@ -83,6 +107,7 @@ export function awsPlatformClients(where: Pick<AwsCommonOptions, 'accountId' | '
 	const bucket = awsSourcesBucket(where.accountId)
 	return {
 		sts: stsClient(options(STS)),
+		acm: acmPlatformCertificates(options(ACM)),
 		cloudFormation: cloudFormationClient(options(CLOUDFORMATION)),
 		tasks: ecsPlatformTasks(options(ECS)),
 		secrets: ssmPlatformSecrets(options(SSM)),
@@ -160,19 +185,74 @@ async function rebuiltChoices(input: AwsPlatformRunInput & { readonly kind: 'upg
 	return choices
 }
 
+/** Each slot's certificate ARN. */
+function certificateArns(certificates: readonly AwsSlotCertificate[]): Record<AwsCertificateSlot, string> {
+	const arns: Partial<Record<AwsCertificateSlot, string>> = {}
+	for (const { slot, certificate } of certificates) arns[slot] = certificate.arn
+	const { iam, control, operations, apps } = arns
+	if (iam === undefined || control === undefined || operations === undefined || apps === undefined) {
+		throw new Error('aws: a certificate of the installation was not settled')
+	}
+	return { iam, control, operations, apps }
+}
+
+/**
+ * An install's certificates, each issued, or `null` once the run has said what is still missing: the record's or the
+ * named ones, else one the account holds for exactly the host (issued first, then the newest), else one requested
+ * after its own question.
+ * Nothing waits for a DNS record: the run stops, and run again, it finds the same certificates.
+ */
+async function installCertificates(
+	input: AwsPlatformRunInput & { readonly kind: 'install' },
+	held: AwsInstallationChoices | null,
+	acm: AwsCertificatesWhere,
+): Promise<Record<AwsCertificateSlot, string> | null> {
+	const { options, log } = input
+	if (held !== null) {
+		// A resumed install with another host, range or environment is refused for that, before any certificate is read
+		// against a host the installation does not have.
+		const refused = awsChoiceChanges(held, awsInstallChoices(options, awsPlanCertificates(held.plan))).refused
+		if (refused.length > 0) throw resumedWithOtherChoices(refused)
+	}
+	// A resumed install takes the record's certificate wherever it names none: never a new one.
+	const chosen = held === null ? options.certificates : { ...awsPlanCertificates(held.plan), ...options.certificates }
+	const settled = await settleAwsCertificates(acm, options.hosts, chosen)
+	let certificates = everyAwsCertificate(settled)
+	if (certificates === null) {
+		const missing = settled.filter((entry) => entry.certificate === null)
+		log(`aws: the account holds no certificate for exactly ${missing.map((entry) => entry.host).join(', ')}`)
+		const agreed = await input.confirmations.confirm('Request a public certificate, validated by DNS, for each of these hosts?')
+		if (!agreed) {
+			log('aws: nothing was changed; name a certificate for each host instead')
+			return null
+		}
+		certificates = await requestAwsCertificates({ ...acm, sleep: input.sleep, log }, settled)
+	}
+	if (awsCertificatesIssued(certificates, log)) return certificateArns(certificates)
+	log('aws: add each record above in the zone of its host, and keep it there: ACM renews the certificate with it. Run this')
+	log('aws: install again once ACM has issued every certificate; it finds them and goes on')
+	return null
+}
+
+/** A resumed install's refusal, naming each choice that differs from the record. */
+function resumedWithOtherChoices(refused: readonly string[]): Error {
+	return new Error(`aws: an install that stopped part way is resumed with its own choices, and these differ: ${refused.join('; ')}`)
+}
+
 /** The choices this run applies, refused where they would change what may not change; the changes it names. */
 async function settledChoices(
 	input: AwsPlatformRunInput,
 	held: AwsInstallationChoices | null,
+	certificates: Readonly<Record<AwsCertificateSlot, string>> | null,
 ): Promise<{ readonly choices: AwsInstallationChoices; readonly named: readonly string[] }> {
 	const { options } = input
 	if (input.kind === 'install') {
-		if (held === null) return { choices: input.options.choices, named: [] }
-		const changes = awsChoiceChanges(held, input.options.choices)
-		if (changes.refused.length > 0) {
-			throw new Error(`aws: an install that stopped part way is resumed with its own choices, and these differ: ${changes.refused.join('; ')}`)
-		}
-		return { choices: input.options.choices, named: changes.named }
+		if (certificates === null) throw new Error("aws: an install's certificates are settled before its choices")
+		const choices = awsInstallChoices(input.options, certificates)
+		if (held === null) return { choices, named: [] }
+		const changes = awsChoiceChanges(held, choices)
+		if (changes.refused.length > 0) throw resumedWithOtherChoices(changes.refused)
+		return { choices, named: changes.named }
 	}
 	if (held === null) return { choices: await rebuiltChoices(input), named: [`the installation record, written back from the choices named`] }
 	const choices = awsChoicesFrom(options, input.options.named, held)
@@ -199,8 +279,20 @@ export async function runAwsPlatform(input: AwsPlatformRunInput): Promise<AwsPla
 	}
 	if (kind === 'upgrade' && !exists) throw new Error(`aws: ${where} holds no installation yet; \`platform install\` makes one`)
 	const held = await readRecord(clients.secrets, signal)
-	const { choices, named } = await settledChoices(input, held)
+	const acm: AwsCertificatesWhere = { accountId: options.accountId, region: options.region, acm: clients.acm, signal }
+	let installed: Record<AwsCertificateSlot, string> | null = null
+	if (input.kind === 'install') {
+		installed = await installCertificates(input, held, acm)
+		if (installed === null) return null
+	}
+	const { choices, named } = await settledChoices(input, held, installed)
 	const { plan } = choices
+	if (input.kind === 'upgrade') {
+		// An upgrade requests nothing and waits for nothing: each certificate is the record's or the one named, issued.
+		if (!awsCertificatesIssued(await checkedAwsCertificates(acm, plan), log)) {
+			throw new Error('aws: an upgrade takes issued certificates alone; add the record above, and run it again once ACM has issued it')
+		}
+	}
 	const bringUp = input.kind === 'install' ? input.options.bringUp : undefined
 	const manifest = awsPlatformManifest(plan, { mcp: choices.mcpAuthoring })
 	log(`aws: ${kind === 'install' ? 'installing' : 'upgrading'} the platform in ${where}`)

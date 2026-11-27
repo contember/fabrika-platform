@@ -2,17 +2,25 @@
 // key from its Parameter Store (never logged), the console and IAM registered before the first administrator is
 // admitted, and the enrollment URL printed once on its own line and never logged.
 
-import { IAM_APP_ID } from '@fabrika/iam-contract'
+import { ReconcileSchemaError } from '@fabrika/auth'
+import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import { type EnrollmentOutcome, type FirstAdministratorResult, platformProxyAppFor } from '@fabrika/installation-init'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import { AWS_PROVISIONING_KEY_PARAMETER, type AwsAdminRun, parseAwsAdminArgs, runAwsAdmin } from '../admin'
+import {
+	AWS_PROVISIONING_KEY_PARAMETER,
+	type AwsAdminRun,
+	AwsIamUnreachableError,
+	awsSchemaReconciler,
+	parseAwsAdminArgs,
+	runAwsAdmin,
+} from '../admin'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../generated/platform-proxy-manifest'
-import { parseAwsInstallArgs } from '../options'
+import { awsInstallChoices, parseAwsInstallArgs } from '../options'
 import { AWS_INSTALLATION_RECORD, encodeAwsInstallationRecord } from '../record'
 
 const certificate = (n: number) => `arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
-const RECORD = encodeAwsInstallationRecord(
+const RECORD = encodeAwsInstallationRecord(awsInstallChoices(
 	parseAwsInstallArgs([
 		'--account-id=123456789012',
 		'--region=eu-central-1',
@@ -27,8 +35,9 @@ const RECORD = encodeAwsInstallationRecord(
 		`--apps-certificate=${certificate(4)}`,
 		`--commit=${'a'.repeat(40)}`,
 		`--base-image=docker.io/oven/bun@sha256:${'b'.repeat(64)}`,
-	], {}).choices,
-)
+	], {}),
+	{ iam: certificate(1), control: certificate(2), operations: certificate(3), apps: certificate(4) },
+))
 const KEY = 'px_provisioning-never-logged'
 const ENROLLMENT = 'https://iam.example.com/enroll#token-never-logged'
 
@@ -113,6 +122,27 @@ describe('platform admin on AWS', () => {
 		const reissued = account()
 		await reissued.run([...ARGV, '--reissue'])
 		expect(reissued.calls.at(-1)).toBe('admit admin@example.com at https://iam.example.com with the key, reissuing')
+	})
+
+	test("the reconciler: IAM's answer is a refusal, no answer is unreachable, an abort stays the abort", async () => {
+		const call = (url: string, signal: AbortSignal = new AbortController().signal) =>
+			awsSchemaReconciler({ url, app: IAM_APP_ID, schema: IAM_APP_SCHEMA, adminKey: KEY, signal })
+		const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => Response.json({ error: 'unauthorized' }, { status: 401 }) })
+		try {
+			await expect(call(`http://127.0.0.1:${server.port}`)).rejects.toBeInstanceOf(ReconcileSchemaError)
+		} finally {
+			await server.stop(true)
+		}
+		// Nothing listens on port 1: the connection is refused, and the error names the origin, never the key.
+		const unreachable = await call('http://127.0.0.1:1').then(() => null, (error: unknown) => error)
+		expect(unreachable).toBeInstanceOf(AwsIamUnreachableError)
+		expect(String(unreachable)).toContain('IAM at http://127.0.0.1:1 gave no answer')
+		expect(String(unreachable)).not.toContain(KEY)
+		const aborted = new AbortController()
+		aborted.abort()
+		const abort = await call('http://127.0.0.1:1', aborted.signal).then(() => null, (error: unknown) => error)
+		expect(abort).not.toBeNull()
+		expect(abort).not.toBeInstanceOf(AwsIamUnreachableError)
 	})
 
 	test('its arguments: the account, the region and the mailbox; a key has no flag', () => {
