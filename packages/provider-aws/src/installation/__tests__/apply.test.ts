@@ -79,8 +79,14 @@ const ORDER = [
 	AWS_SERVICES_STACK,
 ]
 
+/** Where a fake records what it was asked: the events of the run now using it, which `run` swaps in. */
+interface Sink {
+	events: string[]
+}
+
 /** One account's CloudFormation in memory: every write settles at once, with the outputs `OUTPUTS` names. */
 function fakeCloudFormation(events: string[]) {
+	const sink: Sink = { events }
 	const stacks = new Map<string, { id: string; body: string; status: StackStatus }>()
 	const nameOf = (id: string) => [...stacks.entries()].find(([, stack]) => stack.id === id)?.[0] ?? ''
 	const client: Pick<CloudFormationClient, 'findStack' | 'describeStack' | 'getTemplate' | 'createStack' | 'updateStack'> = {
@@ -98,18 +104,18 @@ function fakeCloudFormation(events: string[]) {
 		createStack: async ({ name, templateBody }) => {
 			const id = `arn:aws:cloudformation:eu-central-1:123456789012:stack/${name}/${stacks.size}`
 			stacks.set(name, { id, body: templateBody, status: 'CREATE_COMPLETE' })
-			events.push(`create ${name}`)
+			sink.events.push(`create ${name}`)
 			return id
 		},
 		updateStack: async ({ name, templateBody }) => {
 			const stack = stacks.get(name)
 			if (stack === undefined) throw new Error(`no stack ${name}`)
 			stacks.set(name, { ...stack, body: templateBody, status: 'UPDATE_COMPLETE' })
-			events.push(`update ${name}`)
+			sink.events.push(`update ${name}`)
 			return stack.id
 		},
 	}
-	return { client, stacks }
+	return { client, stacks, sink }
 }
 
 const SERVICES = ['fabrika-platform-iam', 'fabrika-platform-control', 'fabrika-platform-operations', 'fabrika-platform-proxy']
@@ -129,6 +135,7 @@ interface FakeEcsState {
 }
 
 function fakeEcs(events: string[]) {
+	const sink: Sink = { events }
 	const state: FakeEcsState = { exitCode: 0, running: new Set(), throttled: 0, started: [], services: new Map() }
 	const created = new Date(Date.now() - 10 * 60_000)
 	for (const name of SERVICES) {
@@ -141,7 +148,7 @@ function fakeEcs(events: string[]) {
 	const tasks: EcsPlatformTasks = {
 		runTask: async (start) => {
 			state.started.push(start)
-			events.push('run setup')
+			sink.events.push('run setup')
 			return { arn: TASK, status: 'pending', exitCode: null, stopCode: null, reason: null }
 		},
 		describeTask: async (_cluster, arn): Promise<EcsTaskRun> => {
@@ -150,7 +157,7 @@ function fakeEcs(events: string[]) {
 				throw new AwsError('DescribeTasks', 'ThrottlingException', 400, null, true)
 			}
 			if (state.running.delete(arn)) {
-				events.push(`earlier setup ${arn} stopped`)
+				sink.events.push(`earlier setup ${arn} stopped`)
 				return { arn, status: 'stopped', exitCode: 0, stopCode: 'EssentialContainerExited', reason: null }
 			}
 			const { exitCode } = state
@@ -168,14 +175,14 @@ function fakeEcs(events: string[]) {
 			const service = state.services.get(name)
 			if (service === undefined) throw new Error(`no service ${name}`)
 			deployments += 1
-			events.push(`redeploy ${name}`)
+			sink.events.push(`redeploy ${name}`)
 			state.services.set(name, {
 				createdAt: service.createdAt,
 				deployments: [{ id: `${name}-${deployments}`, status: 'primary', createdAt: new Date(), rolloutState: 'completed' }],
 			})
 		},
 	}
-	return { tasks, state }
+	return { tasks, state, sink }
 }
 
 function run(
@@ -189,6 +196,9 @@ function run(
 	const { events } = options
 	const cloudFormation = options.cloudFormation ?? fakeCloudFormation(events)
 	const ecs = options.ecs ?? fakeEcs(events)
+	// A fake an earlier run used records into this run's events from now on.
+	cloudFormation.sink.events = events
+	ecs.sink.events = events
 	ecs.state.exitCode = options.exitCode === undefined ? 0 : options.exitCode
 	const { tasks } = ecs
 	const started = ecs.state.started
@@ -333,6 +343,22 @@ describe("the platform's stacks in order", () => {
 		const { input } = run({ events, ecs })
 		await applyAwsPlatform(input)
 		expect(events.filter((event) => event.startsWith('redeploy '))).toEqual(SERVICES.slice(1).map((name) => `redeploy ${name}`))
+	})
+
+	test('the proxy, created after the three settled, is left alone; the three that dial each other are redeployed', async () => {
+		const events: string[] = []
+		const ecs = fakeEcs(events)
+		const proxy = ecs.state.services.get('fabrika-platform-proxy')
+		if (proxy === undefined) throw new Error('no proxy')
+		// As the stack creates it: after the three, past the minute's margin from the last of them.
+		const after = new Date(proxy.createdAt.getTime() + 5 * 60_000)
+		ecs.state.services.set('fabrika-platform-proxy', {
+			createdAt: after,
+			deployments: [{ id: 'proxy-first', status: 'primary', createdAt: after, rolloutState: 'completed' }],
+		})
+		const { input } = run({ events, ecs })
+		await applyAwsPlatform(input)
+		expect(events.filter((event) => event.startsWith('redeploy '))).toEqual(SERVICES.slice(0, 3).map((name) => `redeploy ${name}`))
 	})
 
 	test('overlapping networks are refused before anything is sent', async () => {
