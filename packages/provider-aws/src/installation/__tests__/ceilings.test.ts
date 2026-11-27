@@ -92,6 +92,10 @@ describe("the platform's ceiling", () => {
 				.toEqual({ action, p: false, a: false })
 		}
 		expect(denied('iam:DeleteRolePermissionsBoundary', role('fabrika/apps/x'))).toBe(true)
+		// Outside `/fabrika/`, not even a role carrying a ceiling is written.
+		for (const action of ROLE_WRITES) {
+			expect({ action, denied: denied(action, role('outside'), { 'iam:PermissionsBoundary': P }) }).toEqual({ action, denied: true })
+		}
 		// Re-trusting and tagging take no boundary key: held to `/fabrika/` by resource.
 		for (const action of ['iam:UpdateAssumeRolePolicy', 'iam:TagRole', 'iam:UntagRole']) {
 			expect({ action, outside: denied(action, role('OrganizationAccountAccessRole')), inside: denied(action, role('fabrika/apps/x')) })
@@ -103,7 +107,12 @@ describe("the platform's ceiling", () => {
 		for (const action of ['iam:CreatePolicyVersion', 'iam:SetDefaultPolicyVersion', 'iam:DeletePolicyVersion', 'iam:DeletePolicy']) {
 			expect({ action, p: denied(action, P), a: denied(action, APPS) }).toEqual({ action, p: true, a: true })
 		}
-		expect(denied('iam:CreatePolicy', `arn:aws:iam::${A}:policy/admin`)).toBe(true)
+		// Outside `/fabrika/`, no policy is made, versioned, set back to an older version or deleted.
+		for (
+			const action of ['iam:CreatePolicy', 'iam:CreatePolicyVersion', 'iam:SetDefaultPolicyVersion', 'iam:DeletePolicyVersion', 'iam:DeletePolicy']
+		) {
+			expect({ action, denied: denied(action, `arn:aws:iam::${A}:policy/admin`) }).toEqual({ action, denied: true })
+		}
 		expect(denied('iam:CreatePolicyVersion', `arn:aws:iam::${A}:policy/fabrika/platform/fabrika-control-core`)).toBe(false)
 		for (const action of ['iam:UpdateAssumeRolePolicy', 'iam:AttachRolePolicy', 'iam:DeleteRole', 'iam:PassRole']) {
 			expect({ action, denied: denied(action, awsDeployerRoleArn(A), { 'iam:PermissionsBoundary': P }) }).toEqual({ action, denied: true })

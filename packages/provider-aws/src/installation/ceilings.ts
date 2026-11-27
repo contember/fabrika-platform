@@ -12,10 +12,10 @@
 // P-bound role writes must itself carry P or A.
 //
 // - **Roles carry a ceiling.** Creating a role, writing or removing its policies, or setting its boundary only where
-//   `iam:PermissionsBoundary` is P or A; removing a boundary nowhere. Re-trusting, tagging or untagging a role only under
-//   `/fabrika/` (IAM evaluates no boundary key for those).
+//   `iam:PermissionsBoundary` is P or A, and only under `/fabrika/`; removing a boundary nowhere. Re-trusting, tagging or
+//   untagging a role only under `/fabrika/` (IAM evaluates no boundary key for those).
 // - **The ceilings, the deployer and GitHub's provider are out of reach.** No new version or deletion of P or A; no
-//   policy written outside `/fabrika/`; no IAM action on the deployer's role or GitHub's OIDC provider; nothing but
+//   policy made, versioned, set back to an older version or deleted outside `/fabrika/`; no IAM action on the deployer's role or GitHub's OIDC provider; nothing but
 //   reads on the ceilings' and the deployer's stacks.
 // - **No other way in.** No IAM user, group or long-lived credential (access keys, passwords, service credentials,
 //   signing certificates, SSH keys, an MFA device turned off); no identity provider made, changed or deleted (OIDC,
@@ -79,9 +79,29 @@ export function awsPlatformBoundaryStatements(accountId: string): JsonValue[] {
 			{ StringNotEquals: { 'iam:PermissionsBoundary': ceilings } },
 		),
 		deny(['iam:DeleteRolePermissionsBoundary'], ['*']),
-		{ Effect: 'Deny', Action: ['iam:UpdateAssumeRolePolicy', 'iam:TagRole', 'iam:UntagRole'], NotResource: [fabrikaRoles] },
+		// Outside `/fabrika/`, no role is written at all, ceiling or not; re-trusting and tagging take no boundary key.
+		{
+			Effect: 'Deny',
+			Action: [
+				'iam:CreateRole',
+				'iam:PutRolePolicy',
+				'iam:AttachRolePolicy',
+				'iam:DetachRolePolicy',
+				'iam:DeleteRolePolicy',
+				'iam:PutRolePermissionsBoundary',
+				'iam:UpdateAssumeRolePolicy',
+				'iam:TagRole',
+				'iam:UntagRole',
+			],
+			NotResource: [fabrikaRoles],
+		},
 		deny(['iam:CreatePolicyVersion', 'iam:DeletePolicyVersion', 'iam:SetDefaultPolicyVersion', 'iam:DeletePolicy'], ceilings),
-		{ Effect: 'Deny', Action: ['iam:CreatePolicy', 'iam:CreatePolicyVersion'], NotResource: [`arn:aws:iam::${a}:policy/fabrika/*`] },
+		// Outside `/fabrika/`, no policy is made, given a version, or set back to an older one.
+		{
+			Effect: 'Deny',
+			Action: ['iam:CreatePolicy', 'iam:CreatePolicyVersion', 'iam:SetDefaultPolicyVersion', 'iam:DeletePolicyVersion', 'iam:DeletePolicy'],
+			NotResource: [`arn:aws:iam::${a}:policy/fabrika/*`],
+		},
 		deny(['iam:*'], [awsDeployerRoleArn(a), githubOidcProviderArn(a)]),
 		{ Effect: 'Deny', NotAction: ['cloudformation:Describe*', 'cloudformation:Get*', 'cloudformation:List*'], Resource: stacks },
 		deny(

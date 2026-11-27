@@ -612,7 +612,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        bounded role's trust policy is not held (no condition key reads one, and the stacks need `CreateRole` and
        `UpdateAssumeRolePolicy`), so a misused Control could write a bounded role another account may take; step 13
        adds IAM Access Analyzer's external access findings on `role/fabrika/apps/*` and `role/fabrika/namespaces/*` to
-       detect one. The ECS service-linked role is ensured by the commands (a stack cannot create one that may already
+       detect one, and on `role/fabrika/platform/*` for one the sidecar workflow's role could write (the ceilings'
+       remaining reach). The ECS service-linked role is ensured by the commands (a stack cannot create one that may already
        exist; built, `src/aws/iam.ts`: `GetRole`, and `CreateServiceLinkedRole` for `ecs.amazonaws.com` only when it is
        missing, after the confirmation and before any stack, the role's path checked to be ECS's own).
     4. **The database** (built, `installation/database.ts`): one RDS PostgreSQL 17 instance (`db.t4g.micro`, 20 GiB
@@ -963,7 +964,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the roles an existing task definition names (the task runner's role holds it on the applications' and namespaces'
     roles), that Lambda reports a thrown error's `name` as its `errorType`, which source ARN ECS sends when a task takes
     Control's role, and
-    IAM Access Analyzer's external access findings on the bounded roles, and whether ECS accepts from Control's role a
+    IAM Access Analyzer's external access findings on the bounded roles (`role/fabrika/apps/*`, `role/fabrika/namespaces/*`
+    and `role/fabrika/platform/*`), and whether ECS accepts from Control's role a
     `serviceRegistries` entry naming a Cloud Map service of the platform's namespace and Service Connect's clients take
     such an instance (an accepted reach: no route joins the VPCs, so it could only make the platform's calls fail).
     For the platform's services: that Service Connect takes a per-request timeout of 0 as off (a request through the

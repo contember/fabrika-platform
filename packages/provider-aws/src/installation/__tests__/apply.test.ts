@@ -335,7 +335,7 @@ describe("the platform's stacks in order", () => {
 				},
 			},
 		}
-		await expect(applyAwsPlatform(refused)).rejects.toThrow('Run this upgrade once with your own administrator credentials')
+		await expect(applyAwsPlatform(refused)).rejects.toThrow('run this upgrade once with administrator credentials of your own')
 		expect(later).toEqual([])
 	})
 

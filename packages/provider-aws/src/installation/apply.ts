@@ -180,8 +180,9 @@ export async function applyAwsPlatform(input: AwsPlatformApplyInput): Promise<Aw
 	} catch (error) {
 		if (!(error instanceof AwsError && error.code === 'AccessDenied')) throw error
 		throw new Error(
-			`aws: this release changes the installation's ceilings (${AWS_CEILINGS_STACK}), which these credentials may not change: the sidecar `
-				+ "workflow's role never may. Run this upgrade once with your own administrator credentials; the workflow runs the next ones",
+			`aws: AWS refused these credentials a write to the installation's ceilings (${AWS_CEILINGS_STACK}). The sidecar workflow's role is `
+				+ 'never allowed one, so a release that changes a ceiling stops here: run this upgrade once with administrator credentials of your own, '
+				+ 'and the workflow runs the next ones. If these already are your own, they lack administrator access in this account',
 		)
 	}
 	const apps = awsNetworkOutputs(await apply(awsNetworkStack(layouts.apps, 'apps')))
