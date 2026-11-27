@@ -83,7 +83,10 @@ export const PROXY_IMAGE_STEPS: readonly CiStep[] = [
 	},
 ]
 
-/** These need npm on PATH, as the CI job gets it from `setup-node`. The pack reads the working tree, the others its tarballs. */
+/**
+ * These need npm on PATH, as the CI job gets it from `setup-node`. The pack walks the package directories; the others read
+ * its tarballs and committed files (manifests, tsconfigs), none of which a suite writes.
+ */
 export const RELEASE_PACK_STEP: CiStep = { job: 'release-artifacts', name: 'Pack public packages', run: 'bun run release:pack --tag=v0.0.0-ci.0' }
 export const RELEASE_CHECK_STEPS: readonly CiStep[] = [
 	{ job: 'release-artifacts', name: 'Test tarballs in an isolated consumer', run: 'bun run release:smoke --tag=v0.0.0-ci.0' },
@@ -457,24 +460,29 @@ const run = async (results: StepResult[], skipped: string[]): Promise<void> => {
 	const docker = await dockerAvailable()
 	const npm = Bun.which('npm') !== null
 
+	// Every lane runs to its end, as CI's jobs do, so one run names every failure. A failure is recorded as it happens: a
+	// lane may fail while the run still waits for another phase.
+	const failures: string[] = []
+	const lane = (work: Promise<void>): Promise<void> =>
+		work.catch((error: unknown) => {
+			failures.push(error instanceof Error ? error.message : String(error))
+		})
+
 	// Each image is built from `git archive HEAD`, so it reads nothing the other jobs write; each is a job of its own.
-	const lanes: Promise<void>[] = docker ? PROXY_IMAGE_STEPS.map((step) => runLane([step], env, results)) : []
+	const lanes = docker ? PROXY_IMAGE_STEPS.map((step) => lane(runLane([step], env, results))) : []
 	if (!docker) skipped.push(`the image jobs (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
 	if (!npm) skipped.push(`the release-artifacts job (${RELEASE_ARTIFACT_STEPS.map((step) => step.name).join(', ')}): npm is not on PATH`)
 
 	// Suites write scratch files into the source tree, which the quality steps and the pack walk; these end before tests start.
-	const quality = runLane(QUALITY_STEPS, env, results)
+	const quality = lane(runLane(QUALITY_STEPS, env, results))
 	const pack = npm ? runLane([RELEASE_PACK_STEP], env, results) : undefined
 	await Promise.allSettled(pack === undefined ? [quality] : [quality, pack])
 
 	// The builds also follow the quality steps: the typecheck and the dashboard's build both rewrite its generated routes.
-	lanes.push(quality, runTestMatrix(env, testBackends(docker, skipped), results), runLane(BUILD_STEPS, env, results))
-	if (pack !== undefined) lanes.push(pack.then(() => runLane(RELEASE_CHECK_STEPS, env, results)))
+	lanes.push(quality, lane(runTestMatrix(env, testBackends(docker, skipped), results)), lane(runLane(BUILD_STEPS, env, results)))
+	if (pack !== undefined) lanes.push(lane(pack.then(() => runLane(RELEASE_CHECK_STEPS, env, results))))
 
-	// Every lane runs to its end, as CI's jobs do, so one run names every failure.
-	const failures = (await Promise.allSettled(lanes)).flatMap((lane) =>
-		lane.status === 'fulfilled' ? [] : [lane.reason instanceof Error ? lane.reason.message : String(lane.reason)]
-	)
+	await Promise.all(lanes)
 	if (failures.length > 0) throw new StepFailure(failures.join('; '))
 }
 
