@@ -60,8 +60,9 @@ envelope ([ADR-0011](0011-static-provider-bundles.md): envelopes only where data
     provider composition root's (`packages/control/src/<cloud>/`), so the provider passes them to the builder.
   - `jobs`: each scheduled job's command and schedule, a five-field cron expression in UTC (what Zerops' crontab,
     EventBridge Scheduler, a Kubernetes `CronJob` and a Container Apps job take). A renderer that runs a job as a loop
-    keeps an interval, not a time of day: it accepts the every-N-minutes forms, and `M H * * *` only as every 24 hours
-    from the task's start, and refuses the others. So no job may rely on the hour it runs at.
+    keeps an interval, not a time of day: it accepts every minute, every N minutes for an N that divides 60 (cron restarts
+    the count each hour, so another N matches no fixed interval), and `M H * * *` only as every 24 hours from the task's
+    start, and refuses the others. So no job may rely on the hour it runs at.
   - `calls`: the services it dials over the private network. A renderer derives its network rules from them (AWS
     security groups, Kubernetes network policies).
   - `environment`: every variable it reads, by name, each with a **kind** and whether it is sensitive:
