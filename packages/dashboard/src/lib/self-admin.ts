@@ -1,6 +1,6 @@
 import type { RpcFetch } from '@fabrika/app'
 import { appEnvironmentId } from '@fabrika/auth-core'
-import type { AppDto, GrantDto, IamAdministrationScope } from '@fabrika/iam-contract'
+import type { AppDto, GrantDto, GrantRequestDto, IamAdministrationScope } from '@fabrika/iam-contract'
 import { quietIamClient } from './iam'
 import type { ConsoleSession } from './session'
 
@@ -28,8 +28,8 @@ export interface SelfAdminTarget {
 	readonly env: string
 	/** The IAM application id, `<app>@<env>`. */
 	readonly app: string
-	/** The caller's active global Admin grant there; null when it holds none. */
-	readonly held: { readonly until: number | null } | null
+	/** The caller's active global Admin there and the grants that give it; null when it holds none. */
+	readonly held: { readonly until: number | null; readonly grantIds: readonly string[] } | null
 }
 
 /**
@@ -42,7 +42,7 @@ export function selfAdminTargets(input: {
 	readonly envs: readonly string[]
 	readonly iamApps: readonly AppDto[]
 	readonly administration: IamAdministrationScope
-	readonly grants: readonly Pick<GrantDto, 'app' | 'roleKey' | 'scopeType' | 'expiresAt'>[]
+	readonly grants: readonly Pick<GrantDto, 'id' | 'app' | 'roleKey' | 'scopeType' | 'expiresAt'>[]
 	readonly now: number
 }): SelfAdminTarget[] {
 	const known = new Set(input.iamApps.filter((app) => !app.installation).map((app) => app.id))
@@ -57,8 +57,21 @@ export function selfAdminTargets(input: {
 		)
 		if (active.length === 0) return [{ env, app, held: null }]
 		const until = active.some((grant) => grant.expiresAt === null) ? null : Math.max(...active.map((grant) => grant.expiresAt ?? 0))
-		return [{ env, app, held: { until } }]
+		return [{ env, app, held: { until, grantIds: active.map((grant) => grant.id) } }]
 	})
+}
+
+/**
+ * Revokes every grant that gives the caller its Admin in one environment, so none is left behind. Answers the first
+ * revocation that waits for another administrator's approval (ADR-0083), or null when all took effect.
+ */
+export async function revokeSelfAdmin(
+	held: NonNullable<SelfAdminTarget['held']>,
+	remove: (id: string) => Promise<{ readonly pending?: GrantRequestDto }>,
+): Promise<GrantRequestDto | null> {
+	let waiting: GrantRequestDto | null = null
+	for (const id of held.grantIds) waiting ??= (await remove(id)).pending ?? null
+	return waiting
 }
 
 /** What the Admin section needs: who the caller is in IAM and the environments it may grant itself Admin in. */

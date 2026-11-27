@@ -1,7 +1,10 @@
 import type { RpcFetch } from '@fabrika/app'
-import type { AppDto, GrantDto } from '@fabrika/iam-contract'
+import type { AppDto, GrantDto, GrantRequestDto } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
-import { readSelfAdmin, selfAdminExpiresAt, selfAdminTargets } from '../lib/self-admin'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { AdminAccessSection } from '../components/app-detail/AdminAccessSection'
+import { readSelfAdmin, revokeSelfAdmin, selfAdminExpiresAt, selfAdminTargets } from '../lib/self-admin'
 import type { ConsoleSession } from '../lib/session'
 
 const NOW = 1_800_000_000
@@ -11,8 +14,14 @@ const IAM_APPS: AppDto[] = [
 	{ id: 'vozka', displayName: 'Console', installation: true },
 ]
 
-type Grant = Pick<GrantDto, 'app' | 'roleKey' | 'scopeType' | 'expiresAt'>
-const admin = (app: string, expiresAt: number | null = null): Grant => ({ app, roleKey: 'admin', scopeType: null, expiresAt })
+type Grant = Pick<GrantDto, 'id' | 'app' | 'roleKey' | 'scopeType' | 'expiresAt'>
+const admin = (app: string, expiresAt: number | null = null, id = `grant-${app}-${expiresAt}`): Grant => ({
+	id,
+	app,
+	roleKey: 'admin',
+	scopeType: null,
+	expiresAt,
+})
 
 describe('the environments offered for a self-granted Admin', () => {
 	test('an installation administrator gets every environment IAM knows, none it does not', () => {
@@ -57,11 +66,65 @@ describe('the environments offered for a self-granted Admin', () => {
 	test('a held Admin shows its latest expiry; an expired, scoped or other app grant is not held', () => {
 		const held = (grants: Grant[]) =>
 			selfAdminTargets({ appId: 'opice', envs: ['prod'], iamApps: IAM_APPS, administration: { kind: 'installation' }, grants, now: NOW })[0]?.held
-		expect(held([admin('opice@prod', NOW + 10), admin('opice@prod', NOW + 99)])).toEqual({ until: NOW + 99 })
-		expect(held([admin('opice@prod', NOW + 10), admin('opice@prod')])).toEqual({ until: null })
+		expect(held([admin('opice@prod', NOW + 10, 'g1'), admin('opice@prod', NOW + 99, 'g2')])).toEqual({ until: NOW + 99, grantIds: ['g1', 'g2'] })
+		expect(held([admin('opice@prod', NOW + 10, 'g1'), admin('opice@prod', null, 'g2')])).toEqual({ until: null, grantIds: ['g1', 'g2'] })
+		expect(held([admin('opice@prod', NOW - 1, 'g1'), admin('opice@prod', NOW + 10, 'g2')])).toEqual({ until: NOW + 10, grantIds: ['g2'] })
 		expect(held([admin('opice@prod', NOW - 1)])).toBeNull()
 		expect(held([{ ...admin('opice@prod'), scopeType: 'workspace' }])).toBeNull()
 		expect(held([admin('opice@stage'), { ...admin('opice@prod'), roleKey: 'editor' }])).toBeNull()
+	})
+})
+
+describe('revoking a self-granted Admin in place', () => {
+	test('a held Admin offers Revoke beside it; one not held offers the grant instead', () => {
+		const markup = renderToStaticMarkup(createElement(AdminAccessSection, {
+			state: {
+				principalId: 'user-1',
+				targets: [
+					{ env: 'prod', app: 'opice@prod', held: null },
+					{ env: 'stage', app: 'opice@stage', held: { until: null, grantIds: ['g1'] } },
+				],
+			},
+			onDone: () => {},
+		}))
+		expect(markup).toContain('aria-label="Grant me Admin on prod"')
+		expect(markup).not.toContain('Revoke my Admin on prod')
+		expect(markup).toContain('You hold Admin.')
+		expect(markup).toContain('aria-label="Revoke my Admin on stage"')
+	})
+
+	test('revokes every grant that gives it, and answers a revocation that waits for approval', async () => {
+		const removed: string[] = []
+		const applied = await revokeSelfAdmin({ until: null, grantIds: ['g1', 'g2'] }, async (id) => {
+			removed.push(id)
+			return {}
+		})
+		expect(removed).toEqual(['g1', 'g2'])
+		expect(applied).toBeNull()
+
+		const request: GrantRequestDto = {
+			id: 'req-1',
+			app: 'opice@prod',
+			kind: 'revoke',
+			principalId: 'user-1',
+			principalLabel: null,
+			grantId: 'g1',
+			roleKey: 'admin',
+			permissions: null,
+			scopeType: null,
+			scopeValue: null,
+			scopeValues: null,
+			grantExpiresAt: null,
+			requestedBy: 'user-1',
+			requestedByLabel: null,
+			requestedAt: NOW,
+			expiresAt: NOW + 86400,
+			status: 'pending',
+			decidedBy: null,
+			decidedAt: null,
+		}
+		const waiting = await revokeSelfAdmin({ until: null, grantIds: ['g1'] }, async () => ({ pending: request }))
+		expect(waiting).toBe(request)
 	})
 })
 
@@ -83,7 +146,7 @@ describe('reading the self-Admin state', () => {
 		return answer()
 	}
 	const apps = () => Response.json({ result: { items: IAM_APPS } })
-	const principal = () => Response.json({ result: { grants: [admin('opice@stage')] } })
+	const principal = () => Response.json({ result: { grants: [admin('opice@stage', null, 'g-stage')] } })
 
 	test("reads the offered environments and the caller's own Admin from IAM", async () => {
 		const state = await readSelfAdmin('opice', ['prod', 'stage'], session, answering({ 'apps.list': apps, 'principals.get': principal }))
@@ -91,7 +154,7 @@ describe('reading the self-Admin state', () => {
 			principalId: 'user-1',
 			targets: [
 				{ env: 'prod', app: 'opice@prod', held: null },
-				{ env: 'stage', app: 'opice@stage', held: { until: null } },
+				{ env: 'stage', app: 'opice@stage', held: { until: null, grantIds: ['g-stage'] } },
 			],
 		})
 	})

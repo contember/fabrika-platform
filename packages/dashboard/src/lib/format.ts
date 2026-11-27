@@ -16,6 +16,7 @@ export function fmtDate(seconds: number | null | undefined, missing = NONE): str
 		hour: '2-digit',
 		minute: '2-digit',
 		second: '2-digit',
+		timeZoneName: 'short',
 	})
 }
 

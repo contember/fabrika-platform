@@ -508,7 +508,15 @@ export function DataSections(
 				<MaintenanceControl key={view.value.maintenance.mode} appId={appId} env={env} current={view.value.maintenance.mode} onChanged={onChanged} />
 			)}
 			{view.kind === 'ok' && manages && <RestoreControl appId={appId} env={env} onChanged={onChanged} />}
-			<BackupsSection appId={appId} env={env} backups={backups} schedule={schedule} manages={manages} onChanged={onChanged} />
+			<BackupsSection
+				appId={appId}
+				env={env}
+				backups={backups}
+				schedule={schedule}
+				manages={manages}
+				reachable={view.kind !== 'no-channel'}
+				onChanged={onChanged}
+			/>
 			<section>
 				<div className="section-head">
 					<h2>Operations</h2>
@@ -789,13 +797,18 @@ const RESOLUTION_LABELS: Readonly<Record<DataOperationResolution, string>> = {
 	rollback: 'Roll back and open',
 }
 
-/** What a recovery does, in the order Control does it (ADR-0069 §3). */
+/** What a recovery leaves the environment serving, then how Control gets there (ADR-0069 §3). */
 export function RecoveryEffect({ operation, resolution }: { operation: DataOperationDto; resolution: DataOperationResolution }) {
 	const id = <code>{shortId(operation.id)}</code>
 	switch (resolution) {
 		case 'rollback':
 			return (
 				<>
+					<p>
+						<strong>
+							Afterwards the environment runs its last successfully deployed version again, on its data as it was before the migration.
+						</strong>
+					</p>
 					<p>
 						Control first fences the environment at a fresh generation in{' '}
 						<code>inspect</code>: the application boots nothing and answers nothing but Control's ops requests. If the rewind of the data is unconfirmed,
@@ -811,6 +824,9 @@ export function RecoveryEffect({ operation, resolution }: { operation: DataOpera
 		case 'resume':
 			return (
 				<>
+					<p>
+						<strong>Afterwards the {operation.kind} operation carries on where it stopped, and the environment serves the data it leaves.</strong>
+					</p>
 					<ClosedFence />
 					<p>
 						It then resumes the {operation.kind} operation {id} from its recorded step{' '}
@@ -821,6 +837,11 @@ export function RecoveryEffect({ operation, resolution }: { operation: DataOpera
 		case 'open':
 			return (
 				<>
+					<p>
+						<strong>
+							Afterwards the environment serves requests again, on its data as the stopped {operation.kind} operation left it.
+						</strong>
+					</p>
 					<ClosedFence />
 					<p>
 						It then opens the application at a new generation, so it admits every request again. The {operation.kind} operation {id}{' '}
@@ -1137,13 +1158,18 @@ export function RestoreEffect({ time }: { time: RestoreInstant }) {
 	)
 }
 
+/**
+ * `reachable` is false when the environment has no data channel: a backup is a data operation over that channel, so
+ * none runs, and the schedule, which Control still answers, would promise one.
+ */
 export function BackupsSection(
-	{ appId, env, backups, schedule, manages, onChanged }: {
+	{ appId, env, backups, schedule, manages, reachable, onChanged }: {
 		appId: string
 		env: string
 		backups: DataRead<CursorList<DataBackupDto>>
 		schedule: DataRead<DataBackupScheduleDto>
 		manages: boolean
+		reachable: boolean
 		onChanged: () => void
 	},
 ) {
@@ -1152,15 +1178,23 @@ export function BackupsSection(
 			<div className="section-head">
 				<h2>Backups</h2>
 			</div>
-			<p className="section-note">
-				Control backs up this environment's data before each migration and, unless turned off, once a day. A backup counts only after a trial import of it
-				passed. Each is kept for {RESTORE_WINDOW_DAYS} days, the reach of a restore.
-			</p>
-			{schedule.kind === 'ok' && (
+			{reachable
+				? (
+					<p className="section-note">
+						Control backs up this environment's data before each migration and, unless turned off, once a day. A backup counts only after a trial import of
+						it passed. Each is kept for {RESTORE_WINDOW_DAYS} days, the reach of a restore.
+					</p>
+				)
+				: (
+					<p className="section-note">
+						Daily backups do not run here, and neither does the backup before a migration: Control cannot reach this environment's data.
+					</p>
+				)}
+			{reachable && schedule.kind === 'ok' && (
 				<ScheduleControl key={String(schedule.value.daily)} appId={appId} env={env} schedule={schedule.value} manages={manages} onChanged={onChanged} />
 			)}
 			{backups.kind === 'ok'
-				? <BackupsTable page={backups.value} daily={schedule.kind === 'ok' ? schedule.value.daily : null} />
+				? <BackupsTable page={backups.value} daily={reachable && schedule.kind === 'ok' ? schedule.value.daily : null} reachable={reachable} />
 				: <ReadProblem read={backups} />}
 		</section>
 	)
@@ -1206,13 +1240,13 @@ function ScheduleControl(
 }
 
 /** `daily` is the schedule, `null` when it could not be read: the empty list says what produces the first backup. */
-function BackupsTable({ page, daily }: { page: CursorList<DataBackupDto>; daily: boolean | null }) {
+function BackupsTable({ page, daily, reachable }: { page: CursorList<DataBackupDto>; daily: boolean | null; reachable: boolean }) {
 	return (
 		<>
 			<Table
 				colSpan={6}
 				isEmpty={page.items.length === 0}
-				empty={<EmptyState title="No backups yet" body={emptyBackupsBody(daily)} />}
+				empty={reachable ? <EmptyState title="No backups yet" body={emptyBackupsBody(daily)} /> : <EmptyState title="No backups" />}
 				head={
 					<tr>
 						<th className="grow">Backup</th>

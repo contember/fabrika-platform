@@ -5,12 +5,14 @@ import { api } from '../../access/lib/api'
 import { fmtDate } from '../../lib/format'
 import {
 	ADMIN_ROLE,
+	revokeSelfAdmin,
 	SELF_ADMIN_EXPIRIES,
 	selfAdminExpiresAt,
 	type SelfAdminExpiry,
 	type SelfAdminState,
 	type SelfAdminTarget,
 } from '../../lib/self-admin'
+import { ConfirmDialog } from '../ConfirmDialog'
 import { PendingGrantNotice, pendingOf } from '../PendingGrant'
 import { Chip } from '../Status'
 
@@ -27,7 +29,7 @@ export function AdminAccessSection({ state, onDone }: { state: SelfAdminState | 
 			</div>
 			<p className="section-note">
 				In every environment, not only the one chosen above. Admin holds every action of the application there; granting it to yourself is an ordinary
-				grant, audited and revoked under your account.
+				grant, audited like any other.
 			</p>
 			<ul className="self-admin">
 				{state.targets.map((target) => <SelfAdminRow key={target.app} principalId={state.principalId} target={target} onDone={onDone} />)}
@@ -41,6 +43,8 @@ function SelfAdminRow({ principalId, target, onDone }: { principalId: string; ta
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [pending, setPending] = useState<GrantRequestDto | null>(null)
+	const [confirmingRevoke, setConfirmingRevoke] = useState(false)
+	const held = target.held
 
 	async function grant() {
 		setBusy(true)
@@ -65,8 +69,15 @@ function SelfAdminRow({ principalId, target, onDone }: { principalId: string; ta
 			<div>
 				{pending !== null
 					? <PendingGrantNotice request={pending} />
-					: target.held !== null
-					? <span>You hold Admin{target.held.until === null ? '' : ` until ${fmtDate(target.held.until)}`}.</span>
+					: held !== null
+					? (
+						<div className="toolbar">
+							<span>You hold Admin{held.until === null ? '' : ` until ${fmtDate(held.until)}`}.</span>
+							<button type="button" className="danger small" aria-label={`Revoke my Admin on ${target.env}`} onClick={() => setConfirmingRevoke(true)}>
+								Revoke
+							</button>
+						</div>
+					)
 					: (
 						<div className="toolbar">
 							<select
@@ -84,6 +95,24 @@ function SelfAdminRow({ principalId, target, onDone }: { principalId: string; ta
 					)}
 				{error && <div className="error-text small" role="alert">{error}</div>}
 			</div>
+			{confirmingRevoke && held !== null && (
+				<ConfirmDialog
+					title="Revoke your Admin"
+					confirmLabel="Revoke"
+					body={
+						<p>
+							Revoke your Admin on{' '}
+							<strong>{target.env}</strong>? You keep what your other grants give you there. A token you already hold can keep Admin for up to five minutes.
+						</p>
+					}
+					onClose={() => setConfirmingRevoke(false)}
+					onConfirm={async () => {
+						const request = await revokeSelfAdmin(held, (id) => api.grants.delete({ id }))
+						setPending(request)
+						if (request === null) onDone()
+					}}
+				/>
+			)}
 		</li>
 	)
 }
