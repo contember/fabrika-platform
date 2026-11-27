@@ -15,7 +15,7 @@
 // `platform upgrade` registers the console and IAM's vocabulary too (`registerAwsPlatformApps`), since a release may
 // change them; an install cannot, before its hosts point anywhere.
 
-import { reconcileSchema } from '@fabrika/auth'
+import { reconcileSchema, ReconcileSchemaError } from '@fabrika/auth'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import {
 	createIamAdminClient,
@@ -42,16 +42,38 @@ export const AWS_PROVISIONING_KEY_PARAMETER = `${awsPlatformParameters('iam')}FA
 /** Replace an outstanding enrollment instead of reporting it: the one way a second URL is ever issued. */
 export const AWS_REISSUE_FLAG = '--reissue'
 
+/**
+ * IAM gave no answer at all: the host resolves nowhere, refuses the connection, or completes no TLS. An upgrade that
+ * finishes an install whose hosts point nowhere yet meets this, and names `admin` instead of failing; an answer from
+ * IAM (a refused key, any status) is a `ReconcileSchemaError` and always fails.
+ */
+export class AwsIamUnreachableError extends Error {
+	readonly origin: string
+	constructor(origin: string, reason: string) {
+		super(`aws: IAM at ${origin} gave no answer (${reason})`)
+		this.name = 'AwsIamUnreachableError'
+		this.origin = origin
+	}
+}
+
 /** The reconciler `@fabrika/auth` gives: IAM's provisioning surface over the network. */
-export const awsSchemaReconciler: SchemaReconciler = (call) =>
-	reconcileSchema({
-		url: call.url,
-		app: call.app,
-		schema: call.schema,
-		...(call.returnOrigins === undefined ? {} : { returnOrigins: call.returnOrigins }),
-		...(call.adminKey === undefined ? {} : { adminKey: call.adminKey }),
-		signal: call.signal,
-	})
+export const awsSchemaReconciler: SchemaReconciler = async (call) => {
+	try {
+		await reconcileSchema({
+			url: call.url,
+			app: call.app,
+			schema: call.schema,
+			...(call.returnOrigins === undefined ? {} : { returnOrigins: call.returnOrigins }),
+			...(call.adminKey === undefined ? {} : { adminKey: call.adminKey }),
+			signal: call.signal,
+		})
+	} catch (error) {
+		// Only the request itself failing is "no answer"; the error's own message names no credential (the key travels
+		// in a header, never in the URL), and the error object is not kept.
+		if (error instanceof ReconcileSchemaError || call.signal.aborted) throw error
+		throw new AwsIamUnreachableError(call.url, error instanceof Error ? error.message : 'the request failed')
+	}
+}
 
 /**
  * Registers the console (its vocabulary, and the console's origin as the one a session may return to) and IAM's own
@@ -105,9 +127,15 @@ const ADMIN_FLAGS: readonly (readonly [string, string])[] = [
 
 /** `admin`'s arguments: the account, the region, the mailbox, and `--reissue`. */
 export function parseAwsAdminArgs(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): AwsAdminOptions {
-	const known = new Set([...ADMIN_FLAGS.map(([flag]) => flag), AWS_REISSUE_FLAG])
-	const unknown = argv.find((arg) => !known.has(arg.split('=')[0] ?? ''))
-	if (unknown !== undefined) throw new Error(`${describeArgument(unknown)} is not an argument of this command`)
+	// `--reissue` bare, every other flag as `--flag=value`, as Zerops' `admin` takes them: a `--reissue=yes` read as no
+	// reissue, or a value standing apart from its flag, is refused rather than guessed.
+	for (const arg of argv) {
+		if (arg === AWS_REISSUE_FLAG) continue
+		const name = arg.split('=')[0] ?? arg
+		if (name === AWS_REISSUE_FLAG) throw new Error(`${AWS_REISSUE_FLAG} takes no value`)
+		if (!ADMIN_FLAGS.some(([flag]) => flag === name)) throw new Error(`${describeArgument(arg)} is not an argument of this command`)
+		if (!arg.includes('=')) throw new Error(`${name} takes its value as ${name}=<value>`)
+	}
 	const [account, region, email] = ADMIN_FLAGS.map(([flag, variable]) => requiredSetting(setting(argv, env, flag, variable), flag, variable))
 	if (account === undefined || region === undefined || email === undefined) {
 		throw new Error('aws: the account, the region and the mailbox are required')
@@ -157,14 +185,17 @@ export async function runAwsAdmin(run: AwsAdminRun): Promise<FirstAdministratorR
 	if (enrollment.state === 'already-set') log('aws: a password is already set for this principal; no enrollment was issued')
 	else if (enrollment.state === 'single-sign-on') log(`aws: this installation offers no password; sign in with single sign-on as ${result.email}`)
 	else if (enrollment.state === 'outstanding') log(`aws: an enrollment is already outstanding and was not replaced; ${AWS_REISSUE_FLAG} replaces it`)
-	else if (enrollment.state === 'emailed') log(`aws: the enrollment was emailed to ${enrollment.email}`)
+	else if (enrollment.state === 'emailed') log(`aws: the enrollment was emailed to ${enrollment.email}, valid until ${expiry(enrollment.expiresAt)}`)
 	else {
 		log('aws: nothing was emailed: this installation has no mail service. The URL below sets the first password; give it')
-		log('aws: to the administrator yourself. It is a credential: printed once, stored nowhere, and it expires.')
+		log(`aws: to the administrator yourself. It is a credential: printed once, stored nowhere, valid until ${expiry(enrollment.expiresAt)}.`)
 		run.print(enrollment.url)
 	}
 	return result
 }
+
+/** An enrollment's expiry (Unix seconds) as Zerops' `admin` states it. */
+const expiry = (unixSeconds: number): string => new Date(unixSeconds * 1000).toISOString()
 
 /** The real admission: `installation-init`'s, through the installation's public IAM with the provisioning key. */
 export const awsAdmitFirstAdministrator = (

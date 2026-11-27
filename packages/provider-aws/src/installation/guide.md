@@ -86,11 +86,13 @@ fabrika platform upgrade --provider=aws --account-id=<12 digits> --region=<regio
 
 It builds the release's images (or finds them built), runs the database setup before any service moves, rewrites what
 the release derives, rolls the services, and registers the console's vocabulary with IAM again, since a release may
-change it.
+change it. An upgrade that finishes an install whose hosts point nowhere yet cannot reach IAM: it says so and names
+`platform admin`, which registers both once they do. An answer from IAM that refuses fails the run.
 
 The record (`/fabrika/platform/installation/record`) is in the keys' backup above. If it is lost, restore it from
-there, or run the upgrade naming every choice the install named (ranges included, which must be the networks' own):
-it writes the record back. A sign-in method or a mailer you changed by hand stays as you set it.
+there, or run the upgrade naming every choice the install named, `--mcp-authoring` included: it writes the record
+back. The ranges must be the networks' own, and the hosts and the environment's name the ones the installation holds,
+or it refuses. A sign-in method or a mailer you changed by hand stays as you set it.
 Name a certificate (`--control-certificate=<ARN>`, after renewing it under a new ARN) or `--mcp-authoring` to change
 it; the run names the change before it asks. A changed network range, host or environment name is refused: those
 would replace the networks or rewrite what every service derives.

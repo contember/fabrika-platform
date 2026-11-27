@@ -262,6 +262,14 @@ export function awsBalancersEnvironment(
 	return {
 		FABRIKA_AWS_BALANCER_SECURITY_GROUP: outputs.appsBalancerGroupId,
 		FABRIKA_AWS_BALANCER_LISTENER: outputs.appsListenerArn,
-		FABRIKA_AWS_INSTALLATION_HOSTS: [...AWS_PLATFORM_SERVICES.map((service) => input.hosts[service]), input.appsDefault.host].join(','),
+		FABRIKA_AWS_INSTALLATION_HOSTS: awsInstallationHosts(input),
 	}
+}
+
+/**
+ * Control's `FABRIKA_AWS_INSTALLATION_HOSTS`: the three platform hosts and the applications' default, in that order.
+ * A lost record's write-back compares the hosts it is named against it (`run.ts`).
+ */
+export function awsInstallationHosts(input: Pick<AwsBalancersInput, 'hosts' | 'appsDefault'>): string {
+	return [...AWS_PLATFORM_SERVICES.map((service) => input.hosts[service]), input.appsDefault.host].join(',')
 }

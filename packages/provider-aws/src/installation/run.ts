@@ -32,8 +32,9 @@ import { STS, type StsClient, stsClient } from '../aws/sts'
 import { type AwsClientOptions, type AwsCredentialSource, awsServiceOrigin } from '../aws/transport'
 import { readStackOutputs } from '../stack'
 import { awsSourcesBucket } from './access'
-import { awsProvisioningKey, awsSchemaReconciler, registerAwsPlatformApps } from './admin'
+import { AwsIamUnreachableError, awsProvisioningKey, awsSchemaReconciler, registerAwsPlatformApps } from './admin'
 import { applyAwsPlatform, type AwsPlatformApplied, type AwsPlatformApplyInput } from './apply'
+import { awsInstallationHosts } from './balancers'
 import { type AwsImagesBuildRun, buildAwsPlatformImages } from './images-build'
 import { AWS_NETWORK_STACKS, type AwsNetworkSide } from './network'
 import { AWS_CHOICE_KEYS, awsChoiceFlag, awsChoicesFrom, type AwsCommonOptions, type AwsInstallOptions, type AwsUpgradeOptions } from './options'
@@ -46,6 +47,7 @@ import {
 	encodeAwsInstallationRecord,
 	parseAwsInstallationRecord,
 } from './record'
+import { awsPlatformParameters } from './runtime'
 import { AWS_SERVICES_STACK } from './services'
 
 /** The operator's credentials from the environment, read per call; refused, by name, when a key is missing. */
@@ -113,14 +115,20 @@ async function readRecord(secrets: Pick<SsmPlatformSecrets, 'readSecret'>, signa
 	return text === null ? null : parseAwsInstallationRecord(text)
 }
 
+/** Where the last run wrote the hosts and the environment's name, which a lost record's write-back is compared against. */
+const HELD_HOSTS_PARAMETER = `${awsPlatformParameters('control')}FABRIKA_AWS_INSTALLATION_HOSTS`
+const HELD_ENVIRONMENT_PARAMETER = `${awsPlatformParameters('iam')}ENVIRONMENT`
+
 /**
- * An upgrade's choices when the record is gone: every one named, none defaulted, and the two ranges the ones the network
- * stacks hold, so a lost record is written back without a range the installation does not have.
+ * An upgrade's choices when the record is gone: every one named, none defaulted (MCP authoring too), and each one the
+ * record refuses to change compared against what the installation holds: the two ranges against the network stacks,
+ * the hosts and the environment's name against the parameters the last run wrote. A lost record is never written back
+ * with a value the installation does not have, which every later upgrade would then refuse to correct.
  */
 async function rebuiltChoices(input: AwsPlatformRunInput & { readonly kind: 'upgrade' }): Promise<AwsInstallationChoices> {
 	const { options, clients, signal } = input
 	const named = input.options.named
-	const missing = AWS_CHOICE_KEYS.filter((key) => key !== 'mcpAuthoring' && named[key] === undefined)
+	const missing = AWS_CHOICE_KEYS.filter((key) => named[key] === undefined)
 	if (missing.length > 0) {
 		throw new Error(
 			`aws: the installation in account ${options.accountId}, ${options.region} has no record at ${AWS_INSTALLATION_RECORD}; restore it from the keys' backup, or name every choice to write it back (missing: ${
@@ -135,6 +143,19 @@ async function rebuiltChoices(input: AwsPlatformRunInput & { readonly kind: 'upg
 		if (held !== choices.plan.vpcCidrs[side]) {
 			throw new Error(`aws: the ${side} network holds ${held ?? 'no range'}, not the ${choices.plan.vpcCidrs[side]} named; name the range it holds`)
 		}
+	}
+	const held = [
+		{
+			what: "the hosts (IAM, Control, Operations, the applications' default)",
+			parameter: HELD_HOSTS_PARAMETER,
+			named: awsInstallationHosts(choices.plan),
+		},
+		{ what: "the environment's name", parameter: HELD_ENVIRONMENT_PARAMETER, named: choices.environment },
+	]
+	for (const { what, parameter, named: value } of held) {
+		const holds = await clients.secrets.readSecret(parameter, signal)
+		if (holds === null) throw new Error(`aws: ${parameter} is missing, so ${what} cannot be checked; restore the record from the keys' backup`)
+		if (holds !== value) throw new Error(`aws: the installation holds ${holds} as ${what} (${parameter}), not the ${value} named; name what it holds`)
 	}
 	return choices
 }
@@ -233,14 +254,22 @@ export async function runAwsPlatform(input: AwsPlatformRunInput): Promise<AwsPla
 		log,
 	})
 	if (kind === 'upgrade') {
-		// A release may change the console's vocabulary or IAM's: registered once the services it describes serve.
-		await registerAwsPlatformApps({
-			plan,
-			provisioningKey: await awsProvisioningKey(clients.secrets, signal),
-			reconcile: input.reconcile ?? awsSchemaReconciler,
-			signal,
-			log,
-		})
+		// A release may change the console's vocabulary or IAM's: registered once the services it describes serve. An
+		// upgrade that finishes a stopped install may run before the hosts point anywhere; IAM giving no answer then is
+		// the next step, not a failed run. An answer from IAM that refuses still fails it.
+		try {
+			await registerAwsPlatformApps({
+				plan,
+				provisioningKey: await awsProvisioningKey(clients.secrets, signal),
+				reconcile: input.reconcile ?? awsSchemaReconciler,
+				signal,
+				log,
+			})
+		} catch (error) {
+			if (!(error instanceof AwsIamUnreachableError)) throw error
+			log(`${error.message}; the release is applied, but the console and IAM's vocabulary are not registered`)
+			log(`aws: next, point the hosts at ${applied.balancers.platformBalancerDnsName}, then \`platform admin --provider=aws\` registers them`)
+		}
 	} else {
 		log(`aws: next, point the hosts at ${applied.balancers.platformBalancerDnsName}, then \`platform admin --provider=aws\` registers the console and`)
 		log('aws: admits the first administrator')

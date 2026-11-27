@@ -86,6 +86,12 @@ describe('platform admin on AWS', () => {
 		const logged = lines.join('\n')
 		expect(logged).not.toContain(ENROLLMENT)
 		expect(logged).not.toContain(KEY)
+		// When it stops working, as Zerops' `admin` says it: the issued URL's and the emailed one's.
+		const until = `valid until ${new Date(1_800_000_000 * 1000).toISOString()}`
+		expect(logged).toContain(until)
+		const emailed = account({ enrollment: { state: 'emailed', email: 'admin@example.com', expiresAt: 1_800_000_000 } })
+		await emailed.run(ARGV)
+		expect(emailed.lines).toContain(`aws: the enrollment was emailed to admin@example.com, ${until}`)
 	})
 
 	test('another account, no installation, or no key is refused before IAM is asked anything', async () => {
@@ -115,6 +121,12 @@ describe('platform admin on AWS', () => {
 			'a@example.com',
 		)
 		expect(() => parseAwsAdminArgs([...ARGV, '--key=px_hidden'], {})).toThrow('`--key` is not an argument of this command')
+		// `--reissue` is bare, every other flag takes `=`: neither is guessed.
+		expect(parseAwsAdminArgs([...ARGV, '--reissue'], {}).reissue).toBe(true)
+		expect(() => parseAwsAdminArgs([...ARGV, '--reissue=yes'], {})).toThrow('--reissue takes no value')
+		expect(() => parseAwsAdminArgs(['--account-id=123456789012', '--region=eu-central-1', '--email', 'a@example.com'], {})).toThrow(
+			'--email takes its value as --email=<value>',
+		)
 		expect(() => parseAwsAdminArgs(['--account-id=1', '--region=eu-central-1', '--email=a@example.com'], {})).toThrow(
 			'--account-id is not an account id',
 		)

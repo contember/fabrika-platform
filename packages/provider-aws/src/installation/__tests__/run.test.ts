@@ -4,6 +4,7 @@
 // nothing written when the operator declines; the bring-up's values reaching the parameters on an install alone; the
 // operator's credentials from the environment; and the module the CLI loads.
 
+import { ReconcileSchemaError } from '@fabrika/auth'
 import { IAM_APP_ID } from '@fabrika/iam-contract'
 import { type Confirmations, platformProxyAppFor } from '@fabrika/installation-init'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
@@ -11,7 +12,7 @@ import { isInstallationCli } from '@fabrika/provider-contract/installation'
 import { describe, expect, test } from 'bun:test'
 import type { StackStatus } from '../../aws/cloudformation'
 import type { SsmPlatformSecrets } from '../../aws/ssm'
-import { AWS_PROVISIONING_KEY_PARAMETER } from '../admin'
+import { AWS_PROVISIONING_KEY_PARAMETER, AwsIamUnreachableError } from '../admin'
 import type { AwsPlatformApplied, AwsPlatformApplyInput } from '../apply'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../generated/platform-proxy-manifest'
 import { installationCli, readAwsInstallationGuide } from '../index'
@@ -110,7 +111,13 @@ function clientsOf(account: FakeAccount): AwsPlatformClients {
 
 const yes: Confirmations = { confirm: async () => true }
 
-function run(kind: 'install' | 'upgrade', argv: readonly string[], account: FakeAccount, confirmations: Confirmations = yes) {
+function run(
+	kind: 'install' | 'upgrade',
+	argv: readonly string[],
+	account: FakeAccount,
+	confirmations: Confirmations = yes,
+	answer: (call: SchemaReconcileInput) => Promise<void> = async () => {},
+) {
 	const applied: AwsPlatformApplyInput[] = []
 	const registered: SchemaReconcileInput[] = []
 	const lines: string[] = []
@@ -125,6 +132,7 @@ function run(kind: 'install' | 'upgrade', argv: readonly string[], account: Fake
 			return { ...platformState(), images: { services: `sha256:${'1'.repeat(64)}`, proxy: `sha256:${'2'.repeat(64)}` } }
 		},
 		reconcile: async (call: SchemaReconcileInput) => {
+			await answer(call)
 			registered.push(call)
 		},
 	}
@@ -229,16 +237,55 @@ describe("the AWS installation's commands", () => {
 		expect(install.lines.some((line) => line.includes('`platform admin --provider=aws`'))).toBe(true)
 	})
 
-	test('a lost record is written back by an upgrade that names every choice, its ranges the networks own', async () => {
+	test('an upgrade whose IAM gives no answer names `admin` and succeeds; an answer from IAM that refuses fails it', async () => {
 		const account = fakeAccount()
 		account.services = 'CREATE_COMPLETE'
+		account.store.set(AWS_INSTALLATION_RECORD, RECORD)
+		// The hosts point nowhere yet: an upgrade that finishes a stopped install.
+		const unreachable = run('upgrade', WHERE, account, yes, async (call) => {
+			throw new AwsIamUnreachableError(call.url, 'Unable to connect')
+		})
+		expect(await unreachable.result).not.toBeNull()
+		expect(unreachable.applied).toHaveLength(1)
+		expect(unreachable.lines).toContain(
+			"aws: IAM at https://iam.example.com gave no answer (Unable to connect); the release is applied, but the console and IAM's vocabulary are not registered",
+		)
+		expect(unreachable.lines.some((line) => line.includes('`platform admin --provider=aws` registers them'))).toBe(true)
+		const refused = run('upgrade', WHERE, account, yes, async () => {
+			throw new ReconcileSchemaError('PUT /admin/apps/console/schema failed (401): unauthorized', 401)
+		})
+		await expect(refused.result).rejects.toThrow('failed (401)')
+	})
+
+	test('a lost record is written back by an upgrade that names every choice, each checked against what the installation holds', async () => {
+		const account = fakeAccount()
+		account.services = 'CREATE_COMPLETE'
+		// What the last run wrote: the hosts in Control's parameters, the environment's name in IAM's.
+		account.store.set(
+			'/fabrika/platform/control/FABRIKA_AWS_INSTALLATION_HOSTS',
+			'iam.example.com,control.example.com,operations.example.com,apps.example.com',
+		)
+		account.store.set('/fabrika/platform/iam/ENVIRONMENT', 'production')
 		const partial = run('upgrade', [...WHERE, '--iam-host=iam.example.com'], account)
 		await expect(partial.result).rejects.toThrow("restore it from the keys' backup, or name every choice to write it back (missing: --apps-vpc-cidr")
-		const everything = [...INSTALL, '--apps-vpc-cidr=10.80.0.0/16', '--platform-vpc-cidr=10.81.0.0/16']
+		// MCP authoring is a choice like the rest: never defaulted to off on the way back.
+		const withoutMcp = [...INSTALL, '--apps-vpc-cidr=10.80.0.0/16', '--platform-vpc-cidr=10.81.0.0/16']
+		await expect(run('upgrade', withoutMcp, account).result).rejects.toThrow('(missing: --mcp-authoring)')
+		const everything = [...withoutMcp, '--mcp-authoring=off']
+		const swap = (flag: string, value: string) => everything.map((arg) => (arg.startsWith(`${flag}=`) ? `${flag}=${value}` : arg))
 		// A range the network does not hold is refused, even with the record gone.
-		const wrong = run('upgrade', everything.map((arg) => (arg.startsWith('--platform-vpc-cidr') ? '--platform-vpc-cidr=10.90.0.0/16' : arg)), account)
+		const wrong = run('upgrade', swap('--platform-vpc-cidr', '10.90.0.0/16'), account)
 		await expect(wrong.result).rejects.toThrow('the platform network holds 10.81.0.0/16, not the 10.90.0.0/16 named')
 		expect(wrong.applied).toEqual([])
+		// So is a host or an environment the installation does not have: a typo would move the balancer's rule.
+		const typo = run('upgrade', swap('--iam-host', 'iam.exmaple.com'), account)
+		await expect(typo.result).rejects.toThrow(
+			'the installation holds iam.example.com,control.example.com,operations.example.com,apps.example.com as the hosts',
+		)
+		const staging = run('upgrade', swap('--environment', 'staging'), account)
+		await expect(staging.result).rejects.toThrow("the installation holds production as the environment's name")
+		expect([...typo.applied, ...staging.applied]).toEqual([])
+		expect(account.store.has(AWS_INSTALLATION_RECORD)).toBe(false)
 		const rebuilt = run('upgrade', everything, account)
 		await rebuilt.result
 		expect(rebuilt.lines).toContain('aws: changing the installation record, written back from the choices named')
