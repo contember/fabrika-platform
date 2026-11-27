@@ -3,10 +3,11 @@
 // applies before the access stack and the services.
 //
 // - **One task, one identity.** Each task family (`fabrika_platform_<task>`) has an execution role of its own, which
-//   pulls its own image, writes its own log group and reads its own parameters alone: `/fabrika/platform/<task>/*`, and
-//   for IAM, Control and Operations their own database password. A secret two services share (IAM's RPC key, the proxy
-//   key, the sync key) is written once per reader under each one's path, so no role reads another's. The setup alone
-//   reads the database's master password (and the services' passwords, which it sets).
+//   pulls its own image, writes its own log group and reads its own parameters alone: `/fabrika/platform/<task>/*`. A
+//   secret two services share (IAM's RPC key, the proxy key, the sync key) is written once per reader under each one's
+//   path, so no role reads another's. A service's database URL is one of its own parameters, which the operator's
+//   command derives from the service's password under the database's path and is the only writer of. The setup alone
+//   reads the database's path: the master's password, and the services' passwords, which it sets.
 // - **The task roles.** Control's is the access stack's (`fabrika-control`); Operations' reaches its blob bucket alone;
 //   IAM, the proxy and the setup call no AWS API and take none.
 // - **One security group per task, rules exact.** The platform proxy admits only the platform balancer's group, on its
@@ -32,7 +33,7 @@ import { allow, AWS_LOG_RETENTION_DAYS, policy, trust } from '../environment-sta
 import type { AwsStack } from '../stack'
 import { AWS_PLATFORM_FAMILY_PREFIX, AWS_PLATFORM_NAMESPACE, AWS_PLATFORM_PATH, awsRunLogsBucket } from './access'
 import type { AwsBalancersOutputs } from './balancers'
-import { AWS_DATABASE_PARAMETERS, awsDatabasePasswordParameter, awsDatabaseSubnetCidrs } from './database'
+import { AWS_DATABASE_PARAMETERS, awsDatabaseSubnetCidrs } from './database'
 import { AWS_PLATFORM_PROXY_REPOSITORY, AWS_SERVICES_REPOSITORY } from './images'
 import type { AwsNetworkOutputs } from './network'
 
@@ -50,8 +51,10 @@ const HTTPS_PORT = 443
 /** A task of the platform's: the three services, their proxy, and the database setup. */
 export type AwsPlatformTask = 'iam' | 'control' | 'operations' | 'proxy' | 'setup'
 export const AWS_PLATFORM_TASKS: readonly AwsPlatformTask[] = ['iam', 'control', 'operations', 'proxy', 'setup']
-type AwsPlatformServiceTask = 'iam' | 'control' | 'operations'
-const SERVICE_TASKS: readonly AwsPlatformServiceTask[] = ['iam', 'control', 'operations']
+/** The three services: each a long-running ECS service with a database of its own. */
+export type AwsPlatformServiceTask = 'iam' | 'control' | 'operations'
+export const AWS_PLATFORM_SERVICE_TASKS: readonly AwsPlatformServiceTask[] = ['iam', 'control', 'operations']
+const SERVICE_TASKS = AWS_PLATFORM_SERVICE_TASKS
 
 /** A task's family: under the prefix Control is denied every task definition action on. */
 export function awsPlatformTaskFamily(task: AwsPlatformTask): string {
@@ -90,8 +93,9 @@ export interface AwsRuntimeInput {
 	readonly balancers: Pick<AwsBalancersOutputs, 'platformBalancerGroupId'>
 }
 
-const ACCOUNT_ID = /^\d{12}$/
-const REGION = /^[a-z]{2}(?:-[a-z]+)+-\d$/
+/** An account id and a region as AWS names them, the forms every stack of the platform checks. */
+export const AWS_ACCOUNT_ID_FORM = /^\d{12}$/
+export const AWS_REGION_FORM = /^[a-z]{2}(?:-[a-z]+)+-\d$/
 const SECURITY_GROUP_ID = /^sg-[0-9a-f]{8,17}$/
 
 const GROUPS: Readonly<Record<AwsPlatformTask, string>> = {
@@ -150,7 +154,7 @@ function bucketResources(logical: string, bucket: string): Record<string, JsonVa
 /** The foundation's stack: the namespace, the groups and their rules, the log groups, the roles and the buckets. */
 export function awsRuntimeStack(input: AwsRuntimeInput): AwsStack {
 	const { accountId: a, region: r, platform } = input
-	if (!ACCOUNT_ID.test(a) || !REGION.test(r)) throw new Error('aws: the account id or region is of another form')
+	if (!AWS_ACCOUNT_ID_FORM.test(a) || !AWS_REGION_FORM.test(r)) throw new Error('aws: the account id or region is of another form')
 	if (!SECURITY_GROUP_ID.test(input.balancers.platformBalancerGroupId)) throw new Error("aws: the platform balancer's group id is of another form")
 	const databaseSubnets = awsDatabaseSubnetCidrs(platform)
 	const resources: Record<string, JsonValue> = {
@@ -230,8 +234,8 @@ export function awsRuntimeStack(input: AwsRuntimeInput): AwsStack {
 			Properties: { LogGroupName: logGroup, RetentionInDays: AWS_LOG_RETENTION_DAYS },
 		}
 		const parameters = [parameter(`${awsPlatformParameters(task)}*`)]
+		// A service reads its whole database URL from its own path; the setup alone reads the database's path.
 		if (task === 'setup') parameters.push(parameter(`${AWS_DATABASE_PARAMETERS}*`))
-		else if (task !== 'proxy') parameters.push(parameter(awsDatabasePasswordParameter(task)))
 		resources[`${GROUPS[task].replace('Group', '')}ExecutionRole`] = {
 			Type: 'AWS::IAM::Role',
 			Properties: {
