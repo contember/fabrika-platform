@@ -103,6 +103,13 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		triggerRef: null,
 		approvalSettings: { ...PERMISSIVE_SETTINGS, requestTtlHours: 48, credentialCeiling: 'requester' },
 	}])
+	// A Control older than plans keeps every other setting it sends.
+	const { planBinding: ____________, planTtlDays: _____________, ...withoutPlans } = { ...PERMISSIVE_SETTINGS, requestTtlHours: 48 }
+	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, approvalSettings: withoutPlans }] })).toEqual([{
+		...environment,
+		triggerRef: null,
+		approvalSettings: { ...PERMISSIVE_SETTINGS, requestTtlHours: 48, planBinding: 'transition', planTtlDays: 30 },
+	}])
 	// A Control older than a step-up category keeps every other setting it sends, and that category takes its default.
 	const { 'agent-write': ___________, ...olderStepUp } = PERMISSIVE_SETTINGS.stepUp
 	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, approvalSettings: { ...PERMISSIVE_SETTINGS, stepUp: olderStepUp } }] }))

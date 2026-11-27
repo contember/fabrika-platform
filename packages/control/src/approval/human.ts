@@ -40,7 +40,7 @@ export interface RequesterPerson {
  * key's token names no issuer, so its person is unknown and nobody may approve the item: it fails closed, and a
  * refusal, or a person with `access.approve` changing the setting, still decides it.
  */
-export function requireOtherThanRequester(approver: { readonly id: string }, requester: RequesterPerson, item: 'deploy' | 'request'): void {
+export function requireOtherThanRequester(approver: { readonly id: string }, requester: RequesterPerson, item: 'deploy' | 'request' | 'plan'): void {
 	if (requester.personId === null) {
 		fail(
 			403,

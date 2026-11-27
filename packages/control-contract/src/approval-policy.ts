@@ -237,9 +237,9 @@ export function waitingCategories(policy: ApprovalPolicy): ApprovalCategory[] {
 	return APPROVAL_CATEGORIES.filter((category) => policy[category] !== 'off')
 }
 
-/** Which approved changes a plan covers (ADR-0083 §2). Until plans are built none exists, and `plan` waits as `person`. */
-export interface ApprovalPlan {
-	covers(change: CategorizedChange): boolean
+/** Which approved changes a plan covers (ADR-0083 §2). Without one, `plan` waits as `person`. */
+export interface ApprovalPlan<T extends CategorizedChange = CategorizedChange> {
+	covers(change: T): boolean
 }
 
 /** A change the gate judges: a deploy run's lines, and the categories of a non-person's action, if it is one. */
@@ -266,7 +266,7 @@ function stricter(a: ApprovalMode, b: ApprovalMode): ApprovalMode {
  * categories; a `plan` line passes when the plan covers it, a `person` line never does. The change waits until every
  * line and action is satisfied, and an action set to `refuse` refuses the whole change.
  */
-export function gate<T extends CategorizedChange>(change: GatedChange<T>, policy: ApprovalPolicy, plan?: ApprovalPlan): GateOutcome<T> {
+export function gate<T extends CategorizedChange>(change: GatedChange<T>, policy: ApprovalPolicy, plan?: ApprovalPlan<T>): GateOutcome<T> {
 	const actions = change.actions ?? []
 	const refused = actions.filter((category) => policy[category] === 'refuse')
 	if (refused.length > 0) return { kind: 'refuse', categories: refused }
@@ -316,6 +316,17 @@ export type ApproverCount = 1 | 2
 /** The bounds of `requestTtlHours`: the absolute deadline of a pending item, counted from when it starts waiting. */
 export const REQUEST_TTL_HOURS = { min: 1, max: 168, default: 24 } as const
 
+/**
+ * What an approved plan entry binds to (ADR-0050 §5, D6): `transition`, the subject's content before and after as the
+ * approver saw it, so a deploy whose baseline holds something else waits; `after-state`, the content after only.
+ */
+export const PLAN_BINDINGS = ['transition', 'after-state'] as const
+
+export type PlanBinding = (typeof PLAN_BINDINGS)[number]
+
+/** The bounds of `planTtlDays`: how long an approved plan's entries cover a deploy, counted from the approval. */
+export const PLAN_TTL_DAYS = { min: 1, max: 365, default: 30 } as const
+
 /** What deciding a pending item takes beyond the session: nothing, or a passkey assertion bound to the decision. */
 export const STEP_UP_MODES = ['none', 'webauthn'] as const
 
@@ -334,6 +345,8 @@ export interface ApprovalSettings {
 	readonly deployRequestCommits: DeployRequestCommits
 	readonly requestTtlHours: number
 	readonly credentialCeiling: CredentialCeiling
+	readonly planBinding: PlanBinding
+	readonly planTtlDays: number
 	readonly approvers: { readonly [K in ApproverCategory]: ApproverCount }
 	/** `false`: someone other than the requester's person decides a pending item of the category (ADR-0083 §8). */
 	readonly requesterMayApprove: { readonly [K in ApproverCategory]: boolean }
@@ -346,13 +359,15 @@ export interface ApprovalSettings {
 
 /**
  * The strict preset's settings, and the defaults: merged commits only, a day to decide, a key no wider than its
- * requester, one approver per category, the requester's own person may decide (D2), and a passkey on deciding a request
+ * requester, a plan bound to the transition its approver saw and covering for 30 days, one approver per category, the requester's own person may decide (D2), and a passkey on deciding a request
  * for a credential and on approving an agent's `write` grant.
  */
 export const STRICT_SETTINGS: ApprovalSettings = {
 	deployRequestCommits: 'merged',
 	requestTtlHours: REQUEST_TTL_HOURS.default,
 	credentialCeiling: 'requester',
+	planBinding: 'transition',
+	planTtlDays: PLAN_TTL_DAYS.default,
 	approvers: {
 		'off-road': 1,
 		'anyone-calls': 1,
@@ -526,6 +541,8 @@ export const approvalSettingsSchema = z.object({
 	deployRequestCommits: z.enum(DEPLOY_REQUEST_COMMITS),
 	requestTtlHours: z.number().int().min(REQUEST_TTL_HOURS.min).max(REQUEST_TTL_HOURS.max),
 	credentialCeiling: z.enum(CREDENTIAL_CEILINGS),
+	planBinding: z.enum(PLAN_BINDINGS),
+	planTtlDays: z.number().int().min(PLAN_TTL_DAYS.min).max(PLAN_TTL_DAYS.max),
 	approvers: approversSchema,
 	requesterMayApprove: requesterMayApproveSchema,
 	stepUp: stepUpSchema,

@@ -75,6 +75,14 @@ const CONTROL: Readonly<Record<string, Judged>> = {
 	'approvals.requests.fetchKey': {
 		exempt: 'request plumbing: hands the requester, once, the key a person approved, encrypted to its own public key; changes nothing else',
 	},
+	'approvals.plans.create': {
+		exempt: "plan plumbing: stores an inert plan of a commit's access change; it covers a deploy only once a person approves it",
+	},
+	'approvals.plans.decide': { exempt: `deciding a pending item: ${ALWAYS_A_PERSON}` },
+	'approvals.plans.challenge': {
+		exempt: `a passkey challenge for deciding a pending item, which IAM issues and nothing else changes: ${ALWAYS_A_PERSON}`,
+	},
+	'approvals.plans.revoke': { exempt: `revoking an approved plan only takes coverage away: ${ALWAYS_A_PERSON}` },
 	'deploy': { category: 'deploy-request' },
 	'register': { category: 'registry' },
 	'mail.messages.release': { exempt: MAIL },

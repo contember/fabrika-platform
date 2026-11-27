@@ -572,19 +572,28 @@ export class RunRepository {
 	/**
 	 * Publish `snapshotJson` as the run's environment's active access (ADR-0050): a compare-and-swap on the generation and
 	 * the protection revision the run classified against, fenced on the run's lease. False when another publication, a
-	 * registry write or a protection change won.
+	 * registry write or a protection change won. `planEntries` are the approved plan entries that let the run through
+	 * (ADR-0050 §5): the swap also needs each of them still active and unexpired, and consumes them in the same batch, so
+	 * an entry revoked meanwhile fails the swap and an entry covers one publication at most.
 	 */
 	async publishRunSnapshot(
 		id: string,
 		expected: { readonly generation: number; readonly protectionRevision: number },
 		snapshotJson: string,
 		fence: LeaseFence,
+		planEntries: readonly string[] = [],
 	): Promise<boolean> {
+		const now = this.now()
+		const entryIds = planEntries.map(() => '?').join(', ')
 		const results = await this.d1.batch<{ app_id: string }>([
 			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
 				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
 					AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs),
 			...runCoordinateLockStatements(this.d1, id),
+			// Locked before they are counted, so a revocation waits for this batch and then finds them consumed.
+			...(planEntries.length === 0 ? [] : [
+				this.d1.prepare(`UPDATE approval_plan_entries SET state = state WHERE id IN (${entryIds})`).bind(...planEntries),
+			]),
 			this.d1.prepare(`UPDATE app_envs SET published_run_id = ?, published_snapshot_json = ?, generation = generation + 1
 				WHERE generation = ? AND protection_revision = ?
 					AND EXISTS (SELECT 1 FROM runs
@@ -592,9 +601,30 @@ export class RunRepository {
 							AND runs.status = 'running' AND runs.cancel_requested_at IS NULL AND runs.snapshot_json IS NOT NULL)
 					AND EXISTS (SELECT 1 FROM deploy_locks
 						WHERE lock_key = app_envs.app_id || ':' || app_envs.env AND holder = ? AND expires_at > ?)
-				RETURNING app_id`).bind(id, snapshotJson, expected.generation, expected.protectionRevision, id, fence.holder, fence.nowMs),
+					${
+				planEntries.length === 0 ? '' : `AND (SELECT COUNT(*) FROM approval_plan_entries
+						WHERE id IN (${entryIds}) AND app_id = app_envs.app_id AND env = app_envs.env AND state = 'active' AND expires_at > ?) = ?`
+			}
+				RETURNING app_id`).bind(
+				id,
+				snapshotJson,
+				expected.generation,
+				expected.protectionRevision,
+				id,
+				fence.holder,
+				fence.nowMs,
+				...(planEntries.length === 0 ? [] : [...planEntries, now, planEntries.length]),
+			),
+			...(planEntries.length === 0 ? [] : [
+				this.d1.prepare(`UPDATE approval_plan_entries SET state = 'consumed', consumed_by_run = ?, consumed_at = ?
+					WHERE id IN (${entryIds}) AND state = 'active'
+						AND EXISTS (SELECT 1 FROM app_envs
+							WHERE app_envs.app_id = approval_plan_entries.app_id AND app_envs.env = approval_plan_entries.env
+								AND app_envs.published_run_id = ?)`).bind(id, now, ...planEntries, id),
+			]),
 		])
-		return (results.at(-1)?.results.length ?? 0) > 0
+		const published = results[planEntries.length === 0 ? results.length - 1 : results.length - 2]
+		return (published?.results.length ?? 0) > 0
 	}
 
 	/**

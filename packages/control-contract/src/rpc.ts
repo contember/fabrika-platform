@@ -2,6 +2,14 @@ import type { RpcProcedureContract } from '@fabrika/app'
 import type { ExportDescription, OpsContentView, OpsMigrationFailureReason, OpsView } from '@fabrika/auth-core'
 import { z } from 'zod'
 import type {
+	ApprovalPlanChallengeInput,
+	ApprovalPlanDto,
+	ApprovalPlanIdInput,
+	ApprovalPlanListResponse,
+	CreateApprovalPlanInput,
+	DecideApprovalPlanInput,
+} from './approval-plans.js'
+import type {
 	ApprovalRequestDto,
 	ApprovalRequestIdInput,
 	ApprovalRequestKeyResponse,
@@ -285,6 +293,21 @@ export interface ControlRpcContract {
 			challenge: RpcProcedure<ApprovalRequestChallengeInput, ApprovalStepUpChallenge>
 			/** The key an executed `credentials` request issued, to its requester's own principal and client, once. */
 			fetchKey: RpcProcedure<ApprovalRequestIdInput, ApprovalRequestKeyResponse>
+		}
+		/** A commit's access change approved ahead of its deploy, entry by subject (ADR-0050 §5). */
+		plans: {
+			/** Anyone holding `deploy.trigger` at the coordinates of a protected environment; it reads the commit's snapshot. */
+			create: RpcProcedure<CreateApprovalPlanInput, ApprovalPlanDto>
+			/** The requester's own, or any at coordinates where the caller holds `access.approve`. */
+			get: RpcProcedure<ApprovalPlanIdInput, ApprovalPlanDto>
+			/** The pending plans at coordinates where the caller holds `access.approve`. */
+			list: RpcProcedure<void, ApprovalPlanListResponse>
+			/** A person in the console with `access.approve` at the plan's coordinates, on the digests the page showed. */
+			decide: RpcProcedure<DecideApprovalPlanInput, ApprovalPlanDto>
+			/** A passkey challenge bound to one decision of a plan that takes a step-up; the same person and right as `decide`. */
+			challenge: RpcProcedure<ApprovalPlanChallengeInput, ApprovalStepUpChallenge>
+			/** Ends an approved plan's active entries: a person in the console with `access.approve` at its coordinates. */
+			revoke: RpcProcedure<ApprovalPlanIdInput, ApprovalPlanDto>
 		}
 	}
 	deploy: RpcProcedure<TriggerDeployRequest, RunDto>

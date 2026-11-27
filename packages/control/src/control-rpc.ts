@@ -95,6 +95,16 @@ import {
 	setEnvironmentProtectionUseCase,
 } from './approval/api'
 import {
+	type ApprovalPlanContext,
+	challengeApprovalPlanUseCase,
+	createApprovalPlanUseCase,
+	decideApprovalPlanUseCase,
+	getApprovalPlanUseCase,
+	listApprovalPlansUseCase,
+	revokeApprovalPlanUseCase,
+} from './approval/plans/api'
+import { type PlanCommitReader, planCommitReader } from './approval/plans/read'
+import {
 	type ApprovalRequestContext,
 	challengeApprovalRequestUseCase,
 	createApprovalRequestUseCase,
@@ -211,6 +221,15 @@ const createApprovalRequestInput = z.object({ kind: nonEmpty, input: jsonValueSc
 const approvalRequestId = z.object({ id: nonEmpty }).strict()
 const approvalRequestChallengeInput = z.object({ id: nonEmpty, decision: approvalDecision, inputDigest: accessDigest }).strict()
 const decideApprovalRequestInput = approvalRequestChallengeInput.extend({ stepUp: stepUpAssertionSchema.optional() }).strict()
+const createApprovalPlanInput = z.object({ appId: nonEmpty, env: nonEmpty, commitSha: z.string().regex(/^[0-9a-f]{40}$/) }).strict()
+const approvalPlanId = z.object({ id: nonEmpty }).strict()
+const approvalPlanChallengeInput = z.object({
+	id: nonEmpty,
+	decision: approvalDecision,
+	candidateDigest: accessDigest,
+	baselineDigest: accessDigest,
+}).strict()
+const decideApprovalPlanInput = approvalPlanChallengeInput.extend({ stepUp: stepUpAssertionSchema.optional() }).strict()
 const secretBody = z.object({
 	name: nonEmpty,
 	value: z.string(),
@@ -564,6 +583,23 @@ export function createControlRpcRouter(
 					controlCall(() => fetchApprovalRequestKeyUseCase(approvalRequestContext(ctx), input.id))
 				),
 			}),
+			// The right to plan, to read and to decide is checked inside, at the plan's coordinates (ADR-0050 §5).
+			plans: rpc.router({
+				create: rpc.procedure.input(createApprovalPlanInput).mutation(({ ctx, input }) =>
+					controlCall(() => createApprovalPlanUseCase(approvalPlanContext(ctx), input))
+				),
+				get: rpc.procedure.input(approvalPlanId).query(({ ctx, input }) => controlCall(() => getApprovalPlanUseCase(approvalPlanContext(ctx), input.id))),
+				list: rpc.procedure.query(({ ctx }) => controlCall(() => listApprovalPlansUseCase(approvalPlanContext(ctx)))),
+				decide: rpc.procedure.input(decideApprovalPlanInput).mutation(({ ctx, input }) =>
+					controlCall(() => decideApprovalPlanUseCase(approvalPlanContext(ctx), input))
+				),
+				challenge: rpc.procedure.input(approvalPlanChallengeInput).mutation(({ ctx, input }) =>
+					controlCall(() => challengeApprovalPlanUseCase(approvalPlanContext(ctx), input))
+				),
+				revoke: rpc.procedure.input(approvalPlanId).mutation(({ ctx, input }) =>
+					controlCall(() => revokeApprovalPlanUseCase(approvalPlanContext(ctx), input.id))
+				),
+			}),
 		}),
 		deploy: rpc.procedure.input(deployInput).mutation(({ ctx, input }) => controlCall(() => triggerDeployUseCase(runsContext(ctx), input))),
 		register: rpc.procedure.input(registerInput).require(CONTROL_ACTIONS.APP_MANAGE).mutation(({ ctx, input }) =>
@@ -746,6 +782,26 @@ export function createControlRpcRouter(
 			lock: deps.lock,
 			request: ctx.request,
 			...(deps.grantApproval === undefined ? {} : { grantApproval: deps.grantApproval }),
+			...passkeyStepUp(ctx),
+		}
+	}
+
+	function approvalPlanContext(ctx: ControlRpcContext): ApprovalPlanContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		const consoleOrigin = controlPublicOrigin(ctx.env)
+		const runDeps = deps.runDeps
+		// Only a new plan reads a commit, so the deploy dependencies are built for that call alone.
+		const readCommit: PlanCommitReader | undefined = runDeps === undefined ? undefined : async (app, appEnv, commitSha) => {
+			const commits = (await runDeps()).commits
+			if (commits === undefined) fail(503, 'Control has no commit source to read the commit from, so no plan can be made')
+			return planCommitReader({ repositories: deps.repositories, provider: deps.provider, commits })(app, appEnv, commitSha)
+		}
+		return {
+			repositories: deps.repositories,
+			auth: ctx.auth,
+			admission: { request: ctx.request },
+			...(readCommit === undefined ? {} : { readCommit }),
+			...(consoleOrigin === undefined ? {} : { consoleOrigin }),
 			...passkeyStepUp(ctx),
 		}
 	}
