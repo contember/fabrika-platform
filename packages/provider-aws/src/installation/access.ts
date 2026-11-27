@@ -1,6 +1,8 @@
-// The installation's access (the AWS idea's checklist, step 11), from one stack the operator applies: the permissions
-// boundary every role Control's stacks create carries, Control's own role, the applications' ECS cluster and the
-// sources bucket. The policy is rendered with the installation's account, region and listener as literals, so what
+// The installation's access (the AWS idea's checklist, step 11), from one stack an install or an upgrade applies:
+// Control's own role, the applications' ECS cluster and the sources bucket. The permissions boundary every role
+// Control's stacks create carries (`awsAppsBoundaryStatements`) is rendered here and applied by the ceilings stack
+// (`ceilings.ts`), which the sidecar workflow's role may not change; every platform role here carries the platform's
+// ceiling. The policy is rendered with the installation's account, region and listener as literals, so what
 // it allows can be read and tested as it will be sent.
 //
 // What Control's role reaches, and what it never does:
@@ -90,6 +92,14 @@ export const AWS_PLATFORM_CLUSTER = 'fabrika-platform'
 export const AWS_CONTROL_ROLE = 'fabrika-control'
 /** The platform's IAM path: its roles and policies, out of Control's reach. */
 export const AWS_PLATFORM_PATH = '/fabrika/platform/'
+/**
+ * The platform's ceiling (`ceilings.ts`): the permissions boundary every platform role and the deployer carry, under
+ * the platform path, in the operator's ceilings stack.
+ */
+export const AWS_PLATFORM_BOUNDARY = 'fabrika-platform-boundary'
+export function awsPlatformBoundaryArn(accountId: string): string {
+	return `arn:aws:iam::${accountId}:policy${AWS_PLATFORM_PATH}${AWS_PLATFORM_BOUNDARY}`
+}
 /**
  * The platform's task definition families start with it: two `_`, which no application family holds (exactly one) and
  * no namespace proxy's starts with (`ns_`). Control is denied every task definition action on them.
@@ -181,8 +191,9 @@ export interface AwsManagedPolicy {
  * environment's roles and a namespace proxy's roles are granted (`environment-stack.ts`, `namespace.ts`), each on the
  * two prefixes. A role's own policy narrows it to its environment's or namespace's resources alone.
  */
-export function awsAppsBoundaryStatements(input: AwsAccessInput): readonly JsonValue[] {
-	const { accountId: a, region: r } = checkAwsAccessInput(input)
+export function awsAppsBoundaryStatements(installation: { readonly accountId: string; readonly region: string }): readonly JsonValue[] {
+	const { accountId: a, region: r } = installation
+	if (!ACCOUNT_ID.test(a) || !REGION.test(r)) throw new Error('aws: the apps boundary takes an account id and a region name')
 	const both = (shape: (prefix: string) => string): string[] => ['apps', 'namespaces'].map(shape)
 	return [
 		allow(['ecr:GetAuthorizationToken'], ['*']),
@@ -408,20 +419,12 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 export function awsAccessStack(input: AwsAccessInput): AwsStack {
 	const { accountId, region } = checkAwsAccessInput(input)
 	const resources: Record<string, JsonValue> = {
-		AppsBoundary: {
-			Type: 'AWS::IAM::ManagedPolicy',
-			Properties: {
-				ManagedPolicyName: 'fabrika-apps-boundary',
-				Path: '/fabrika/',
-				Description: "fabrika: the ceiling of every role Control's stacks create",
-				PolicyDocument: { Version: '2012-10-17', Statement: [...awsAppsBoundaryStatements(input)] },
-			},
-		},
 		ControlRole: {
 			Type: 'AWS::IAM::Role',
 			Properties: {
 				RoleName: AWS_CONTROL_ROLE,
 				Path: AWS_PLATFORM_PATH,
+				PermissionsBoundary: awsPlatformBoundaryArn(accountId),
 				// An ECS task of this account and region takes it: the source ARN is any ECS one here. What keeps an
 				// application's task from taking it is that no one but the operator's stacks may pass it (Control is denied
 				// `iam:PassRole` on the platform's roles). Narrowing the source to the platform's cluster waits on step 13
@@ -506,6 +509,7 @@ export function awsAccessStack(input: AwsAccessInput): AwsStack {
 		Properties: {
 			RoleName: AWS_CERTIFICATE_BROKER,
 			Path: AWS_PLATFORM_PATH,
+			PermissionsBoundary: awsPlatformBoundaryArn(accountId),
 			// Lambda takes an execution role without the confused-deputy keys; only a principal that may pass this role (the
 			// operator's stack, never Control, which is denied `iam:PassRole` on the platform's roles) can give it a function.
 			AssumeRolePolicyDocument: {
@@ -554,6 +558,7 @@ export function awsAccessStack(input: AwsAccessInput): AwsStack {
 		Properties: {
 			RoleName: AWS_TASK_RUNNER,
 			Path: AWS_PLATFORM_PATH,
+			PermissionsBoundary: awsPlatformBoundaryArn(accountId),
 			// As the broker's: only the operator's stack may pass it.
 			AssumeRolePolicyDocument: {
 				Version: '2012-10-17',
@@ -610,7 +615,6 @@ export function awsAccessStack(input: AwsAccessInput): AwsStack {
 			Resources: resources,
 			Outputs: {
 				ControlRoleArn: { Value: { 'Fn::GetAtt': ['ControlRole', 'Arn'] } },
-				AppsBoundaryArn: { Value: { Ref: 'AppsBoundary' } },
 			},
 		},
 		tags: { 'fabrika:platform': 'access' },

@@ -10,6 +10,7 @@ import { AwsError } from '../../aws/transport'
 import { AWS_ACCESS_STACK } from '../access'
 import { applyAwsPlatform, AWS_SETUP_STARTED_BY, awsDatabasePassword, type AwsPlatformApplyInput } from '../apply'
 import { AWS_BALANCERS_STACK } from '../balancers'
+import { AWS_CEILINGS_STACK } from '../ceilings'
 import { AWS_DATABASE_STACK } from '../database'
 import { AWS_IMAGES_STACK } from '../images'
 import { AWS_NETWORK_STACKS } from '../network'
@@ -19,6 +20,7 @@ import { OUTPUTS, PLAN as plan, SETUP_DEFINITION } from './platform-fixture'
 
 const TASK = `arn:aws:ecs:eu-central-1:123456789012:task/fabrika-platform/${'c'.repeat(32)}`
 const ORDER = [
+	AWS_CEILINGS_STACK,
 	AWS_NETWORK_STACKS.apps,
 	AWS_NETWORK_STACKS.platform,
 	AWS_BALANCERS_STACK,
@@ -195,6 +197,7 @@ describe("the platform's stacks in order", () => {
 			'/fabrika/platform/database/operations-password',
 		]
 		expect(events).toEqual([
+			`create ${AWS_CEILINGS_STACK}`,
 			`create ${AWS_NETWORK_STACKS.apps}`,
 			`create ${AWS_NETWORK_STACKS.platform}`,
 			`create ${AWS_BALANCERS_STACK}`,
@@ -310,6 +313,30 @@ describe("the platform's stacks in order", () => {
 		const { input } = run({ events, ecs })
 		await applyAwsPlatform(input)
 		expect(events.filter((event) => event.startsWith('redeploy '))).toEqual(SERVICES.slice(0, 3).map((name) => `redeploy ${name}`))
+	})
+
+	test("a release changing a ceiling, applied with the sidecar workflow's role, stops before any other stack and names the operator's run", async () => {
+		const events: string[] = []
+		const first = run({ events })
+		await applyAwsPlatform(first.input)
+		// The ceilings stack holds another template than this release renders.
+		const held = first.cloudFormation.stacks.get(AWS_CEILINGS_STACK)
+		if (held === undefined) throw new Error('no ceilings stack')
+		first.cloudFormation.stacks.set(AWS_CEILINGS_STACK, { ...held, body: '{"Resources":{}}' })
+		const later: string[] = []
+		const second = run({ events: later, cloudFormation: first.cloudFormation, ecs: first.ecs })
+		// The platform's ceiling denies the workflow's role every write to that stack.
+		const refused = {
+			...second.input,
+			cloudFormation: {
+				...second.input.cloudFormation,
+				updateStack: async (): Promise<string> => {
+					throw new AwsError('UpdateStack', 'AccessDenied', 403, null, false)
+				},
+			},
+		}
+		await expect(applyAwsPlatform(refused)).rejects.toThrow('run this upgrade once with administrator credentials of your own')
+		expect(later).toEqual([])
 	})
 
 	test('overlapping networks are refused before anything is sent', async () => {

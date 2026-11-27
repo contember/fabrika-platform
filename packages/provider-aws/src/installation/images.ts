@@ -31,7 +31,7 @@ import type { CodeBuildStart } from '../aws/codebuild'
 import { IPV4_CIDR_LIST } from '../codecs'
 import { allow, AWS_LOG_RETENTION_DAYS, policy, trust } from '../environment-stack'
 import type { AwsStack } from '../stack'
-import { AWS_PLATFORM_PATH, awsSourcesBucket } from './access'
+import { AWS_PLATFORM_PATH, awsPlatformBoundaryArn, awsSourcesBucket } from './access'
 
 /** The images' stack's name: under `fabrika-platform-`, which no grant of Control's role names. */
 export const AWS_IMAGES_STACK = 'fabrika-platform-images'
@@ -155,6 +155,7 @@ export function awsImagesStack(installation: { readonly accountId: string; reado
 					Properties: {
 						RoleName: AWS_IMAGES_ROLE,
 						Path: AWS_PLATFORM_PATH,
+						PermissionsBoundary: awsPlatformBoundaryArn(accountId),
 						AssumeRolePolicyDocument: trust('codebuild.amazonaws.com', accountId, {
 							equals: `arn:aws:codebuild:${region}:${accountId}:project/${AWS_IMAGES_PROJECT}`,
 						}),

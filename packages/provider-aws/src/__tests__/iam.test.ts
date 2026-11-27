@@ -3,7 +3,7 @@
 // no service-linked role; and any other failure passed on.
 
 import { describe, expect, test } from 'bun:test'
-import { IAM, iamServiceLinkedRoles } from '../aws/iam'
+import { IAM, iamGithubIdentity, iamServiceLinkedRoles } from '../aws/iam'
 import { awsError } from './helpers/fake-aws'
 import { fakeAwsQuery } from './helpers/fake-aws-query'
 
@@ -48,5 +48,60 @@ describe('iamServiceLinkedRoles', () => {
 		await expect(iamServiceLinkedRoles(denied.options).ensureEcsServiceLinkedRole()).rejects.toMatchObject({ code: 'AccessDenied' })
 		const another = fakeAwsQuery(IAM, { GetRole: () => ROLE().replace('AWSServiceRoleForECS</RoleName>', 'SomethingElse</RoleName>') })
 		await expect(iamServiceLinkedRoles(another.options).ensureEcsServiceLinkedRole()).rejects.toMatchObject({ code: 'invalid_answer' })
+		// A made role answered without its path is no answer of IAM's form, never "on another path".
+		const pathless = fakeAwsQuery(IAM, {
+			GetRole: () => awsError('NoSuchEntity', 404),
+			CreateServiceLinkedRole: () => ROLE().replace(/<Path>[^<]*<\/Path>/, ''),
+		})
+		await expect(iamServiceLinkedRoles(pathless.options).ensureEcsServiceLinkedRole()).rejects.toMatchObject({ code: 'invalid_answer' })
+	})
+})
+
+describe('iamGithubIdentity', () => {
+	const ACCOUNT = '123456789012'
+	const ARN = `arn:aws:iam::${ACCOUNT}:oidc-provider/token.actions.githubusercontent.com`
+	const PROVIDER = (...audiences: string[]) =>
+		`<Url>token.actions.githubusercontent.com</Url><ClientIDList>${audiences.map((audience) => `<member>${audience}</member>`).join('')}</ClientIDList>`
+
+	test('an existing provider listing the audience is read, never made again or changed', async () => {
+		const { options, calls } = fakeAwsQuery(IAM, { GetOpenIDConnectProvider: () => PROVIDER('sigstore', 'sts.amazonaws.com') })
+		expect(await iamGithubIdentity(options).ensureGithubOidcProvider(ACCOUNT)).toBe('existed')
+		expect(calls).toEqual([{ action: 'GetOpenIDConnectProvider', parameters: { OpenIDConnectProviderArn: ARN } }])
+	})
+
+	test('a missing provider is made for GitHub Actions with the one audience AWS takes', async () => {
+		const { options, calls } = fakeAwsQuery(IAM, {
+			GetOpenIDConnectProvider: () => awsError('NoSuchEntity', 404),
+			CreateOpenIDConnectProvider: () => `<OpenIDConnectProviderArn>${ARN}</OpenIDConnectProviderArn>`,
+		})
+		expect(await iamGithubIdentity(options).ensureGithubOidcProvider(ACCOUNT)).toBe('created')
+		expect(calls[1]).toEqual({
+			action: 'CreateOpenIDConnectProvider',
+			parameters: { Url: 'https://token.actions.githubusercontent.com', 'ClientIDList.member.1': 'sts.amazonaws.com' },
+		})
+		// An answer naming another provider is no answer.
+		const other = fakeAwsQuery(IAM, {
+			GetOpenIDConnectProvider: () => awsError('NoSuchEntity', 404),
+			CreateOpenIDConnectProvider: () => `<OpenIDConnectProviderArn>arn:aws:iam::${ACCOUNT}:oidc-provider/example.com</OpenIDConnectProviderArn>`,
+		})
+		await expect(iamGithubIdentity(other.options).ensureGithubOidcProvider(ACCOUNT)).rejects.toMatchObject({ code: 'invalid_answer' })
+	})
+
+	test("an existing provider without AWS's audience is refused and left as it is, naming the command that adds it", async () => {
+		const { options, calls } = fakeAwsQuery(IAM, { GetOpenIDConnectProvider: () => PROVIDER('sigstore') })
+		await expect(iamGithubIdentity(options).ensureGithubOidcProvider(ACCOUNT)).rejects.toThrow(
+			`aws iam add-client-id-to-open-id-connect-provider --open-id-connect-provider-arn ${ARN} --client-id sts.amazonaws.com`,
+		)
+		expect(calls.map((call) => call.action)).toEqual(['GetOpenIDConnectProvider'])
+	})
+
+	test('a provider another caller made since the read is read again', async () => {
+		const { options, calls } = fakeAwsQuery(IAM, {
+			GetOpenIDConnectProvider: (_, seen) =>
+				seen.filter((call) => call.action === 'GetOpenIDConnectProvider').length === 1 ? awsError('NoSuchEntity', 404) : PROVIDER('sts.amazonaws.com'),
+			CreateOpenIDConnectProvider: () => awsError('EntityAlreadyExists', 409),
+		})
+		expect(await iamGithubIdentity(options).ensureGithubOidcProvider(ACCOUNT)).toBe('existed')
+		expect(calls.map((call) => call.action)).toEqual(['GetOpenIDConnectProvider', 'CreateOpenIDConnectProvider', 'GetOpenIDConnectProvider'])
 	})
 })

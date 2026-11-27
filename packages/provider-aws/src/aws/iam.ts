@@ -1,5 +1,12 @@
-// The one IAM call the operator's command makes itself (the query protocol): ensuring the account's ECS service-linked
-// role, `AWSServiceRoleForECS`, which places every ECS service's tasks (Control's `CreateService` passes no role). ECS
+// The IAM calls the operator's command makes itself (the query protocol), for two things an account holds once whoever
+// made them, which no stack may own.
+//
+// **GitHub Actions' OIDC provider** (`iamGithubIdentity`), which the deployer's role trusts (`installation/deployer.ts`):
+// read first (`GetOpenIDConnectProvider`), made with `sts.amazonaws.com` as its one audience only when missing. An
+// existing one is never changed, since it may serve other workflows of the account: one without that audience is
+// refused, naming the command that adds it.
+//
+// **The account's ECS service-linked role**, `AWSServiceRoleForECS`, which places every ECS service's tasks (Control's `CreateService` passes no role). ECS
 // makes it on a first service in the console, but not reliably when the first service comes from CloudFormation, and a
 // stack cannot hold it: it may already exist, made by anything else in the account, and a stack that created it would
 // delete it with the stack.
@@ -13,12 +20,13 @@
 //
 // IAM is global: its endpoint is `iam.amazonaws.com`, signed for `us-east-1`.
 //
-// UNVERIFIED: the API version, the answer's element names and the error codes (`NoSuchEntity`, and `InvalidInput` for
-// a role another caller made a moment before) follow IAM's API reference; none was checked against an account.
+// UNVERIFIED: the API version, the answer's element names and the error codes (`NoSuchEntity`; `InvalidInput` for a
+// role and `EntityAlreadyExists` for a provider another caller made a moment before), and that a provider created
+// without a thumbprint takes IAM's own, follow IAM's API reference; none was checked against an account.
 
 import { awsQueryClient, type AwsQueryService } from './query'
 import { type AwsClientOptions, AwsError } from './transport'
-import { xmlOne, xmlText } from './xml'
+import { xmlChildren, xmlOne, xmlOptional, xmlText } from './xml'
 
 export const IAM: AwsQueryService = { service: 'iam', version: '2010-05-08' }
 /** IAM's one endpoint in AWS's commercial partition, and the region it signs for. */
@@ -77,7 +85,10 @@ export function iamServiceLinkedRoles(options: AwsClientOptions): IamServiceLink
 					(result) => {
 						const role = result === null ? null : xmlOne(result, 'Role')
 						if (role === null || xmlText(role, 'RoleName') !== ECS_SERVICE_LINKED_ROLE) throw new Error('another role')
-						return xmlText(role, 'Path') ?? ''
+						// No path is no answer of the form IAM gives: `invalid_answer`, as `GetRole`'s read says.
+						const path = xmlText(role, 'Path')
+						if (path === null) throw new Error('no path')
+						return path
 					},
 					signal,
 				)
@@ -91,6 +102,83 @@ export function iamServiceLinkedRoles(options: AwsClientOptions): IamServiceLink
 			}
 			checked(created)
 			return 'created'
+		},
+	}
+}
+
+/** GitHub Actions' token issuer, as IAM names an OIDC provider (no scheme) and as it is created (with one). */
+export const GITHUB_OIDC_HOST = 'token.actions.githubusercontent.com'
+/** The audience GitHub's token carries for AWS, which the provider must list and the deployer's trust requires. */
+export const GITHUB_OIDC_AUDIENCE = 'sts.amazonaws.com'
+
+/** The account's GitHub OIDC provider's ARN: one per issuer per account, whoever made it. */
+export function githubOidcProviderArn(accountId: string): string {
+	return `arn:aws:iam::${accountId}:oidc-provider/${GITHUB_OIDC_HOST}`
+}
+
+export interface IamGithubIdentity {
+	/**
+	 * Makes the account's OIDC provider for GitHub Actions unless it exists, listing `sts.amazonaws.com`; answers which.
+	 * An existing one is never changed: it may serve other workflows, so one that lacks the audience is refused.
+	 */
+	ensureGithubOidcProvider(accountId: string, signal?: AbortSignal): Promise<'existed' | 'created'>
+}
+
+/** IAM at `options.origin` for GitHub's OIDC provider, from the operator's credentials. */
+export function iamGithubIdentity(options: AwsClientOptions): IamGithubIdentity {
+	const query = awsQueryClient(IAM, options)
+	/** The provider's audiences, or `null` when the account has none for GitHub. */
+	const audiences = async (arn: string, signal?: AbortSignal): Promise<readonly string[] | null> => {
+		try {
+			return await query.call(
+				'GetOpenIDConnectProvider',
+				{ OpenIDConnectProviderArn: arn },
+				(result) => {
+					if (result === null) throw new Error('no provider')
+					const list = xmlOptional(result, 'ClientIDList')
+					return list === null ? [] : xmlChildren(list, 'member').map((member) => member.text)
+				},
+				signal,
+			)
+		} catch (error) {
+			if (error instanceof AwsError && error.code === 'NoSuchEntity') return null
+			throw error
+		}
+	}
+	const checked = (arn: string, listed: readonly string[]): void => {
+		if (!listed.includes(GITHUB_OIDC_AUDIENCE)) {
+			throw new Error(
+				`aws: the account's GitHub OIDC provider (${arn}) lists no ${GITHUB_OIDC_AUDIENCE} audience; it may serve other workflows, so it is `
+					+ `not changed here. Add it: aws iam add-client-id-to-open-id-connect-provider --open-id-connect-provider-arn ${arn} `
+					+ `--client-id ${GITHUB_OIDC_AUDIENCE}`,
+			)
+		}
+	}
+	return {
+		async ensureGithubOidcProvider(accountId, signal) {
+			const arn = githubOidcProviderArn(accountId)
+			const existing = await audiences(arn, signal)
+			if (existing !== null) {
+				checked(arn, existing)
+				return 'existed'
+			}
+			try {
+				const created = await query.call(
+					'CreateOpenIDConnectProvider',
+					{ Url: `https://${GITHUB_OIDC_HOST}`, 'ClientIDList.member.1': GITHUB_OIDC_AUDIENCE },
+					(result) => (result === null ? null : xmlText(result, 'OpenIDConnectProviderArn')),
+					signal,
+				)
+				if (created !== arn) throw new AwsError('CreateOpenIDConnectProvider', 'invalid_answer', 200, null, false)
+				return 'created'
+			} catch (error) {
+				// Made by another caller since the read: read it again rather than guess.
+				if (!(error instanceof AwsError && error.code === 'EntityAlreadyExists')) throw error
+				const made = await audiences(arn, signal)
+				if (made === null) throw error
+				checked(arn, made)
+				return 'existed'
+			}
 		},
 	}
 }

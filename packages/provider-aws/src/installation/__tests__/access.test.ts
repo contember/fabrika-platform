@@ -379,10 +379,18 @@ describe("the installation's access", () => {
 		const stack = awsAccessStack(input)
 		expect(stack.stackName).toBe(AWS_ACCESS_STACK)
 		const resources = JSON.parse(JSON.stringify(stack.template)).Resources
-		expect(resources.AppsBoundary.Properties).toMatchObject({ ManagedPolicyName: 'fabrika-apps-boundary', Path: '/fabrika/' })
+		// The applications' ceiling is the ceilings stack's (`ceilings.ts`), which the sidecar workflow's role may not change.
+		expect(resources.AppsBoundary).toBeUndefined()
 		// `policy/fabrika/fabrika-apps-boundary`: the ARN every role write requires.
 		expect(awsAppsPermissionsBoundary('123456789012')).toBe('arn:aws:iam::123456789012:policy/fabrika/fabrika-apps-boundary')
 		expect(resources.ControlRole.Properties.Path).toBe('/fabrika/platform/')
+		// Every platform role here carries the platform's ceiling.
+		for (const role of ['ControlRole', 'CertificateBrokerRole', 'TaskRunnerRole']) {
+			expect({ role, boundary: resources[role].Properties.PermissionsBoundary }).toEqual({
+				role,
+				boundary: 'arn:aws:iam::123456789012:policy/fabrika/platform/fabrika-platform-boundary',
+			})
+		}
 		expect(resources.ControlRole.Properties.AssumeRolePolicyDocument.Statement[0]).toMatchObject({
 			Principal: { Service: 'ecs-tasks.amazonaws.com' },
 			Condition: { StringEquals: { 'aws:SourceAccount': '123456789012' } },

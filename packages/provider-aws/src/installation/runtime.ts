@@ -32,7 +32,7 @@ import { PLATFORM_PROXY_HEALTH_PORT, PLATFORM_PROXY_PORT, PLATFORM_SERVICE_PORT 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { allow, AWS_LOG_RETENTION_DAYS, policy, trust } from '../environment-stack'
 import type { AwsStack } from '../stack'
-import { AWS_PLATFORM_FAMILY_PREFIX, AWS_PLATFORM_NAMESPACE, AWS_PLATFORM_PATH, awsRunLogsBucket } from './access'
+import { AWS_PLATFORM_FAMILY_PREFIX, AWS_PLATFORM_NAMESPACE, AWS_PLATFORM_PATH, awsPlatformBoundaryArn, awsRunLogsBucket } from './access'
 import type { AwsBalancersOutputs } from './balancers'
 import { AWS_DATABASE_PARAMETERS, awsDatabaseSubnetCidrs } from './database'
 import { AWS_PLATFORM_PROXY_REPOSITORY, AWS_SERVICES_REPOSITORY } from './images'
@@ -242,6 +242,7 @@ export function awsRuntimeStack(input: AwsRuntimeInput): AwsStack {
 			Properties: {
 				RoleName: awsPlatformExecutionRole(task),
 				Path: AWS_PLATFORM_PATH,
+				PermissionsBoundary: awsPlatformBoundaryArn(a),
 				AssumeRolePolicyDocument: trust('ecs-tasks.amazonaws.com', a, { like: `arn:aws:ecs:${r}:${a}:*` }),
 				Policies: [
 					policy('execution', [
@@ -264,6 +265,7 @@ export function awsRuntimeStack(input: AwsRuntimeInput): AwsStack {
 		Properties: {
 			RoleName: AWS_OPERATIONS_TASK_ROLE,
 			Path: AWS_PLATFORM_PATH,
+			PermissionsBoundary: awsPlatformBoundaryArn(a),
 			AssumeRolePolicyDocument: trust('ecs-tasks.amazonaws.com', a, { like: `arn:aws:ecs:${r}:${a}:*` }),
 			Policies: [
 				policy('blobs', [
