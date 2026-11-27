@@ -288,6 +288,8 @@ export function RequestDecision({ request, me, now, onDone }: {
 						<PasskeyCheckPrompt
 							check={check}
 							onDone={() => {
+								// As after a decision without a passkey: nothing to decide again while the page refetches.
+								setBusy(true)
 								setCheck(null)
 								onDone()
 							}}
