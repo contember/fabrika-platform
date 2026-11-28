@@ -164,18 +164,21 @@ export class ApprovalPlanRepository {
 		return results
 	}
 
-	/** Plans waiting for a decision before their deadline, and approved ones with an entry that still covers a deploy, newest first. */
-	async listOpen(limit: number): Promise<ApprovalPlanRow[]> {
+	/**
+	 * Plans waiting for a decision before their deadline, and approved ones with an entry that still covers a deploy,
+	 * newest first, older than `before` when it is given.
+	 */
+	async listOpen(limit: number, before: string | null = null): Promise<ApprovalPlanRow[]> {
 		const now = this.now()
 		const { results } = await this.db
 			.prepare(
-				`SELECT * FROM approval_plans p WHERE (p.state = 'pending' AND p.deadline > ?)
+				`SELECT * FROM approval_plans p WHERE ((p.state = 'pending' AND p.deadline > ?)
 				 OR (p.state = 'approved' AND EXISTS (
 				 	SELECT 1 FROM approval_plan_entries e WHERE e.plan_id = p.id AND e.state = 'active' AND e.expires_at > ?
-				 ))
+				 )))${before === null ? '' : ' AND p.id < ?'}
 				 ORDER BY p.id DESC LIMIT ?`,
 			)
-			.bind(now, now, limit)
+			.bind(now, now, ...(before === null ? [] : [before]), limit)
 			.all<ApprovalPlanRow>()
 		return results
 	}

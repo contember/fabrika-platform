@@ -4,11 +4,12 @@
 import type { AccessChangeDto } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { classifyAccess } from '../approval/diff'
-import { type CoveringEntry, fragmentSource, planCoverage, plannedEntries } from '../approval/plans/coverage'
+import { type CoveringEntry, fragmentSource, planCoverage, plannedEntries, subjectFragmentHash } from '../approval/plans/coverage'
 import { readAccessSnapshot } from '../approval/read'
 import type { AccessSnapshot } from '../approval/snapshot'
 import { memoryCommits } from './helpers/commits'
 import { BASE, edited } from './helpers/contracts'
+import { kitFiles } from './helpers/kit-contract'
 
 const DELETES = edited("editor: { grants: ['notes.read', 'notes.write']", "editor: { grants: ['notes.read', 'notes.write', 'notes.delete']")
 const ASSIGNABLE = edited("assignableBy: ['owner'] } },\n\t},", "assignableBy: ['owner', 'editor'] } },\n\t},", DELETES)
@@ -63,5 +64,38 @@ describe('plan coverage', () => {
 		expect(coverage.covers({ ...line, subject: { kind: 'role', name: 'owner' } })).toBe(false)
 		const { subject: _, ...unplaced } = line
 		expect(coverage.covers(unplaced)).toBe(false)
+	})
+
+	test("a migration's fragment holds the access entries that name its views; a subject whose fragment did not change gets no entry", async () => {
+		const commit = await memoryCommits(kitFiles()).open({
+			repoUrl: 'github.com/acme/notes',
+			commitSha: 'a'.repeat(40),
+			wanted: () => true,
+			signal: AbortSignal.timeout(10_000),
+		})
+		const base = await readAccessSnapshot(commit, '', 'notes')
+		const contract = base.contract
+		const notes = contract?.tables['notes']
+		if (contract === null || notes === undefined) throw new Error('the kit contract has a notes table')
+		const file = '20261012110000_shared.sql'
+		const declared: AccessSnapshot = { ...base, databaseCode: [{ kind: 'view', object: 'shared_notes', file, line: 1 }] }
+		const named: AccessSnapshot = {
+			...declared,
+			contract: {
+				...contract,
+				tables: {
+					...contract.tables,
+					notes: { ...notes, access: { member: { view: 'shared_notes', row: 'note_id', principal: 'principal_id', member: null } } },
+				},
+			},
+		}
+		const subject = { kind: 'migration' as const, name: file }
+		const hash = (of: AccessSnapshot) => subjectFragmentHash(of, subject, fragmentSource(of).contract)
+		// An access entry naming the file's view changes the file's fragment, though the file did not change.
+		expect(hash(named)).not.toBe(hash(declared))
+		const line: AccessChangeDto = { effect: 'widens', line: `Migration ${file} declares view shared_notes`, rule: 'migration.database-code', subject }
+		expect(plannedEntries(fragmentSource(declared), fragmentSource(named), [line]).map((entry) => entry.subject)).toEqual([`migration:${file}`])
+		// The same fragment on both sides: no entry could bind what the line shows.
+		expect(plannedEntries(fragmentSource(declared), fragmentSource(declared), [line])).toEqual([])
 	})
 })

@@ -178,8 +178,10 @@ A plan entry binds the content of one subject of the snapshot before and after, 
 changes the subject no longer matches it. Entries compose as a chain: a line is covered when approved transitions lead
 from the baseline's fragment to the candidate's (`planBinding: transition`), or, under `after-state`, when the
 candidate's fragment is approved whatever it replaced. An entry is consumed in the compare-and-swap of the publication
-it covered, so an approved widening that was shipped and narrowed again cannot come back unseen. Until plans are built,
-no entry exists, and `plan` waits for a person exactly as `person` does: today's approval of a parked run.
+it covered, so an approved widening that was shipped and narrowed again cannot come back unseen. A plan is asked for one
+commit (`approvals.plans.create`) and decided in the console under a parked run's rules; its entries cover a deploy
+until `planTtlDays` after the approval. A subject whose fragment the commit leaves unchanged gets no entry, and a commit
+with no entry to make waits for a person at its deploy, as `person` does.
 
 ### 4. A console grant waits as a grant request
 
@@ -465,7 +467,7 @@ whose policy is null reads the defaults, `person` for the four, from the upgrade
 ## Consequences
 
 - An environment nobody configures behaves as under ADR-0050 for deploys, and waits for three more categories: the
-  closer-review categories wait, `plan` waiting for a person while no plan exists, and so do `role-external`, `public`
+  closer-review categories wait, `plan` waiting for a person unless an approved plan covers the change, and so do `role-external`, `public`
   and `csp`. An agent's action on it waits for a person, category by category as the
   requests land.
 - A protected environment with no choice of its own waits for a person on a role opened to external principals, an

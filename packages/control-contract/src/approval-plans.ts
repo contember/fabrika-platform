@@ -33,12 +33,17 @@ export interface ApprovalPlanEntryDto {
 	consumedByRunId?: string
 }
 
-/** One line of the plan's access change, with what it waits for on the environment under its policy now. */
+/** One line of the plan's access change: whether an entry of the plan holds it, and what it waits for now. */
 export interface ApprovalPlanLineDto {
 	change: AccessChangeDto
 	/**
-	 * The strictest mode among the line's categories: `plan` is what this plan lets through, `person` still waits for a
-	 * person at the deploy, `off` waits for nothing.
+	 * An entry of the plan holds the line: approving lets it through at a deploy while its categories wait for a plan.
+	 * Fixed when the plan is made; the approval's rules come from the categories of these lines.
+	 */
+	held: boolean
+	/**
+	 * The strictest mode among the line's categories under the environment's policy now: `plan` lets a held line through,
+	 * `person` waits for a person at the deploy whatever the plan holds, `off` waits for nothing.
 	 */
 	mode: Exclude<ApprovalMode, 'refuse'>
 }
@@ -64,7 +69,10 @@ export interface ApprovalPlanDto {
 	baselineDigest: string
 	/** The published run the change was compared with; null when nothing was published. */
 	baselineRunId: string | null
-	/** How many people decide it, whether the requester's person may, and what deciding takes, under the settings now. */
+	/**
+	 * How many people decide it, whether the requester's person may, and what deciding takes: the environment's settings
+	 * now, for the categories of its held lines.
+	 */
 	approvers: 1 | 2
 	requesterMayApprove: boolean
 	stepUp: StepUpMode

@@ -47,7 +47,7 @@ const PLAN: ApprovalPlanDto = {
 		personId: 'user-ana',
 	},
 	outcome: 'widening',
-	lines: [{ change: TRIGGER, mode: 'plan' }, { change: ROLE, mode: 'person' }, { change: TABLE, mode: 'off' }],
+	lines: [{ change: TRIGGER, mode: 'plan', held: true }, { change: ROLE, mode: 'person', held: false }, { change: TABLE, mode: 'off', held: false }],
 	candidateDigest: `sha256:${'c'.repeat(64)}`,
 	baselineDigest: `sha256:${'b'.repeat(64)}`,
 	baselineRunId: '01a15abc-0000-7000-8000-0000000000aa',
@@ -80,12 +80,22 @@ function decision(plan: ApprovalPlanDto, me: string | null): string {
 describe('the approval plan page', () => {
 	test('lines split by what they wait for: covered under their entry, a person, nothing', () => {
 		const lines = planLines(PLAN)
-		expect(lines.covered).toEqual([{ subject: 'migration:0002_titles.sql', entry: PLAN.entries[0], changes: [TRIGGER] }])
+		expect(lines.covered).toEqual([{ subject: 'migration:0002_titles.sql', entry: PLAN.entries[0], changes: [TRIGGER], mode: 'plan' }])
 		expect(lines.person).toEqual([ROLE])
 		expect(lines.off).toEqual([TABLE])
-		// A `plan` line without a rule names no entry, so no plan can cover it.
-		const { rule: _, ...unruled } = TRIGGER
-		expect(planLines({ ...PLAN, lines: [{ change: unruled, mode: 'plan' }] }).person).toEqual([unruled])
+		// A `plan` line no entry holds waits for a person at the deploy.
+		expect(planLines({ ...PLAN, lines: [{ change: TRIGGER, mode: 'plan', held: false }] }).person).toEqual([TRIGGER])
+	})
+
+	test('a held line stays under what the plan approves after the policy changed, and says what it waits for now', () => {
+		const relaxed: ApprovalPlanDto = { ...PLAN, lines: [{ change: TRIGGER, mode: 'off', held: true }] }
+		expect(planLines(relaxed).covered.map((subject) => subject.mode)).toEqual(['off'])
+		expect(planLines(relaxed).off).toEqual([])
+		const html = render(createElement(PlanView, { plan: relaxed, now: NOW }))
+		expect(html).toContain('What the plan approves')
+		expect(html).toContain('the plan lets them through if it asks for a plan again')
+		const stricter = render(createElement(PlanView, { plan: { ...PLAN, lines: [{ change: TRIGGER, mode: 'person', held: true }] }, now: NOW }))
+		expect(stricter).toContain('the plan does not let them through')
 	})
 
 	test('it shows what approving lets through, what still waits, and the agent text escaped and marked', () => {

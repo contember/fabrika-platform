@@ -195,12 +195,19 @@ function SubjectRow({ subject }: { subject: PlannedSubject }) {
 			</td>
 			<td>
 				<ChangeLines changes={subject.changes} crossOrigins={undefined} inRow={false} />
+				{subject.mode !== 'plan' && <p className="muted small">{MODE_NOW[subject.mode]}</p>}
 			</td>
 			<td className="nowrap">
 				<EntryState entry={subject.entry} />
 			</td>
 		</tr>
 	)
+}
+
+/** What a held subject's lines wait for since the environment's approvals changed after the plan was made. */
+const MODE_NOW: Record<'off' | 'person', string> = {
+	off: 'The environment no longer asks for approval of these lines; the plan lets them through if it asks for a plan again.',
+	person: 'The environment now wants a person to approve these lines at the deploy; the plan does not let them through.',
 }
 
 const ENTRY_STATE_TEXT: Record<ApprovalPlanEntryDto['state'], string> = {

@@ -39,7 +39,7 @@ import { type ConsoleAdmission, isConsolePerson, requireHumanApprover, requireOt
 import { parseChanges } from '../publish'
 import { approvedSnapshot, snapshotDigest } from '../snapshot'
 import { issueStepUpChallenge, type PasskeyStepUpPort, planStepUpBinding, requireStepUp } from '../step-up'
-import { fragmentSource, plannedEntries } from './coverage'
+import { coveringEntry, fragmentSource, lineDigest, plannedEntries } from './coverage'
 import type { PlanCommitReader } from './read'
 
 export interface ApprovalPlanContext {
@@ -83,16 +83,24 @@ export function lineMode(change: AccessChangeDto, policy: ApprovalPolicy): Exclu
 	return mode
 }
 
-/** The categories of a plan's lines that wait for a plan under `policy`: they decide who approves it and how. */
-function planCategories(changes: readonly AccessChangeDto[], policy: ApprovalPolicy): LineCategory[] {
+/**
+ * The categories of the lines a plan's entries hold: they decide who approves it and how, whatever the environment's
+ * policy says of them now, because approving activates exactly those entries.
+ */
+function planCategories(changes: readonly AccessChangeDto[], held: ReadonlySet<string>): LineCategory[] {
 	const categories = new Set<LineCategory>()
 	for (const change of changes) {
-		if (lineMode(change, policy) !== 'plan') continue
+		if (!held.has(lineDigest(change))) continue
 		for (const category of changeCategories(change)) {
-			if (category !== 'grants' && policy[category] === 'plan') categories.add(category)
+			if (category !== 'grants') categories.add(category)
 		}
 	}
 	return [...categories]
+}
+
+/** The digests of the lines a plan's entries hold. */
+function heldLines(entries: readonly ApprovalPlanEntryRow[]): ReadonlySet<string> {
+	return new Set(entries.flatMap((entry) => [...coveringEntry(entry).lines]))
 }
 
 /**
@@ -127,8 +135,16 @@ export async function createApprovalPlanUseCase(c: ApprovalPlanContext, input: C
 		)
 	}
 	const changesJson = JSON.stringify(changes)
-	if (changesJson.length > MAX_CHANGES_BYTES) fail(409, 'the change is too large to plan; deploy it and approve the parked run')
+	if (new TextEncoder().encode(changesJson).length > MAX_CHANGES_BYTES) {
+		fail(409, 'the change is too large to plan; deploy it and approve the parked run')
+	}
 	const entries = plannedEntries(fragmentSource(baseline.snapshot), fragmentSource(candidate), planned)
+	if (entries.length === 0) {
+		fail(
+			409,
+			`no line of this change can be planned on \`${input.env}\`: each depends on more than its subject, so it waits for a person at the deploy`,
+		)
+	}
 	const row = await c.repositories.approvalPlans.create({
 		id: uuidv7(),
 		appId: input.appId,
@@ -176,8 +192,17 @@ export async function getApprovalPlanUseCase(c: ApprovalPlanContext, id: string)
 
 /** The plans waiting for a decision, and the approved ones still covering a deploy, where the caller holds `access.approve`. */
 export async function listApprovalPlansUseCase(c: ApprovalPlanContext): Promise<ApprovalPlanListResponse> {
-	const rows = await c.repositories.approvalPlans.listOpen(LIST_LIMIT)
-	return { items: await Promise.all(rows.filter((row) => mayDecide(c.auth, row)).map((row) => toApprovalPlanDto(c, row))) }
+	// Pages through, because the permission filter runs after the query: others' plans must not crowd the caller's out.
+	const visible: ApprovalPlanRow[] = []
+	let before: string | null = null
+	while (visible.length < LIST_LIMIT) {
+		const page = await c.repositories.approvalPlans.listOpen(LIST_LIMIT, before)
+		visible.push(...page.filter((row) => mayDecide(c.auth, row)))
+		const last = page.at(-1)
+		if (page.length < LIST_LIMIT || last === undefined) break
+		before = last.id
+	}
+	return { items: await Promise.all(visible.slice(0, LIST_LIMIT).map((row) => toApprovalPlanDto(c, row))) }
 }
 
 /** Who decides a plan, and what deciding it takes, under its environment's settings now. */
@@ -208,7 +233,8 @@ async function pendingPlanDecision(c: ApprovalPlanContext, input: ApprovalPlanCh
 	if (row.candidate_digest !== input.candidateDigest || row.baseline_digest !== input.baselineDigest) {
 		fail(409, 'the plan is not the one the page showed; reload it and decide again')
 	}
-	const { deciders, settings } = await planDeciders(c.repositories, row)
+	const { settings } = await planRules(c.repositories, row)
+	const deciders = planDeciders(settings, changesOf(row), heldLines(await c.repositories.approvalPlans.entries(row.id)))
 	return { approver, row, deciders, settings }
 }
 
@@ -328,19 +354,12 @@ async function planRules(repositories: Pick<ControlRepositories, 'registry'>, ro
 		: { appEnv, policy: appEnvPolicy(appEnv), settings: appEnvSettings(appEnv) }
 }
 
-async function planDeciders(
-	repositories: Pick<ControlRepositories, 'registry'>,
-	row: ApprovalPlanRow,
-): Promise<{ readonly deciders: PlanDeciders; readonly settings: ApprovalSettings }> {
-	const { policy, settings } = await planRules(repositories, row)
-	const categories: PolicyCategory[] = planCategories(changesOf(row), policy)
+function planDeciders(settings: ApprovalSettings, changes: readonly AccessChangeDto[], held: ReadonlySet<string>): PlanDeciders {
+	const categories: PolicyCategory[] = planCategories(changes, held)
 	return {
-		settings,
-		deciders: {
-			approvers: requiredApprovers(settings, categories),
-			requesterMayApprove: requesterMayApprove(settings, categories),
-			stepUp: requiredStepUp(settings, categories),
-		},
+		approvers: requiredApprovers(settings, categories),
+		requesterMayApprove: requesterMayApprove(settings, categories),
+		stepUp: requiredStepUp(settings, categories),
 	}
 }
 
@@ -355,9 +374,10 @@ function entryStateOf(entry: ApprovalPlanEntryRow, now: number): ApprovalPlanEnt
 export async function toApprovalPlanDto(c: ApprovalPlanContext, row: ApprovalPlanRow): Promise<ApprovalPlanDto> {
 	const now = nowOf(c)
 	const changes = changesOf(row)
-	const { policy } = await planRules(c.repositories, row)
-	const { deciders } = await planDeciders(c.repositories, row)
+	const { policy, settings } = await planRules(c.repositories, row)
 	const entries = await c.repositories.approvalPlans.entries(row.id)
+	const held = heldLines(entries)
+	const deciders = planDeciders(settings, changes, held)
 	const state = stateOf(row, now)
 	return {
 		id: row.id,
@@ -374,7 +394,7 @@ export async function toApprovalPlanDto(c: ApprovalPlanContext, row: ApprovalPla
 			personId: requesterOf(row).personId,
 		},
 		outcome: row.outcome,
-		lines: changes.map((change) => ({ change, mode: lineMode(change, policy) })),
+		lines: changes.map((change) => ({ change, mode: lineMode(change, policy), held: held.has(lineDigest(change)) })),
 		candidateDigest: row.candidate_digest,
 		baselineDigest: row.baseline_digest,
 		baselineRunId: row.baseline_run_id,

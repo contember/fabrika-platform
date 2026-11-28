@@ -25,7 +25,8 @@ export function subjectKeyOf(change: Pick<AccessChangeDto, 'rule' | 'subject'>):
 
 /**
  * The SHA-256 of what a subject's lines are computed from in `snapshot`: the subject's own entry of the contract, and for
- * a migration file its checksum with what the classifier read from it. An `application` line reads the whole snapshot
+ * a migration file its checksum with what the classifier read from it and the table access entries that name a view it
+ * declares, whose SQL then decides access (ADR-0076). An `application` line reads the whole snapshot
  * (the staged kit, every SQL statement, the directory), so its fragment is the snapshot's digest: such a line is covered
  * only when nothing else changed either.
  */
@@ -34,11 +35,16 @@ export function subjectFragmentHash(snapshot: AccessSnapshot, subject: ChangeSub
 	switch (subject.kind) {
 		case 'migration': {
 			const ofFile = <T extends { readonly file: string }>(entries: readonly T[] | undefined) => (entries ?? []).filter((entry) => entry.file === name)
+			const databaseCode = ofFile(snapshot.databaseCode)
+			const views = new Set(databaseCode.flatMap((code) => (code.kind === 'view' ? [code.object] : [])))
 			return digestOf({
 				checksum: snapshot.migrations.find((migration) => migration.name === name)?.checksum ?? null,
-				databaseCode: ofFile(snapshot.databaseCode),
+				databaseCode,
 				dataLoss: ofFile(snapshot.dataLoss),
 				fileAdoptions: ofFile(snapshot.fileAdoptions),
+				access: Object.entries(contract?.tables ?? {}).flatMap(([table, policy]) =>
+					Object.entries(policy.access ?? {}).flatMap(([relation, access]) => (views.has(access.view) ? [{ table, relation, access }] : []))
+				),
 			})
 		}
 		case 'application':
@@ -101,7 +107,11 @@ export interface PlannedEntry {
 	readonly lines: readonly string[]
 }
 
-/** The entries of a change: one per subject its lines name, with the digests of all of that subject's lines. */
+/**
+ * The entries of a change: one per subject its lines name, with the digests of all of that subject's lines. A subject
+ * whose fragment is the same on both sides has a line that depends on something its fragment does not hold, so no entry
+ * could bind the change it shows: it gets none, and its lines wait for a person at the deploy.
+ */
 export function plannedEntries(baseline: FragmentSource, candidate: FragmentSource, changes: readonly AccessChangeDto[]): PlannedEntry[] {
 	const bySubject = new Map<string, { subject: ChangeSubjectDto; lines: string[] }>()
 	for (const change of changes) {
@@ -111,12 +121,11 @@ export function plannedEntries(baseline: FragmentSource, candidate: FragmentSour
 		held.lines.push(lineDigest(change))
 		bySubject.set(key, held)
 	}
-	return [...bySubject.entries()].map(([subject, held]) => ({
-		subject,
-		beforeHash: subjectFragmentHash(baseline.snapshot, held.subject, baseline.contract),
-		afterHash: subjectFragmentHash(candidate.snapshot, held.subject, candidate.contract),
-		lines: [...new Set(held.lines)].sort(),
-	}))
+	return [...bySubject.entries()].flatMap(([subject, held]) => {
+		const beforeHash = subjectFragmentHash(baseline.snapshot, held.subject, baseline.contract)
+		const afterHash = subjectFragmentHash(candidate.snapshot, held.subject, candidate.contract)
+		return beforeHash === afterHash ? [] : [{ subject, beforeHash, afterHash, lines: [...new Set(held.lines)].sort() }]
+	})
 }
 
 /** An active entry as coverage reads it. */

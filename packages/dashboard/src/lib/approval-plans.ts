@@ -1,7 +1,14 @@
 // An approval plan in the console's words (ADR-0050 §5): its state, what binds it, how long it holds, and its lines
 // split by what each waits for at the deploy. The page decides nothing; Control judges every decision again.
 
-import { type AccessChangeDto, type ApprovalPlanDto, type ApprovalPlanState, PLAN_TTL_DAYS, type PlanBinding } from '@fabrika/control-contract'
+import {
+	type AccessChangeDto,
+	type ApprovalPlanDto,
+	type ApprovalPlanLineDto,
+	type ApprovalPlanState,
+	PLAN_TTL_DAYS,
+	type PlanBinding,
+} from '@fabrika/control-contract'
 import type { Lamp } from '../components/Status'
 
 export const PLAN_STATE_TEXT: Readonly<Record<ApprovalPlanState, string>> = {
@@ -36,14 +43,16 @@ export function planTtl(text: string): number | null {
 	return Number.isInteger(days) && days >= PLAN_TTL_DAYS.min && days <= PLAN_TTL_DAYS.max ? days : null
 }
 
-/** One subject the plan covers: its entry and the lines the approver reads for it. */
+/** One subject the plan holds: its entry, the lines the approver reads for it, and what they wait for now. */
 export interface PlannedSubject {
 	readonly subject: string
 	readonly entry: ApprovalPlanDto['entries'][number] | undefined
 	readonly changes: readonly AccessChangeDto[]
+	/** The strictest mode among its lines now: `plan` as when the plan was made, or what the policy changed it to. */
+	readonly mode: ApprovalPlanLineDto['mode']
 }
 
-/** The plan's lines by what each waits for: covered by an entry, still a person's at the deploy, or nothing. */
+/** The plan's lines: held by an entry, not held but waiting for a person at the deploy, or waiting for nothing. */
 export interface PlanLines {
 	readonly covered: readonly PlannedSubject[]
 	readonly person: readonly AccessChangeDto[]
@@ -56,23 +65,25 @@ export function subjectKey(change: AccessChangeDto): string | null {
 }
 
 /**
- * Split the lines: a `plan` line goes under its subject's entry; one without a subject, which no entry can cover, waits
- * for a person at the deploy, as a `person` line does.
+ * Split the lines as Control marks them: a held line goes under its subject's entry, whatever the policy says of it now;
+ * any other line waits for a person at the deploy, or for nothing.
  */
 export function planLines(plan: Pick<ApprovalPlanDto, 'lines' | 'entries'>): PlanLines {
-	const subjects = new Map<string, AccessChangeDto[]>()
+	const subjects = new Map<string, ApprovalPlanLineDto[]>()
 	const person: AccessChangeDto[] = []
 	const off: AccessChangeDto[] = []
-	for (const { change, mode } of plan.lines) {
-		const key = subjectKey(change)
-		if (mode === 'off') off.push(change)
-		else if (mode === 'person' || key === null) person.push(change)
-		else subjects.set(key, [...(subjects.get(key) ?? []), change])
+	for (const line of plan.lines) {
+		const key = subjectKey(line.change)
+		if (line.held && key !== null) subjects.set(key, [...(subjects.get(key) ?? []), line])
+		else if (line.mode === 'off') off.push(line.change)
+		else person.push(line.change)
 	}
-	const covered = [...subjects].map(([subject, changes]) => ({
+	const rank: Record<ApprovalPlanLineDto['mode'], number> = { off: 0, plan: 1, person: 2 }
+	const covered = [...subjects].map(([subject, lines]) => ({
 		subject,
 		entry: plan.entries.find((entry) => entry.subject === subject),
-		changes,
+		changes: lines.map((line) => line.change),
+		mode: lines.reduce<ApprovalPlanLineDto['mode']>((strictest, line) => (rank[line.mode] > rank[strictest] ? line.mode : strictest), 'off'),
 	}))
 	return { covered, person, off }
 }

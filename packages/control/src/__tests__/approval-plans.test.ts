@@ -217,9 +217,9 @@ const status = async (promise: Promise<unknown>): Promise<{ status: number; mess
 	}
 }
 
-/** A person's deploy of `sha` on `prod`, run until it parks or finishes; a parked one is approved when `approve` says so. */
-async function deploy(w: World, sha: string, approve = false): Promise<{ runId: string; status: string }> {
-	const created = await triggerDeployUseCase(runs(w), { appId: 'notes', env: 'prod', ref: sha })
+/** A person's deploy of `sha` on `env`, run until it parks or finishes; a parked one is approved when `approve` says so. */
+async function deploy(w: World, sha: string, approve = false, env = 'prod'): Promise<{ runId: string; status: string }> {
+	const created = await triggerDeployUseCase(runs(w), { appId: 'notes', env, ref: sha })
 	const result = await executeDeploy(deps(w, sha), { runId: created.id })
 	if (result.status !== 'awaiting_approval' || !approve) return result
 	const row = await w.db.runs.getRun(created.id)
@@ -233,9 +233,9 @@ async function deploy(w: World, sha: string, approve = false): Promise<{ runId: 
 	return executeDeploy(deps(w, sha), { runId: created.id })
 }
 
-/** `prod` runs `BASE`, approved by a person: its health check opens to anyone, a `public` line. */
-async function published(w: World): Promise<void> {
-	expect((await deploy(w, 'c'.repeat(40), true)).status).toBe('succeeded')
+/** `env` runs `BASE`, approved by a person: its health check opens to anyone, a `public` line. */
+async function published(w: World, env = 'prod'): Promise<void> {
+	expect((await deploy(w, 'c'.repeat(40), true, env)).status).toBe('succeeded')
 }
 
 async function plan(w: World, auth: AuthContext = agent(), commitSha = PLANNED) {
@@ -376,6 +376,24 @@ describe('deciding a plan follows the rules of a parked run', () => {
 		expect((await decideApprovalPlanUseCase(plans(w), { ...input, stepUp })).state).toBe('approved')
 	})
 
+	test('the lines its entries hold decide who approves it, whatever the policy says of them since', async () => {
+		const settings = { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, 'role-actions': 'webauthn' as const } }
+		const w = await world(PLAN_ROLES, settings)
+		await published(w)
+		const made = await plan(w)
+		await protectAsConsole(
+			approvals(w),
+			{ appId: 'notes', env: 'prod', protected: true, policy: { ...PLAN_ROLES, 'role-actions': 'off' }, settings },
+			'p-ada',
+		)
+		const read = await getApprovalPlanUseCase(plans(w), made.id)
+		// Still what the plan approves, and now waiting for nothing; deciding still takes the passkey its category asks for.
+		expect(read.lines.filter((line) => line.held).map((line) => [line.change.rule, line.mode])).toEqual([['role.grants', 'off']])
+		expect(read.stepUp).toBe('webauthn')
+		const input = { id: made.id, decision: 'approve' as const, candidateDigest: made.candidateDigest, baselineDigest: made.baselineDigest }
+		expect((await status(decideApprovalPlanUseCase(plans(w), input))).status).toBe(403)
+	})
+
 	test('a decision on other digests than the page showed is refused', async () => {
 		const w = await world()
 		await published(w)
@@ -451,6 +469,34 @@ describe('a plan covers only for a while, and only what it showed', () => {
 		w.contracts.set(OTHER, EDITOR_ADMINS)
 		expect((await deploy(w, OTHER)).status).toBe('awaiting_approval')
 		expect((await getApprovalPlanUseCase(plans(w), approved.id)).entries[0]?.state).toBe('active')
+	})
+
+	test('a `person` line beside a covered `plan` line parks the deploy, and the entry stays unconsumed', async () => {
+		const w = await world({ ...PLAN_ROLES, 'role-added': 'person' })
+		await published(w)
+		const approved = await decidePlan(w, (await plan(w)).id, 'approve')
+		// The planned editor change, and a new role, which waits for a person whatever a plan says.
+		w.contracts.set(
+			OTHER,
+			edited(
+				"editor: { grants: ['notes.read', 'notes.write', 'notes.delete']",
+				"reader: { grants: ['notes.read'] },\n\t\teditor: { grants: ['notes.read', 'notes.write', 'notes.delete']",
+				EDITOR_DELETES,
+			),
+		)
+		expect((await deploy(w, OTHER)).status).toBe('awaiting_approval')
+		expect((await getApprovalPlanUseCase(plans(w), approved.id)).entries[0]?.state).toBe('active')
+	})
+
+	test("a plan of one environment does not cover another's deploy of the same change", async () => {
+		const w = await world()
+		await protectAsConsole(approvals(w), { appId: 'notes', env: 'stage', protected: true, policy: PLAN_ROLES, settings: STRICT_SETTINGS }, 'p-ada')
+		await published(w)
+		await published(w, 'stage')
+		const approved = await decidePlan(w, (await plan(w)).id, 'approve')
+		expect((await deploy(w, PLANNED, false, 'stage')).status).toBe('awaiting_approval')
+		expect((await getApprovalPlanUseCase(plans(w), approved.id)).entries[0]?.state).toBe('active')
+		expect((await deploy(w, PLANNED)).status).toBe('succeeded')
 	})
 
 	test('transition binding: a baseline the approver did not see is not covered; after-state covers it', async () => {
