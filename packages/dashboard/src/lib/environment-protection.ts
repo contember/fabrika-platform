@@ -23,6 +23,7 @@ import {
 	weakensStepUp,
 } from '@fabrika/control-contract'
 import type { createControlClient } from './api'
+import { planBindingLabel } from './approval-plans'
 import { type DecisionFailure, decisionFailure, NoPasskeyError, startDecision, type StartedDecision } from './decision-step-up'
 
 type ControlClient = ReturnType<typeof createControlClient>
@@ -206,8 +207,8 @@ export function loosened(before: ApprovalPolicy, after: ApprovalPolicy): PolicyC
 
 /**
  * The settings a change loosens, in the console's words: an unmerged commit admitted, a key no longer bounded by its
- * requester, one approver where two decided, the requester's own person allowed to approve, or a decision (or an
- * agent's write access) no longer confirmed with a passkey.
+ * requester, one approver where two decided, the requester's own person allowed to approve, a decision (or an
+ * agent's write access) no longer confirmed with a passkey, or an approved plan that covers more or for longer.
  */
 export function loosenedSettings(before: ApprovalSettings, after: ApprovalSettings): string[] {
 	return [
@@ -224,6 +225,10 @@ export function loosenedSettings(before: ApprovalSettings, after: ApprovalSettin
 		...STEP_UP_CATEGORIES.filter((category) => after.stepUp[category] === 'none' && before.stepUp[category] === 'webauthn').map((category) =>
 			`${categoryLabel(category)} (no passkey ${stepUpVerb(category)})`
 		),
+		...(before.planBinding === 'transition' && after.planBinding === 'after-state'
+			? ['an approved plan covers its result reached from a state its approver did not see']
+			: []),
+		...(after.planTtlDays > before.planTtlDays ? [`an approved plan covers a deploy for ${after.planTtlDays} days`] : []),
 	]
 }
 
@@ -249,6 +254,7 @@ export const PRESETS = [
 /** Whether two sets of settings say the same. */
 export function sameSettings(a: ApprovalSettings, b: ApprovalSettings): boolean {
 	return a.deployRequestCommits === b.deployRequestCommits && a.requestTtlHours === b.requestTtlHours && a.credentialCeiling === b.credentialCeiling
+		&& a.planBinding === b.planBinding && a.planTtlDays === b.planTtlDays
 		&& APPROVER_CATEGORIES.every((category) =>
 			a.approvers[category] === b.approvers[category] && a.requesterMayApprove[category] === b.requesterMayApprove[category]
 		)
@@ -346,6 +352,18 @@ export function policyDifferences(choice: PolicyChoice, base: PolicyChoice): Pol
 			value: `${choice.settings.requestTtlHours} h`,
 			other: `${base.settings.requestTtlHours} h`,
 		}]),
+		...(choice.settings.planBinding === base.settings.planBinding ? [] : [{
+			key: 'planBinding',
+			label: 'What an approved plan binds to',
+			value: planBindingLabel(choice.settings.planBinding),
+			other: planBindingLabel(base.settings.planBinding),
+		}]),
+		...(choice.settings.planTtlDays === base.settings.planTtlDays ? [] : [{
+			key: 'planTtlDays',
+			label: 'Days an approved plan covers a deploy',
+			value: `${choice.settings.planTtlDays} d`,
+			other: `${base.settings.planTtlDays} d`,
+		}]),
 	]
 	return [...rules, ...settings]
 }
@@ -422,7 +440,7 @@ export function requesterBlocks(requesterMayApprove: boolean, personId: string |
 }
 
 /** Why the viewer has no approve button on an item a request asked for. */
-export function requesterBlockText(blocked: 'nobody' | 'you', item: 'deploy' | 'request'): string {
+export function requesterBlockText(blocked: 'nobody' | 'you', item: 'deploy' | 'request' | 'plan'): string {
 	return blocked === 'you'
 		? `It was asked for on your behalf, and this environment lets only someone other than the requester's person approve it. You may refuse it.`
 		: `A service key asked for this ${item}, and this environment lets only someone other than the key's issuer approve it, whom Control cannot know: `

@@ -30,6 +30,7 @@ import { mailCustodyRefusal } from '../mail-transport'
 import { appEnvPolicy, appEnvSettings, isDefaultCategories } from './categories'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { relationGrantsRefusal } from './enforcement'
+import { coveringEntry, fragmentSource, type PlanCoverage, planCoverage } from './plans/coverage'
 import { AppliedMigrationsChanged, ContractMissing, readAccessSnapshot, readLockfile, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
 import {
@@ -158,6 +159,8 @@ const approvalSchema = z.object({
 }) satisfies z.ZodType<StoredApproval>
 
 export const parseClassification = (raw: string): StoredClassification => classificationSchema.parse(JSON.parse(raw))
+/** Stored change lines, as a classification stores them (an approval plan's). */
+export const parseChanges = (raw: string): AccessChangeDto[] => z.array(changeSchema).parse(JSON.parse(raw))
 export const parseApproval = (raw: string): StoredApproval => approvalSchema.parse(JSON.parse(raw))
 
 /** The steps of a deploy invocation this module needs: its fenced writes and its step boundary. */
@@ -256,10 +259,15 @@ export async function publishRunSnapshot(
 		const serialized = JSON.stringify(classification)
 		const requested = classification.protected && input.requested === true
 		const returning = input.returnTo !== undefined && classification.candidateDigest === input.returnTo
+		const approved = approves(run, classification)
+		// A plan counts only where nothing else lets the run through, so a run a person approved consumes no entry.
+		const coverage = classification.protected && !returning && !requested && !approved
+			? await coverageOf(deps.repositories, appEnv, active.snapshot, candidate)
+			: null
 		if (
 			classification.protected && !returning
-			&& (requested || gate({ lines: classification.changes }, classificationPolicy(classification)).kind !== 'pass')
-			&& !approves(run, classification)
+			&& (requested || gate({ lines: classification.changes }, appEnvPolicy(appEnv), coverage ?? undefined).kind !== 'pass')
+			&& !approved
 		) {
 			// Each park waits afresh: a run classified again with other digests is a new item for the person (ADR-0050 §4).
 			const park: { readonly reason: 'requested' | null; readonly ttlSeconds: number } = {
@@ -277,13 +285,29 @@ export async function publishRunSnapshot(
 		await invocation.write((fence) => runs.recordRunClassification(run.id, serialized, fence))
 		if (returning) input.log('access: a rollback deploy returns to the snapshot the environment ran before; it needs no new approval')
 		const expected = { generation: active.generation, protectionRevision: appEnv.protection_revision }
-		if (await runs.publishRunSnapshot(run.id, expected, serializePublished(candidate), invocation.fence())) {
+		const planned = coverage?.used() ?? []
+		if (await runs.publishRunSnapshot(run.id, expected, serializePublished(candidate), invocation.fence(), planned)) {
+			if (planned.length > 0) {
+				input.log(`access: ${planned.length} approved plan entr${planned.length === 1 ? 'y' : 'ies'} covered what would have waited; consumed`)
+			}
 			input.log(`access: published as generation ${active.generation + 1} of \`${appEnv.env}\``)
 			return { kind: 'published', classification, candidate: publishedCandidate }
 		}
 		input.log('access: another publication, registry write or protection change landed first; classifying again')
 	}
 	throw new Error(`run ${input.run.id} lost the publication of its snapshot ${MAX_PUBLICATION_ATTEMPTS} times`)
+}
+
+/** The environment's active plan entries as coverage of this publication, under its `planBinding`. */
+async function coverageOf(
+	repositories: ControlRepositories,
+	appEnv: AppEnvRow,
+	baseline: AccessSnapshot,
+	candidate: AccessSnapshot,
+): Promise<PlanCoverage | null> {
+	const entries = await repositories.approvalPlans.activeEntries(appEnv.app_id, appEnv.env)
+	if (entries.length === 0) return null
+	return planCoverage(entries.map(coveringEntry), fragmentSource(baseline), fragmentSource(candidate), appEnvSettings(appEnv).planBinding)
 }
 
 function classify(active: ActiveSnapshot, candidate: AccessSnapshot, appEnv: AppEnvRow): StoredClassification {

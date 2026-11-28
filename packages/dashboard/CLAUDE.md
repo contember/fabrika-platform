@@ -70,14 +70,18 @@ brief): its personas and tasks are approved by a person, and a screen is judged 
   says so. The user page's Sign-in tab lets an installation administrator remove every passkey of a person
   (`passkeys.reset`).
 - **A decision that takes a passkey is confirmed on IAM's step-up page first** (`lib/decision-step-up.ts`
-  `startDecision`, `components/PasskeyCheckPrompt.tsx`, both approval pages). Under `stepUp: webauthn` the page asks
-  Control's `approvals.challenge` / `approvals.requests.challenge` for a challenge bound to that one decision and posts
+  `startDecision`, `components/PasskeyCheckPrompt.tsx`, the approval, request and plan pages). Under `stepUp: webauthn` the page asks
+  Control's `approvals.challenge` / `approvals.requests.challenge` / `approvals.plans.challenge` for a challenge bound to that one decision and posts
   nothing yet: the person opens the challenge's `url` in a new tab (a plain link, never a popup: the console's
   `Cross-Origin-Opener-Policy: same-origin` severs the opener), confirms there, and Continue posts the decision with
   `stepUp: { challengeId }`; Control refuses an unanswered one. `{ kind: 'no-passkey' }` is announced with a link to
   Account → Passkeys (`components/DecisionFailureNotice.tsx`). Saving or turning off an environment's approvals goes the
   same way when `weakensStepUp` says the change takes a passkey (`lib/environment-protection.ts`
   `setEnvironmentProtection`, on `apps.environments.protectChallenge`).
+- **A plan is decided at `/approvals/plans/:id`** (`routes/approvals/plans/detail.tsx`, `lib/approval-plans.ts`): its
+  `plan` lines under the subject entry that covers them, its `person` lines as still waiting at the deploy, its `off`
+  lines folded. The Approvals page lists pending plans and approved ones that still cover a deploy, so a person finds
+  one to revoke. `components/app-detail/PlanSettings.tsx` edits `planBinding` and `planTtlDays`.
 - **An application's page is one tab per task** (`components/app/AppFrame.tsx`, `routes/apps/*`): Overview, Deploys,
   Data, Secrets and variables, Access, Approvals, Settings. The frame reads the application and its environments
   (`app.manage` at the app, so `workspaceGate` opens `/apps/:id/*` to a manager of that one application), and each

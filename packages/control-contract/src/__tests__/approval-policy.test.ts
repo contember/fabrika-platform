@@ -221,6 +221,8 @@ describe('a change of protection that weakens a passkey on deciding (ADR-0050 §
 		expect(weakensStepUp(held, { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toEqual(['credentials', 'agent-write'])
 		// A key no longer bounded by the requester's own actions.
 		expect(weakensStepUp(held, withSettings({ credentialCeiling: 'approver' }))).toEqual(['credentials'])
+		// A plan bound to its result alone covers more than its passkey approved.
+		expect(weakensStepUp(held, withSettings({ planBinding: 'after-state' }))).toEqual(['credentials'])
 	})
 
 	test('agent-write: dropping its passkey, refusing less or unprotecting the environment names it', () => {
@@ -244,6 +246,8 @@ describe('a change of protection that weakens a passkey on deciding (ADR-0050 §
 		const elsewhere = { ...PERMISSIVE_SETTINGS, stepUp: STRICT_SETTINGS.stepUp }
 		expect(weakensStepUp(held, { protected: true, policy: { ...PERMISSIVE_POLICY, credentials: 'person' }, settings: elsewhere })).toEqual([])
 		expect(weakensStepUp(held, withSettings({ requestTtlHours: 168 }))).toEqual([])
+		expect(weakensStepUp(held, withSettings({ planTtlDays: 365 }))).toEqual([])
+		expect(weakensStepUp(withSettings({ planBinding: 'after-state' }), held)).toEqual([])
 		expect(weakensStepUp(held, withSettings({ deployRequestCommits: 'any' }))).toEqual([])
 		expect(weakensStepUp(withSettings({ credentialCeiling: 'approver' }), held)).toEqual([])
 		const noPasskey = withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' } })

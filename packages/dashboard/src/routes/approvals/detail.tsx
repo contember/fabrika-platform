@@ -410,7 +410,7 @@ function SubjectName({ row }: { row: SubjectRow }) {
  * One subject's lines, each with its effect, the closer-review mark and the reason for it. In a caller group's row,
  * which names the endpoint, its route and who reaches it already, a line says only the rest (`inRow`).
  */
-function ChangeLines(
+export function ChangeLines(
 	{ changes, crossOrigins, inRow }: { changes: readonly AccessChangeDto[]; crossOrigins: readonly string[] | undefined; inRow: boolean },
 ) {
 	return (

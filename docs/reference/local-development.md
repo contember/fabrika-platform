@@ -71,8 +71,10 @@ machine API key described below.
 `local:seed`, run after `local:smoke`, gives the console something to show on every part of an application's page
 (`src/console-seed.ts`): a second Notes environment, `test`, on its own cheap namespace `apps-test`, deployed once; a
 secret on each environment (Notes declares no variables, and on Zerops a secret takes an environment); an approval
-policy on `prod` that differs from the strict preset; and the agent change commit parked for approval on `prod`. It
-writes through Control (as the signed-in person, with the machine key for the namespace and the GitHub webhook for the parked deploy), and a rerun adds nothing that is already there.
+policy on `prod` that differs from the strict preset; the agent change commit parked for approval on `prod`; and a plan
+of the same commit on `prod`, waiting for a person in the console. It writes through Control (as the signed-in person,
+with the machine key for the namespace and the plan, and the GitHub webhook for the parked deploy), and a rerun adds
+nothing that is already there.
 
 `local:compat` is [ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md)'s
 compatibility suite on this stack; see [The compatibility suite](#the-compatibility-suite).

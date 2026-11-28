@@ -74,11 +74,13 @@ const environmentsSchema = z.object({
 			// A Control older than the field, or one whose policy this release cannot read, stands for its categories.
 			approvalPolicy: approvalPolicySchema.partial().optional().catch(undefined),
 			// A Control older than the field, or one whose settings this release cannot read, has the defaults; one older than
-			// requesterMayApprove, stepUp or credentialCeiling has its default and keeps the other settings, and one older than a
-			// step-up category has that category's default.
+			// requesterMayApprove, stepUp, credentialCeiling, planBinding or planTtlDays has its default and keeps the other
+			// settings, and one older than a step-up category has that category's default.
 			approvalSettings: approvalSettingsSchema
 				.extend({
 					credentialCeiling: approvalSettingsSchema.shape.credentialCeiling.default(STRICT_SETTINGS.credentialCeiling),
+					planBinding: approvalSettingsSchema.shape.planBinding.default(STRICT_SETTINGS.planBinding),
+					planTtlDays: approvalSettingsSchema.shape.planTtlDays.default(STRICT_SETTINGS.planTtlDays),
 					requesterMayApprove: approvalSettingsSchema.shape.requesterMayApprove.default(STRICT_SETTINGS.requesterMayApprove),
 					stepUp: approvalSettingsSchema.shape.stepUp.partial().default({}).transform((stepUp) => ({ ...STRICT_SETTINGS.stepUp, ...stepUp })),
 				})

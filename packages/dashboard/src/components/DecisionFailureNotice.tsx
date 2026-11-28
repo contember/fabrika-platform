@@ -27,7 +27,7 @@ export function DecisionFailureText({ failure }: { failure: DecisionFailure }) {
 }
 
 /** What the page says before a decision that takes a passkey. */
-export function StepUpHint({ stepUp, item }: { stepUp: StepUpMode; item: 'deploy' | 'request' }) {
+export function StepUpHint({ stepUp, item }: { stepUp: StepUpMode; item: 'deploy' | 'request' | 'plan' }) {
 	if (stepUp === 'none') return null
 	return (
 		<p className="hint">

@@ -193,6 +193,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0047_iam_gate_mirrors_agent_write.sql' },
 			{ bundle: 'control', name: '0048_migration_bookmark.sql' },
 			{ bundle: 'control', name: '0049_migration_rewind.sql' },
+			{ bundle: 'control', name: '0050_approval_plans.sql' },
 		])
 	})
 
@@ -232,6 +233,8 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'app_env_application_objects',
 				'app_env_restores',
 				'approval_requests',
+				'approval_plans',
+				'approval_plan_entries',
 				'app_env_exposure_alerts',
 			]
 		) {

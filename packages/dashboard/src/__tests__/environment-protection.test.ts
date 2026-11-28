@@ -16,6 +16,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { PolicyEditor, PolicySummary, ProtectionRow, UnprotectConsequences } from '../components/app-detail/ApprovalsSection'
 import { DecisionFailureText } from '../components/DecisionFailureNotice'
 import { type AppEnvDto, type ApprovalDto, type ConsoleAccessDto, type ControlFetch, createControlClient } from '../lib/api'
+import { planTtl } from '../lib/approval-plans'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import {
 	APPROVAL_CATEGORY_GROUPS,
@@ -252,8 +253,8 @@ describe('approval modes', () => {
 		// The preset's choice is marked once per category, for the eye and in the radio's name.
 		expect(markup.match(/aria-label="[^"]*: [^"]* \(Strict\)"/g)).toHaveLength(POLICY_CATEGORIES.length)
 		expect(markup.match(/<span class="preset-mark"[^>]*aria-hidden="true">•<\/span>/g)).toHaveLength(POLICY_CATEGORIES.length)
-		// No dropdowns per rule: who decides is one cell, opened on demand.
-		expect(markup.match(/<select/g)).toHaveLength(2)
+		// No dropdowns per rule: who decides is one cell, opened on demand; the three are two request settings and the plan binding.
+		expect(markup.match(/<select/g)).toHaveLength(3)
 		expect(markup).toContain('1 person · passkey')
 	})
 
@@ -297,6 +298,26 @@ describe('approval modes', () => {
 		expect(policyDifferences({ policy: STRICT_POLICY, settings: { ...STRICT_SETTINGS, credentialCeiling: 'approver' } }, strictChoice)).toEqual([
 			{ key: 'credentialCeiling', label: 'Actions a key an agent asks for may hold', value: "The approver's", other: "The agent's own" },
 		])
+	})
+
+	test('the plan settings: what a plan binds to and how long it covers, compared, loosened and parsed', () => {
+		const markup = editor(environment('prod', true))
+		expect(markup).toContain('What an approved plan binds to<select>')
+		expect(markup).toContain('<option value="transition" selected="">The change from what runs</option>')
+		const afterState = { ...STRICT_SETTINGS, planBinding: 'after-state' as const, planTtlDays: 60 }
+		expect(policyDifferences({ policy: STRICT_POLICY, settings: afterState }, strictChoice)).toEqual([
+			{ key: 'planBinding', label: 'What an approved plan binds to', value: 'The result alone', other: 'The change from what runs' },
+			{ key: 'planTtlDays', label: 'Days an approved plan covers a deploy', value: '60 d', other: '30 d' },
+		])
+		// Binding the result alone, or covering longer, loosens; the way back tightens.
+		expect(loosenedSettings(STRICT_SETTINGS, afterState)).toEqual([
+			'an approved plan covers its result reached from a state its approver did not see',
+			'an approved plan covers a deploy for 60 days',
+		])
+		expect(loosenedSettings(afterState, STRICT_SETTINGS)).toEqual([])
+		expect(presetOf(STRICT_POLICY, afterState)).toBeNull()
+		expect(['1', '30', '365'].map(planTtl)).toEqual([1, 30, 365])
+		expect(['0', '366', '1.5', '', 'x'].map(planTtl)).toEqual([null, null, null, null, null])
 	})
 
 	test('a change that loosens any category asks first; one that tightens does not', () => {

@@ -29,6 +29,11 @@ export function requestStepUpBinding(id: string, decision: ApprovalDecision, inp
 	return `control:approval:${JSON.stringify(['request', id, decision, inputDigest])}`
 }
 
+/** The binding of a plan's decision: the plan, the decision and the two digests it approves or refuses. */
+export function planStepUpBinding(id: string, decision: ApprovalDecision, candidateDigest: string, baselineDigest: string): string {
+	return `control:approval:${JSON.stringify(['plan', id, decision, candidateDigest, baselineDigest])}`
+}
+
 /**
  * The binding of a change of an environment's protection: the environment and the SHA-256 of the change as it was asked
  * for, in canonical JSON, a part it leaves out (keeping the stored one) as null.

@@ -153,6 +153,8 @@ const storedSettingsSchema = z.object({
 	deployRequestCommits: approvalSettingsSchema.shape.deployRequestCommits.optional(),
 	requestTtlHours: approvalSettingsSchema.shape.requestTtlHours.optional(),
 	credentialCeiling: approvalSettingsSchema.shape.credentialCeiling.optional(),
+	planBinding: approvalSettingsSchema.shape.planBinding.optional(),
+	planTtlDays: approvalSettingsSchema.shape.planTtlDays.optional(),
 	approvers: approvalSettingsSchema.shape.approvers.partial().optional(),
 	requesterMayApprove: approvalSettingsSchema.shape.requesterMayApprove.partial().optional(),
 	stepUp: approvalSettingsSchema.shape.stepUp.partial().optional(),
@@ -171,6 +173,8 @@ export function appEnvSettings(row: Pick<AppEnvRow, 'approval_settings'>): Appro
 		deployRequestCommits: stored.deployRequestCommits ?? STRICT_SETTINGS.deployRequestCommits,
 		requestTtlHours: stored.requestTtlHours ?? STRICT_SETTINGS.requestTtlHours,
 		credentialCeiling: stored.credentialCeiling ?? STRICT_SETTINGS.credentialCeiling,
+		planBinding: stored.planBinding ?? STRICT_SETTINGS.planBinding,
+		planTtlDays: stored.planTtlDays ?? STRICT_SETTINGS.planTtlDays,
 		approvers: { ...STRICT_SETTINGS.approvers, ...stored.approvers },
 		requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, ...stored.requesterMayApprove },
 		stepUp: { ...STRICT_SETTINGS.stepUp, ...stored.stepUp },
@@ -186,6 +190,8 @@ export function storedSettings(settings: ApprovalSettings): { readonly settings:
 		...(settings.deployRequestCommits === STRICT_SETTINGS.deployRequestCommits ? {} : { deployRequestCommits: settings.deployRequestCommits }),
 		...(settings.requestTtlHours === STRICT_SETTINGS.requestTtlHours ? {} : { requestTtlHours: settings.requestTtlHours }),
 		...(settings.credentialCeiling === STRICT_SETTINGS.credentialCeiling ? {} : { credentialCeiling: settings.credentialCeiling }),
+		...(settings.planBinding === STRICT_SETTINGS.planBinding ? {} : { planBinding: settings.planBinding }),
+		...(settings.planTtlDays === STRICT_SETTINGS.planTtlDays ? {} : { planTtlDays: settings.planTtlDays }),
 		...(approvers.length === 0 ? {} : { approvers: Object.fromEntries(approvers.map((category) => [category, settings.approvers[category]])) }),
 		...(mayApprove.length === 0
 			? {}
