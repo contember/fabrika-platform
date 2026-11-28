@@ -1,4 +1,4 @@
-import { type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
+import { OAUTH_CLI_CLIENT_ID, type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
 import { credentialsRefusal, type KeyChange, type KeyIssuer, type KeyReach } from '../credentials-gate'
 import { type AuditEventInput, auditLabelOf } from '../db'
 import { type RequestContext } from '../env'
@@ -15,9 +15,10 @@ export interface AdminContext {
 	url: URL
 	/**
 	 * The resolved admin caller (already gated on its administration). `label` is null for a label-less key; `session`
-	 * is true only for a signed-in session's console token, never for a `px_` key.
+	 * is true only for a signed-in session's console token, never for a `px_` key. `grant` names the command-line
+	 * client's `admin` device grant the call came through, which every record of it names as its actor.
 	 */
-	admin: { id: string; type: PrincipalType; label: string | null; permissions: PermissionEntry[]; session: boolean }
+	admin: { id: string; type: PrincipalType; label: string | null; permissions: PermissionEntry[]; session: boolean; grant?: string }
 	/** The installation, or the people of some applications (ADR-0058); every user-admin rule reads it. */
 	administration: Administration
 	/** IAM's own app id — the audience the admin was resolved against; used for audit labeling. */
@@ -71,7 +72,13 @@ export function adminEvent(
 		resourceId: event.resourceId ?? null,
 		diff: event.diff,
 		metadata: event.metadata,
+		...adminActor(c.admin),
 	}
+}
+
+/** The actor of a record made through the command-line client's `admin` device grant: the grant, as an agent's is. */
+export function adminActor(admin: { grant?: string }): Pick<AuditEventInput, 'actorId' | 'actorLabel'> {
+	return admin.grant === undefined ? {} : { actorId: `oauth:${admin.grant}`, actorLabel: OAUTH_CLI_CLIENT_ID }
 }
 
 /** The admin as a key's issuer: a person only in a signed-in session's console token, never behind a key. */

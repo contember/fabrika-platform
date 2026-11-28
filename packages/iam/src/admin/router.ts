@@ -23,16 +23,18 @@
  * caller is resolved in one place for both.
  */
 
-import { API_KEY_PREFIX, isWorkloadKind, type PermissionEntry, permits, type PrincipalType } from '@fabrika/auth-core'
-import { IAM_ACTIONS, IAM_APP_ID } from '@fabrika/iam-contract'
+import { API_KEY_PREFIX, isWorkloadKind, OAUTH_CLI_CLIENT_ID, type PermissionEntry, permits, type PrincipalType } from '@fabrika/auth-core'
+import { IAM_ACTIONS, IAM_ADMIN_RPC_PATH, IAM_APP_ID } from '@fabrika/iam-contract'
 import { resolveCaller } from '../auth'
 import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
 import { logError } from '../log'
+import { grantAuthority } from '../oauth'
+import { unixNow } from '../repositories/sql'
 import { generateRequestId } from '../request-id'
 import { resolvePermissionsAt } from '../resolve'
 import type { Services } from '../services'
-import { getSigner, verifyAccessToken } from '../signing'
+import { getSigner, type Signer, verifyAccessToken, verifyResourceAccessToken } from '../signing'
 import { recordAdminAccess } from './access'
 import { type AdminContext, AdminUseCaseError, getAppSchema, provisionApiKey, putAppSchema, revokeApiKey } from './handlers'
 import { error } from './http'
@@ -47,7 +49,8 @@ export const IAM_APP = IAM_APP_ID
 
 /**
  * The admin credential read off the request: an `Authorization: Bearer` holding a `px_` admin or
- * provisioning key, or a proxy-injected access JWT forwarded by a first-party gateway.
+ * provisioning key, a proxy-injected access JWT forwarded by a first-party gateway, or a resource token of the
+ * command-line client's `admin` device grant.
  */
 export function extractCredentials(request: Request, requestId: string): { bearer: string | null; requestId: string } {
 	return { bearer: readBearer(request.headers.get('Authorization')), requestId }
@@ -72,6 +75,8 @@ export interface ResolvedAdmin {
 	audience: string
 	/** The credential is a signed-in session's token (`AccessTokenClaims.session`), not one a `px_` key minted. */
 	session: boolean
+	/** The command-line client's `admin` device grant the credential came from (ADR-0049 rule 2); absent for every other credential. */
+	grant?: string
 }
 
 export type AdminResolution =
@@ -82,6 +87,8 @@ export type AdminResolution =
  * Resolve the admin caller from its bearer:
  *   - a signed-in session's access JWT whose `aud` is a REGISTERED admin gateway → verify identity, then resolve IAM
  *     permissions;
+ *   - a resource token of IAM's administration resource, from the command-line client's `admin` device grant →
+ *     the grant checked live, the person's permissions narrowed to `iam.admin` (`resolveAdminGrant`);
  *   - a `px_<key>` machine credential (CI / provisioning) → `resolveCaller`.
  * No bearer is 401. Returns the caller + permissions; `handleAdmin` then enforces `iam.admin`. An ANONYMOUS credential
  * (a share link, no principal) is rejected — admin needs an accountable principal.
@@ -101,7 +108,7 @@ export async function resolveAdmin(
 		const signer = await getSigner(env)
 		const claims = await verifyAccessToken(signer, creds.bearer, { issuer: services.config.issuer })
 		if (claims === null) {
-			return { ok: false, status: 401, reason: 'invalid_token' }
+			return resolveAdminGrant(services, signer, creds.bearer)
 		}
 		if (!services.config.adminAudiences.has(claims.aud)) {
 			return { ok: false, status: 403, reason: 'not_allowed' }
@@ -156,6 +163,39 @@ export async function resolveAdmin(
 			permissions: res.caller.permissions,
 			audience: res.verifiedApp,
 			session: false,
+		},
+	}
+}
+
+/**
+ * A resource token of IAM's own administration resource, which only the command-line client's `admin` device grant
+ * mints (ADR-0049 rule 2). The grant is checked live, as at a refresh: not revoked or expired, its approving IAM session
+ * usable, the person an active user, the lifetime one hour at most. Its permissions are the person's live ones narrowed
+ * to `iam.admin`. It is no session (`session: false`), so every path that needs the person in the console refuses it,
+ * as it refuses a `px_` key.
+ */
+async function resolveAdminGrant(services: Services, signer: Signer, bearer: string): Promise<AdminResolution> {
+	const invalid: AdminResolution = { ok: false, status: 401, reason: 'invalid_token' }
+	const claims = await verifyResourceAccessToken(signer, bearer, { issuer: services.config.issuer })
+	const resource = `${services.config.issuer}${IAM_ADMIN_RPC_PATH}`
+	if (claims?.oauth === undefined || claims.aud !== resource || claims.oauth.app !== IAM_APP || claims.oauth.clientId !== OAUTH_CLI_CLIENT_ID) {
+		return invalid
+	}
+	const grant = await services.repositories.oauth.grant(claims.oauth.grantId)
+	if (grant === null || grant.client_id !== OAUTH_CLI_CLIENT_ID || grant.principal_id !== claims.sub) return invalid
+	const authority = await grantAuthority(services, grant, unixNow(), resource)
+	if (authority === null) return invalid
+	const { principal } = authority
+	return {
+		ok: true,
+		admin: {
+			id: principal.id,
+			type: principal.type,
+			label: principal.label,
+			permissions: authority.permissions,
+			audience: IAM_APP,
+			session: false,
+			grant: grant.id,
 		},
 	}
 }

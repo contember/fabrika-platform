@@ -9,6 +9,7 @@ import {
 	parseOAuthScopes,
 } from '@fabrika/auth-core'
 import type { KeyGrant } from '@fabrika/auth-core'
+import { IAM_ACTIONS, IAM_APP_ID } from './access'
 
 /**
  * The kinds of managed client an installation registers. A label only: every kind gets the same authorization code
@@ -171,6 +172,26 @@ export type OAuthDeviceGrantLifetime = (typeof OAUTH_DEVICE_GRANT_LIFETIMES_SECO
 
 /** How many resources one device grant may name. */
 export const MAX_OAUTH_DEVICE_RESOURCES = 8
+
+/**
+ * IAM's administration API as a resource of the command-line client (ADR-0049 rule 2): `<issuer>/admin/rpc`, under the
+ * one scope `admin`, which carries `iam.admin` and nothing else. IAM serves it whenever it serves OAuth; no deploy
+ * configures it.
+ */
+export const IAM_ADMIN_RPC_PATH = '/admin/rpc'
+export const IAM_ADMIN_OAUTH_SCOPE = 'admin'
+/** The longest an `admin` grant lasts: the person may approve one hour, and nothing longer. */
+export const IAM_ADMIN_GRANT_MAX_LIFETIME_SECONDS = 3600
+
+/** The administration resource of the IAM at `issuer`. */
+export function iamAdminOAuthResource(issuer: string): OAuthResourceDto {
+	return {
+		app: IAM_APP_ID,
+		resource: `${issuer}${IAM_ADMIN_RPC_PATH}`,
+		scopeGrants: [{ scope: IAM_ADMIN_OAUTH_SCOPE, permissions: [{ action: IAM_ACTIONS.ADMIN }] }],
+		client: 'cli',
+	}
+}
 
 export interface OAuthTokenResponse {
 	access_token: string

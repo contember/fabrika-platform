@@ -5,7 +5,7 @@ import { parseDataKey } from './data-key'
 import type { IamRepositories } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
-import { type OAuthConfig, parseOAuthConfig } from './oauth-config'
+import { type OAuthConfig, parseOAuthConfig, withIamAdminResource } from './oauth-config'
 import { OidcClient } from './oidc'
 import { parseOidcSessionSeconds } from './oidc-session'
 import { BUN_PBKDF2_COST, type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
@@ -152,7 +152,7 @@ export function buildServices(env: Env): Services {
 				oidc: { enabled: oidcEnabled, sessionCapSeconds: parseOidcSessionSeconds(env.OIDC_SESSION_HOURS) },
 				password: { enabled: passwordEnabled, minLengthFloor: passwordMinLengthFloor(passwordCost) },
 			},
-			oauth: parseOAuthConfig(env.OAUTH_CONFIG),
+			oauth: withIamAdminResource(parseOAuthConfig(env.OAUTH_CONFIG), env.ISSUER),
 			retention: parseRetention({ authLogDays: env.AUTH_LOG_RETENTION_DAYS, auditDays: env.AUDIT_RETENTION_DAYS }),
 			issuer: env.ISSUER,
 		},

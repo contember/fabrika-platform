@@ -53,7 +53,9 @@ it has is IAM's: an app id, a vocabulary of roles, a resource, and OAuth clients
    operator's because an authoring client's tokens reach `/mcp`, which only the operator may hand out today. The console
    registers external applications on a page of its Access section, reached also from the Applications page, and lists
    authoring clients read-only. The `fabrika` CLI does both with the provisioning key (`fabrika control external-apps`,
-   `fabrika control oauth-clients`), from a file, idempotently. A user administrator grants the roles, as before, and
+   `fabrika control oauth-clients`), from a file, idempotently; an installation administrator registers external
+   applications with it through a one-hour `admin` device grant instead
+   ([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 2). A user administrator grants the roles, as before, and
    registers nothing.
 4. **Whether MCP authoring is on is a deploy setting of its own.** It decides the proxy's `/mcp` row and Control's
    mount, so it is composition: `FABRIKA_PLATFORM_MCP_AUTHORING`. A registered authoring client on an installation

@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+	authorizeAdminDevice,
 	authorizeDevice,
 	commandCredentialHelper,
 	controlOAuthBearer,
@@ -13,12 +14,13 @@ import {
 	type CredentialLock,
 	fileCredentialLock,
 } from '../control-oauth.js'
-import { connectControl, controlTransport, MISSING_CONTROL_CREDENTIAL } from '../control.js'
+import { connectControl, controlTransport, iamAdminClient, MISSING_CONTROL_CREDENTIAL } from '../control.js'
 
 const CONSOLE = 'https://console.example.test'
 const IAM = 'https://iam.example.test'
 const RPC = `${CONSOLE}/api/rpc`
 const OPERATIONS_RPC = `${CONSOLE}/operations/api/rpc`
+const IAM_ADMIN_RPC = `${IAM}/admin/rpc`
 
 interface TokenCall {
 	readonly grantType: string | null
@@ -41,6 +43,8 @@ function fakeInstallation(
 	} = {},
 ) {
 	const calls: string[] = []
+	/** The bearers IAM's admin RPC received. */
+	const adminBearers: (string | null)[] = []
 	const tokenCalls: TokenCall[] = []
 	const starts: URLSearchParams[] = []
 	const live = new Set<string>()
@@ -62,6 +66,10 @@ function fakeInstallation(
 		}
 		if (url === `${IAM}/.well-known/oauth-authorization-server`) {
 			return Response.json({ issuer: IAM, token_endpoint: `${IAM}/oauth/token`, device_authorization_endpoint: `${IAM}/oauth/device_authorization` })
+		}
+		if (url === IAM_ADMIN_RPC) {
+			adminBearers.push(new Headers(init?.headers).get('authorization'))
+			return Response.json({ result: { items: [] } })
 		}
 		const form = new URLSearchParams(typeof init?.body === 'string' ? init.body : '')
 		if (url === `${IAM}/oauth/device_authorization`) {
@@ -102,6 +110,7 @@ function fakeInstallation(
 	return {
 		fetch,
 		calls,
+		adminBearers,
 		tokenCalls,
 		starts,
 		/** A grant IAM issued, as `auth device` would have stored it. */
@@ -203,6 +212,19 @@ describe('fabrika control auth device', () => {
 		expect(deps.notes[0]).toBe(`Open ${IAM}/oauth/device?user_code=BCDF-GHJK and confirm the code BCDF-GHJK.`)
 		expect(deps.notes.join('\n')).not.toContain('rt-1')
 		expect(deps.notes.join('\n')).not.toContain('at-1')
+	})
+
+	test("`admin` asks for IAM's administration resource alone and stores the refresh token under IAM's origin", async () => {
+		const installation = fakeInstallation()
+		const store = memoryHelper()
+		const deps = dependencies(installation, store.helper)
+		await authorizeAdminDevice(CONSOLE, deps)
+		expect(installation.starts[0]?.get('scope')).toBe('admin')
+		expect(installation.starts[0]?.getAll('resource')).toEqual([IAM_ADMIN_RPC])
+		expect(installation.tokenCalls.map((call) => call.resource)).toEqual([IAM_ADMIN_RPC])
+		expect(store.log).toEqual([`store ${IAM}`])
+		expect(deps.notes.join('\n')).toContain('one hour at most')
+		expect(deps.notes.join('\n')).not.toContain('rt-1')
 	})
 
 	test('`create` asks for the console RPC alone, with no app', async () => {
@@ -491,5 +513,31 @@ describe('the credential helper and the lock', () => {
 		const taken = await lock(CONSOLE)
 		expect((await readFile(file, 'utf8')).split(' ')[0]).toBe(String(process.pid))
 		await taken()
+	})
+})
+
+describe("IAM's admin RPC", () => {
+	test("without the provisioning key, refreshes the admin grant held under IAM's origin and sends its token to IAM alone", async () => {
+		const installation = fakeInstallation()
+		const store = memoryHelper(installation.grant())
+		const client = iamAdminClient(IAM, { FABRIKA_CONTROL_CREDENTIAL_HELPER: 'unused' }, installation.fetch, dependencies(installation, store.helper))
+		await client.externalApps.list()
+		await client.externalApps.list()
+		expect(installation.tokenCalls.map((call) => [call.grantType, call.resource])).toEqual([['refresh_token', IAM_ADMIN_RPC]])
+		expect(store.log).toEqual([`get ${IAM}`, `store ${IAM}`])
+		expect(installation.adminBearers).toEqual([`Bearer at-2:${IAM_ADMIN_RPC}`, `Bearer at-2:${IAM_ADMIN_RPC}`])
+		// IAM's own metadata names the endpoints: no Control origin is read.
+		expect(installation.calls.some((call) => call.includes(CONSOLE))).toBe(false)
+	})
+
+	test('the provisioning key wins over the grant, and with neither the call says what to set', async () => {
+		const installation = fakeInstallation()
+		const store = memoryHelper(installation.grant())
+		const deps = dependencies(installation, store.helper)
+		await iamAdminClient(IAM, { FABRIKA_IAM_PROVISIONING_KEY: 'px_key', FABRIKA_CONTROL_CREDENTIAL_HELPER: 'unused' }, installation.fetch, deps)
+			.externalApps.list()
+		expect(installation.adminBearers).toEqual(['Bearer px_key'])
+		expect(installation.tokenCalls).toHaveLength(0)
+		expect(() => iamAdminClient(IAM, {}, installation.fetch, deps)).toThrow('--preset=admin')
 	})
 })

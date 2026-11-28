@@ -1,6 +1,7 @@
 import { auditLabelOf } from '../db'
 import { prop } from '../json'
 import type { Services } from '../services'
+import { adminActor } from './context'
 import type { ResolvedAdmin } from './router'
 
 /** The audit action of one privileged request: an installation admin used `/admin/*`, a read as much as a change. */
@@ -31,6 +32,7 @@ export async function recordAdminAccess(services: Services, admin: ResolvedAdmin
 		resourceType: 'admin_route',
 		resourceId: access.procedure == null ? access.route : `${access.route}#${access.procedure}`,
 		metadata: { method: access.method, route: access.route, ...(access.procedure === undefined ? {} : { procedure: access.procedure }) },
+		...adminActor(admin),
 	})
 }
 

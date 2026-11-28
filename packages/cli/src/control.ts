@@ -48,6 +48,7 @@ import type {
 } from '@fabrika/control-contract'
 import {
 	type ExternalAppDto,
+	IAM_ADMIN_OAUTH_SCOPE,
 	type IamAdminRpcContract,
 	isHttpsDocumentUrl,
 	isOAuthIdentityAppId,
@@ -65,12 +66,14 @@ import {
 import { compactDecrypt, exportJWK, generateKeyPair } from 'jose'
 import { z } from 'zod'
 import {
+	authorizeAdminDevice,
 	authorizeDevice,
 	controlOAuthBearer,
 	type ControlOAuthDependencies,
 	controlResourceFor,
 	CREDENTIAL_HELPER_VARIABLE,
 	defaultControlOAuthDependencies,
+	iamAdminOAuthBearer,
 	parseControlCliPreset,
 } from './control-oauth.js'
 import { credentialOrigin, type OriginSource } from './credential-origin.js'
@@ -95,7 +98,7 @@ const issueKeyResultSchema = z.union([
 const USAGE = `fabrika control — operate the Delivery control plane
 
 Usage:
-  fabrika control auth device --preset=<read|deploy|operate|create> [--app=<id>]
+  fabrika control auth device --preset=<read|deploy|operate|create|admin> [--app=<id>]
   fabrika control key issue --label=<name> --permissions=<a,b,c> --expires-in=<seconds> [--iam-url=<origin>]
   fabrika control apps list
   fabrika control apps get --app=<id>
@@ -278,9 +281,11 @@ day or a week). The grant holds the preset's actions at one application, never m
   deploy    read, and deploy.trigger
   operate   deploy, secret.manage, app.manage and operations.triage
   create    app.manage wherever the person holds it, with no --app: it also changes and deletes apps
+  admin     iam.admin on IAM's administration API, with no --app, for one hour at most: the whole installation's
+            identity and access; \`external-apps\` uses it (below), and every call it makes is recorded with the grant
 
 The refresh token goes to the helper and nowhere else: the helper runs as \`sh -c '<helper> get|store'\`,
-reads \`origin=<console origin>\` (and, for \`store\`, \`refresh_token=<token>\`) on stdin, and \`get\` prints
+reads \`origin=<origin>\` (the console's, or IAM's for \`admin\`; for \`store\` also \`refresh_token=<token>\`) on stdin, and \`get\` prints
 \`refresh_token=<token>\`, or nothing. Every call then trades it for a short-lived access token, and IAM
 rotates it each time; a lock under $XDG_CACHE_HOME/fabrika (~/.cache/fabrika when unset) serializes that
 between processes on this machine. If a refresh's answer is lost, the stored token is spent and the next
@@ -303,7 +308,8 @@ resolves inside the provider's project and nowhere else, so from here it only ev
 
 \`external-apps\` and \`oauth-clients\` manage the OAuth clients IAM serves (ADR-0089). They call IAM's admin API
 with two of the variables \`key issue\` reads, and nothing else: FABRIKA_IAM_RPC_URL (or --iam-url), IAM's PUBLIC origin,
-and FABRIKA_IAM_PROVISIONING_KEY, the bearer. An external application is an application outside this installation that
+and FABRIKA_IAM_PROVISIONING_KEY, the bearer. Without the key, \`external-apps\` uses the \`auth device --preset=admin\`
+grant FABRIKA_CONTROL_CREDENTIAL_HELPER holds; \`oauth-clients\` takes the key alone. An external application is an application outside this installation that
 signs people in through IAM; \`put\` replaces it whole from a file (record, roles and clients) and is idempotent:
 
   {
@@ -662,15 +668,20 @@ const APP_ID = /^[a-z0-9][a-z0-9-]*$/
 const runAuthDevice = async (flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
 	const origin = credentialOrigin(flags.values.get('url') ?? env['FABRIKA_CONTROL_URL'], CONTROL_ORIGIN)
 	const raw = required(flags, 'preset')
-	const preset = parseControlCliPreset(raw)
-	if (preset === null) throw new Error(`--preset must be one of ${CONTROL_CLI_PRESETS.join(', ')}`)
-	const app = optional(flags, 'app')
-	if (preset === 'create' && app !== undefined) throw new Error('--preset=create holds its action wherever you may, and takes no --app')
-	if (preset !== 'create' && (app === undefined || !APP_ID.test(app))) throw new Error(`--preset=${preset} needs --app=<application id>`)
 	const helper = env[CREDENTIAL_HELPER_VARIABLE]?.trim()
 	if (helper === undefined || helper === '') {
 		throw new Error(`${CREDENTIAL_HELPER_VARIABLE} is required: the refresh token is stored through it and never printed`)
 	}
+	if (raw === IAM_ADMIN_OAUTH_SCOPE) {
+		if (optional(flags, 'app') !== undefined) throw new Error('--preset=admin administers the whole installation, and takes no --app')
+		await authorizeAdminDevice(origin, defaultControlOAuthDependencies(helper, env, fetch))
+		return
+	}
+	const preset = parseControlCliPreset(raw)
+	if (preset === null) throw new Error(`--preset must be one of ${[...CONTROL_CLI_PRESETS, IAM_ADMIN_OAUTH_SCOPE].join(', ')}`)
+	const app = optional(flags, 'app')
+	if (preset === 'create' && app !== undefined) throw new Error('--preset=create holds its action wherever you may, and takes no --app')
+	if (preset !== 'create' && (app === undefined || !APP_ID.test(app))) throw new Error(`--preset=${preset} needs --app=<application id>`)
 	await authorizeDevice({ origin, preset, ...(app === undefined ? {} : { app }) }, defaultControlOAuthDependencies(helper, env, fetch))
 }
 
@@ -1253,7 +1264,7 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 
 // ── IAM's client registry (ADR-0089) ─────────────────────────────────────────
 // `external-apps` and `oauth-clients` call IAM's `/admin/rpc` with the provisioning key as the bearer, the credential
-// Control's own IAM provisioning client sends. A person's device grant does not reach IAM's admin API.
+// Control's own IAM provisioning client sends, or without it with a person's `admin` device grant (ADR-0049 rule 2).
 
 const PROVISIONING_KEY_LABEL = '[FABRIKA_IAM_PROVISIONING_KEY]'
 
@@ -1265,18 +1276,48 @@ const withoutProvisioningKey = (text: string, env: Readonly<Record<string, strin
 
 export type IamAdminClient = InferRpcClient<IamAdminRpcContract>
 
-/** IAM's admin RPC at its public origin, with the provisioning key from the environment only and no redirect followed. */
+/** Neither IAM credential is set; both are read from the environment only. */
+const MISSING_IAM_CREDENTIAL = `FABRIKA_IAM_PROVISIONING_KEY is required (environment only — it has no flag), or ${CREDENTIAL_HELPER_VARIABLE} `
+	+ 'after `fabrika control auth device --preset=admin`.'
+
+/**
+ * The bearer of IAM's admin RPC: FABRIKA_IAM_PROVISIONING_KEY when it is set, else an access token of the person's `admin`
+ * device grant, refreshed through the credential helper.
+ */
+const iamAdminBearer = (
+	origin: string,
+	env: Readonly<Record<string, string | undefined>>,
+	send: RpcFetch,
+	oauth: ControlOAuthDependencies | undefined,
+): () => Promise<string> => {
+	const key = env['FABRIKA_IAM_PROVISIONING_KEY']?.trim()
+	if (key !== undefined && key !== '') return () => Promise.resolve(key)
+	const helper = env[CREDENTIAL_HELPER_VARIABLE]?.trim()
+	if (helper === undefined || helper === '') throw new Error(MISSING_IAM_CREDENTIAL)
+	return iamAdminOAuthBearer(origin, oauth ?? defaultControlOAuthDependencies(helper, env, send))
+}
+
+/** IAM's admin RPC at its public origin, with a credential from the environment only and no redirect followed. */
 export const iamAdminClient = (
 	url: string | undefined,
 	env: Readonly<Record<string, string | undefined>>,
 	send: RpcFetch = fetch,
+	oauth?: ControlOAuthDependencies,
 ): IamAdminClient => {
 	const origin = credentialOrigin(url ?? env['FABRIKA_IAM_RPC_URL'], IAM_ORIGIN)
-	const key = secret('FABRIKA_IAM_PROVISIONING_KEY', env)
+	const bearer = iamAdminBearer(origin, env, send, oauth)
 	return createRpcClient<IamAdminRpcContract>({
 		baseUrl: `${origin}/admin/rpc`,
 		bounceOnAuth: false,
 		fetch: async (input, init) => {
+			let key: string
+			try {
+				key = await bearer()
+			} catch (error) {
+				// The RPC client reads a rejected fetch as "Network request failed"; this answer keeps the reason.
+				const message = error instanceof Error ? error.message : 'the IAM credential could not be obtained'
+				return Response.json({ error: { type: 'credential', message } }, { status: 401 })
+			}
 			const headers = new Headers(init?.headers)
 			headers.set('authorization', `Bearer ${key}`)
 			let response: Response

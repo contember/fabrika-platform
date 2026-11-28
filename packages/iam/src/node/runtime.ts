@@ -18,7 +18,7 @@ import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { parseDataKey } from '../data-key'
 import { createPostgresIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
-import { parseOAuthConfig } from '../oauth-config'
+import { parseOAuthConfig, withIamAdminResource } from '../oauth-config'
 import { parseOidcSessionSeconds } from '../oidc-session'
 import { BUN_PBKDF2_COST } from '../password-crypto'
 import { parseRetention } from '../retention'
@@ -104,7 +104,7 @@ export async function createRuntime(source: Record<string, string | undefined> =
 
 	// Parsed here as well as per request in `buildServices`, for the same readiness-probe reason as above.
 	parseAdminAudiences(source['FABRIKA_IAM_ADMIN_AUDIENCES'])
-	parseOAuthConfig(source['FABRIKA_IAM_OAUTH_CONFIG'])
+	withIamAdminResource(parseOAuthConfig(source['FABRIKA_IAM_OAUTH_CONFIG']), issuer)
 	const authLogRetentionDays = source['FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS']
 	const auditRetentionDays = source['FABRIKA_IAM_AUDIT_RETENTION_DAYS']
 	parseRetention(

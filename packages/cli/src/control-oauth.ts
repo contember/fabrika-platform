@@ -15,6 +15,7 @@ import {
 	type ControlCliPreset,
 	controlCliPresetPaths,
 } from '@fabrika/control-contract'
+import { IAM_ADMIN_OAUTH_SCOPE, IAM_ADMIN_RPC_PATH } from '@fabrika/iam-contract'
 import { createHash, randomUUID } from 'node:crypto'
 import { link, mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -250,6 +251,11 @@ async function discover(origin: string, deps: ControlOAuthDependencies): Promise
 	if (issuer === undefined || credentialOriginOf(issuer) !== issuer) {
 		throw new Error(`${origin} names an authorization server that is not an https origin`)
 	}
+	return authorizationServer(issuer, deps)
+}
+
+/** The endpoints `issuer`'s RFC 8414 metadata names, each on the issuer's own origin; read without following a redirect. */
+async function authorizationServer(issuer: string, deps: ControlOAuthDependencies): Promise<AuthorizationServer> {
 	const server = serverMetadataSchema.safeParse(await getJson(`${issuer}/.well-known/oauth-authorization-server`, deps))
 	if (
 		!server.success || server.data.issuer !== issuer || !sameOrigin(server.data.token_endpoint, issuer)
@@ -313,10 +319,36 @@ export const parseControlCliPreset = (raw: string): ControlCliPreset | null => C
 export async function authorizeDevice(request: DeviceGrantRequest, deps: ControlOAuthDependencies): Promise<void> {
 	const server = await discover(request.origin, deps)
 	const resources = controlCliPresetPaths(request.preset).map((path) => `${request.origin}${path}`)
-	const form = new URLSearchParams({
-		client_id: OAUTH_CLI_CLIENT_ID,
-		scope: request.app === undefined ? request.preset : `${request.preset}:${request.app}`,
-	})
+	const scope = request.app === undefined ? request.preset : `${request.preset}:${request.app}`
+	await runDeviceGrant(server, scope, resources, request.origin, deps)
+	deps.note(`Approved. The refresh token is stored through ${CREDENTIAL_HELPER_VARIABLE}; Control calls without FABRIKA_CONTROL_KEY use it.`)
+}
+
+/**
+ * The `admin` device grant (ADR-0049 rule 2): IAM's administration API as the approving person, `iam.admin` alone, for
+ * one hour at most. IAM is found from Control's origin; the refresh token is stored under IAM's origin, so it sits beside
+ * a console grant instead of replacing it.
+ */
+export async function authorizeAdminDevice(origin: string, deps: ControlOAuthDependencies): Promise<void> {
+	const server = await discover(origin, deps)
+	await runDeviceGrant(server, IAM_ADMIN_OAUTH_SCOPE, [`${server.issuer}${IAM_ADMIN_RPC_PATH}`], server.issuer, deps)
+	deps.note(
+		`Approved for one hour at most. The refresh token is stored through ${CREDENTIAL_HELPER_VARIABLE} under ${server.issuer}; `
+			+ '`control external-apps` uses it without FABRIKA_IAM_PROVISIONING_KEY.',
+	)
+}
+
+/** Start a device grant, tell the person where to approve it, poll until they do, and store its refresh token under `storeOrigin`. */
+async function runDeviceGrant(
+	server: AuthorizationServer,
+	scope: string,
+	resources: readonly string[],
+	storeOrigin: string,
+	deps: ControlOAuthDependencies,
+): Promise<void> {
+	const [first] = resources
+	if (first === undefined) throw new Error('a device grant names at least one resource')
+	const form = new URLSearchParams({ client_id: OAUTH_CLI_CLIENT_ID, scope })
 	for (const resource of resources) form.append('resource', resource)
 	const response = await postForm(server.deviceEndpoint, form, deps, `${server.issuer} could not be reached to start the device grant`)
 	if (response.status === 429) {
@@ -337,14 +369,13 @@ export async function authorizeDevice(request: DeviceGrantRequest, deps: Control
 		: started.data.verification_uri
 	deps.note(`Open ${page} and confirm the code ${started.data.user_code}.`)
 	deps.note(`The person who approves picks how long the grant lasts. The code expires in ${Math.ceil(started.data.expires_in / 60)} minutes.`)
-	const refreshToken = await pollDevice(server, started.data, resources[0] ?? `${request.origin}${CONTROL_RPC_PATH}`, deps)
-	const release = await deps.lock(request.origin)
+	const refreshToken = await pollDevice(server, started.data, first, deps)
+	const release = await deps.lock(storeOrigin)
 	try {
-		await deps.helper.store(request.origin, refreshToken)
+		await deps.helper.store(storeOrigin, refreshToken)
 	} finally {
 		await release()
 	}
-	deps.note(`Approved. The refresh token is stored through ${CREDENTIAL_HELPER_VARIABLE}; Control calls without FABRIKA_CONTROL_KEY use it.`)
 }
 
 async function pollDevice(
@@ -411,11 +442,25 @@ export type ControlBearer = (resource: string) => Promise<string>
  * process's memory only. Concurrent calls for one resource share one refresh.
  */
 export function controlOAuthBearer(origin: string, deps: ControlOAuthDependencies): ControlBearer {
+	return grantBearer(origin, () => discover(origin, deps), deps)
+}
+
+/**
+ * Access tokens for IAM's administration API at `issuer`, refreshed through the `admin` grant the helper holds under
+ * IAM's origin. IAM's own metadata names the endpoints, so this needs no Control origin.
+ */
+export function iamAdminOAuthBearer(issuer: string, deps: ControlOAuthDependencies): () => Promise<string> {
+	const bearer = grantBearer(issuer, () => authorizationServer(issuer, deps), deps)
+	return () => bearer(`${issuer}${IAM_ADMIN_RPC_PATH}`)
+}
+
+/** Access tokens refreshed through the grant the helper holds under `origin`, kept in this process's memory only. */
+function grantBearer(origin: string, locate: () => Promise<AuthorizationServer>, deps: ControlOAuthDependencies): ControlBearer {
 	let server: Promise<AuthorizationServer> | undefined
 	const held = new Map<string, { readonly token: string; readonly refreshAt: number }>()
 	const pending = new Map<string, Promise<string>>()
 	const refresh = async (resource: string): Promise<string> => {
-		server ??= discover(origin, deps)
+		server ??= locate()
 		const { issuer, tokenEndpoint } = await server
 		const release = await deps.lock(origin)
 		try {

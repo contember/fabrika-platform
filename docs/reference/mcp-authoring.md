@@ -542,7 +542,10 @@ is granted to, and adding roles to an application that had none refuses everyone
 Deleting the application revokes its clients' sign-ins and removes its roles. The page lists the authoring clients
 read-only.
 
-**With the CLI** the operator does the same with the provisioning key, from a file and idempotently:
+**With the CLI** the operator does the same with the provisioning key, from a file and idempotently. An installation
+administrator without the key uses a one-hour `admin` device grant instead
+([CLI device grant](cli-device-grant.md#iams-administration)): `fabrika control auth device --preset=admin`, then
+`external-apps` as below with `FABRIKA_IAM_PROVISIONING_KEY` unset.
 
 ```bash
 export FABRIKA_IAM_RPC_URL=https://<IAM's public origin>

@@ -146,7 +146,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   maintain again. `extractCredentials`/`resolveAdmin` live in `admin/router.ts` and are shared by
   both, so the caller is resolved once.
 - **`/admin/*` IS BEARER-ONLY.** `resolveAdmin` accepts a registered-audience proxy JWT (what
-  Control's console gateway forwards as a bearer) or a `px_` key, and reads no session cookie. The JWT must be a
+  Control's console gateway forwards as a bearer), a `px_` key, or the resource token of the command-line client's
+  `admin` device grant, and reads no session cookie. The grant's token (`resolveAdminGrant`; resource
+  `<issuer>/admin/rpc`, which `withIamAdminResource` adds to every OAuth configuration) is checked live through
+  `grantAuthority`, carries the person's live permissions narrowed to `iam.admin`, and resolves with `session: false`
+  and `grant` set, so every session-only procedure refuses it and every record it causes names the grant as its actor
+  (`adminActor`). Such a grant lasts one hour at most: the device page offers and accepts nothing longer, and
+  `grantCeiling` refuses a longer one (ADR-0049 rule 2). The JWT must be a
   signed-in session's (`AccessTokenClaims.session`): one the proxy minted from a `px_` key is 403 before any permission
   is resolved, because the key's grants narrow it and the live IAM permissions would not. Device approval
   (`device.ts` `human()`) applies the same rule, for the same reason. With
