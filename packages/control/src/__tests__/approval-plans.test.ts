@@ -415,21 +415,21 @@ describe('a plan covers only for a while, and only what it showed', () => {
 	test('every write is audited: the plan as `deploy.trigger`, its approval and revocation as `access.approve`', async () => {
 		const w = await world()
 		await published(w)
-		const audited: { action: string; resourceType: string; decision: unknown }[] = []
+		const audited: { action: string; resourceType: string; metadata: unknown }[] = []
 		const recording = (auth: AuthContext): AuthContext => ({
 			...auth,
 			audit: (event) => {
-				audited.push({ action: event.action, resourceType: event.resourceType, decision: event.metadata?.['decision'] })
+				audited.push({ action: event.action, resourceType: event.resourceType, metadata: event.metadata })
 				return Promise.resolve()
 			},
 		})
 		const made = await createApprovalPlanUseCase(plans(w, recording(agent())), { appId: 'notes', env: 'prod', commitSha: PLANNED })
 		await decidePlan(w, made.id, 'approve', recording(person()))
 		await revokeApprovalPlanUseCase(plans(w, recording(person())), made.id)
-		expect(audited).toEqual([
-			{ action: 'deploy.trigger', resourceType: 'approval_plan', decision: 'plan' },
-			{ action: 'access.approve', resourceType: 'approval_plan', decision: 'approve' },
-			{ action: 'access.approve', resourceType: 'approval_plan', decision: 'revoke' },
+		expect(audited).toMatchObject([
+			{ action: 'deploy.trigger', resourceType: 'approval_plan', metadata: { decision: 'plan', entries: 1 } },
+			{ action: 'access.approve', resourceType: 'approval_plan', metadata: { decision: 'approve' } },
+			{ action: 'access.approve', resourceType: 'approval_plan', metadata: { decision: 'revoke' } },
 		])
 	})
 
