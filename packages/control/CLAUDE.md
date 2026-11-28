@@ -977,8 +977,9 @@ other environment, before the provider prepares anything, and the write maps a r
   counted active and unexpired in the compare-and-swap, so a revoke or an expiry in between makes the swap lose.
   Expiry is read from `deadline` and `expires_at`; nothing sweeps it. A parked run's read carries `planCoverage`
   (`parkedRunCoverage`, `plans/parked.ts`, over the same `activeCoverage` the publication uses): the lines the gate lets
-  through with the active entries and not without, only while the environment still publishes the run's baseline and
-  never for a deploy request. Reading consumes nothing; approving the run uses no entry.
+  through with the active entries and not without, and whether a new deploy of the change would publish, only while
+  the environment still publishes the run's baseline and the run's candidate is its own, and never for a deploy
+  request. Reading consumes nothing; approving the run uses no entry.
 - **A decision under `stepUp: webauthn` carries a step-up challenge the person answered on IAM's page and IAM verified (ADR-0050 §5, `src/approval/step-up.ts`).**
   `requiredStepUp` on the waiting categories decides it, beside `requiredApprovers`. Control builds the binding from the
   stored item and the decision (`runStepUpBinding`, `requestStepUpBinding`), never from the input, and calls IAM's

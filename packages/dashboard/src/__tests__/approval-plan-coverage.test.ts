@@ -9,7 +9,7 @@ import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AccessChangeDto, ApprovalDto } from '../lib/api'
 import { planCoverageSplit } from '../lib/approval-plans'
-import { AccessChangeView, PlanCovered } from '../routes/approvals/detail'
+import { AccessChangeView, PlanAwareChange } from '../routes/approvals/detail'
 
 const EDITOR: AccessChangeDto = {
 	effect: 'widens',
@@ -58,7 +58,7 @@ const APPROVAL: ApprovalDto = {
 	approvers: 1,
 	requesterMayApprove: true,
 	stepUp: 'none',
-	planCoverage: { lines: [0, 2], plans: [PLAN_ID] },
+	planCoverage: { lines: [0, 2], plans: [PLAN_ID], publishes: false },
 }
 
 /** Render inside a router, as `Link` needs one. */
@@ -71,35 +71,56 @@ function render(element: ReactElement): string {
 	return renderToStaticMarkup(createElement(BuzolaProvider, { router }, element))
 }
 
+const page = (approval: ApprovalDto) => render(createElement(PlanAwareChange, { approval }))
+
+/** The markup before the covered section, and the section itself. */
+function sections(markup: string): { readonly change: string; readonly covered: string } {
+	const at = markup.indexOf('<h2>Covered by an approved plan</h2>')
+	return at < 0 ? { change: markup, covered: '' } : { change: markup.slice(0, at), covered: markup.slice(at) }
+}
+
 describe('a parked run that an approved plan partly covers', () => {
-	test('the change reads only the uncovered lines; the covered ones are kept apart, in order', () => {
+	test('the split keeps the uncovered lines as the run and the covered ones apart, in order, on the same digests', () => {
 		const { uncovered, covered } = planCoverageSplit(APPROVAL)
 		expect(uncovered.changes).toEqual([READER])
 		expect(covered).toEqual([EDITOR, TRIGGER])
-		// The digests the decision binds stay the run's.
 		expect(uncovered.candidateDigest).toBe(APPROVAL.candidateDigest)
-		const change = render(createElement(AccessChangeView, { view: approvalView(uncovered.changes), approval: uncovered }))
+		expect(uncovered.baselineDigest).toBe(APPROVAL.baselineDigest)
+	})
+
+	test('the change reads only the uncovered lines and says how many more a plan covers; those sit folded under the plan', () => {
+		const { change, covered } = sections(page(APPROVAL))
 		expect(change).toContain('Role <code>reader</code> is new')
 		expect(change).not.toContain('notes.delete')
 		expect(change).not.toContain('trim_title')
+		expect(change).toContain('Beside these, an approved plan covers 2 more lines')
+		expect(covered).toContain(`href="/approvals/plans/${PLAN_ID}"`)
+		expect(covered).toContain('these 2 lines, which the change above leaves out')
+		expect(covered).toContain('Approving this run approves it whole and uses no plan.')
+		expect(covered).toContain('<details class="every-line"><summary>Lines the plan covers')
+		expect(covered).toContain('notes.delete')
+		expect(covered).toContain('trim_title')
+		// Another line still waits under the policy now, so the page promises no publication.
+		expect(covered).not.toContain('Nothing else waits')
+		// The folded list is not a second section of its own.
+		expect(covered.match(/<h2>/g)).toHaveLength(1)
 	})
 
-	test('the covered lines sit folded under the plans that cover them, and approving the run uses no plan', () => {
-		const { covered } = planCoverageSplit(APPROVAL)
-		const markup = render(createElement(PlanCovered, { changes: covered, plans: [PLAN_ID], othersWait: true, crossOrigins: undefined }))
-		expect(markup).toContain('Covered by an approved plan')
-		expect(markup).toContain(`href="/approvals/plans/${PLAN_ID}"`)
-		expect(markup).toContain('these 2 lines')
-		expect(markup).toContain('Approving this run approves it whole and uses no plan.')
-		expect(markup).not.toContain('Nothing else in it waits')
-		expect(markup).toContain('<details class="every-line">')
-		expect(markup).toContain('notes.delete')
+	test('when a plan covers every line, the page says so and why the run still waits, with no empty list', () => {
+		const markup = page({ ...APPROVAL, planCoverage: { lines: [0, 1, 2], plans: [PLAN_ID], publishes: true } })
+		expect(markup).toContain('An approved plan covers every line of this change.')
+		expect(markup).toContain('so it waits for your approval')
+		expect(markup).not.toContain('Every line of the change')
+		expect(markup).toContain('covers every line of this change. Approving this run approves it whole and uses no plan.')
+		expect(markup).toContain('Nothing else waits now: a new deploy of this commit would publish through the plan without a decision.')
 	})
 
-	test('when nothing else waits, the page says a new deploy would publish through the plan', () => {
-		const markup = render(createElement(PlanCovered, { changes: [EDITOR], plans: [PLAN_ID], othersWait: false, crossOrigins: undefined }))
-		expect(markup).toContain('this line')
-		expect(markup).toContain('a new deploy of this commit would publish through the plan without a decision')
+	test('several plans are named as plans', () => {
+		const other = '01a15abc-0000-7000-8000-0000000000c0'
+		const { covered } = sections(page({ ...APPROVAL, planCoverage: { lines: [0, 2], plans: [PLAN_ID, other], publishes: false } }))
+		expect(covered).toContain('Approved plans (')
+		expect(covered).toContain(`href="/approvals/plans/${other}"`)
+		expect(covered).toContain('Lines the plans cover')
 	})
 
 	test('without coverage the run reads as before', () => {
@@ -107,5 +128,6 @@ describe('a parked run that an approved plan partly covers', () => {
 		const split = planCoverageSplit(plain)
 		expect(split.uncovered).toBe(plain)
 		expect(split.covered).toEqual([])
+		expect(page(plain)).toBe(render(createElement(AccessChangeView, { view: approvalView(plain.changes), approval: plain })))
 	})
 })

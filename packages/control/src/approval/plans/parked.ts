@@ -39,14 +39,19 @@ export async function parkedRunCoverage(
 	const appEnv = await repositories.registry.getAppEnv(run.app_id, run.env)
 	if (appEnv === null || appEnv.protected !== 1) return undefined
 	const baseline = approvedSnapshot(appEnv).snapshot
-	if (snapshotDigest(baseline) !== classification.baselineDigest) return undefined
+	// The entry query first: it is usually empty, and the digests hash whole snapshots.
 	const found = await activeCoverage(repositories, appEnv, baseline, candidate)
 	if (found === null) return undefined
+	if (snapshotDigest(baseline) !== classification.baselineDigest || snapshotDigest(candidate) !== classification.candidateDigest) return undefined
 	const policy = appEnvPolicy(appEnv)
 	const lines = classification.changes.flatMap((change, index) =>
 		gate({ lines: [change] }, policy).kind !== 'pass' && gate({ lines: [change] }, policy, found.coverage).kind === 'pass' ? [index] : []
 	)
 	if (lines.length === 0) return undefined
 	const plans = new Set(found.coverage.used().flatMap((entry) => found.planOf.get(entry) ?? []))
-	return { lines, plans: [...plans].sort().reverse() }
+	return {
+		lines,
+		plans: [...plans].sort().reverse(),
+		publishes: gate({ lines: classification.changes }, policy, found.coverage).kind === 'pass',
+	}
 }

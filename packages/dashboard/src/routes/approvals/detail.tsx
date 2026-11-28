@@ -22,7 +22,14 @@ import {
 	SUBJECT_TITLES,
 	surfaceNotes,
 } from '../../lib/access-changes'
-import { type AccessChangeDto, api, type ApprovalDto, type DeployRequestDto, type SurfaceEndpointDto } from '../../lib/api'
+import {
+	type AccessChangeDto,
+	api,
+	type ApprovalDto,
+	type ApprovalPlanCoverageDto,
+	type DeployRequestDto,
+	type SurfaceEndpointDto,
+} from '../../lib/api'
 import { planCoverageSplit } from '../../lib/approval-plans'
 import { type DecisionFailure, decisionFailure, type PasskeyCheck, startDecision } from '../../lib/decision-step-up'
 import { changeWaits, requesterBlocks, requesterBlockText } from '../../lib/environment-protection'
@@ -44,9 +51,6 @@ export default createPage()
 		const { approval } = data
 		const { run } = approval
 		const waiting = run.status === 'awaiting_approval'
-		// The lines an approved plan covers now leave the reading of the change and get their own section.
-		const { uncovered, covered } = planCoverageSplit(approval)
-		const view = approvalView(uncovered.changes)
 		const stage = approvalStage(approval)
 
 		return (
@@ -105,16 +109,7 @@ export default createPage()
 					</div>
 				</section>
 
-				<AccessChangeView view={view} approval={uncovered} />
-
-				{covered.length > 0 && (
-					<PlanCovered
-						changes={covered}
-						plans={approval.planCoverage?.plans ?? []}
-						othersWait={changeWaits(uncovered)}
-						crossOrigins={approval.crossOrigins}
-					/>
-				)}
+				<PlanAwareChange approval={approval} />
 
 				{approval.accessMap !== undefined && approval.accessMap.roles.length > 0 && (
 					<section>
@@ -138,14 +133,14 @@ export default createPage()
  * The change as the approver reads it: its impact, who gains access, what changes in data and runtime, and every line
  * one step away. A run classified before lines carried facts shows its lines in their effect sections.
  */
-export function AccessChangeView({ view, approval }: { view: ApprovalView; approval: ApprovalDto }) {
+export function AccessChangeView({ view, approval, covered = 0 }: { view: ApprovalView; approval: ApprovalDto; covered?: number }) {
 	const endpoints = new Map(approval.endpoints.map((endpoint) => [endpoint.id, endpoint]))
 	const crossOrigins = approval.crossOrigins
 	// The framework's default limits, said once: a row says only the limits of its own.
 	const defaults = approval.endpoints.flatMap(surfaceNotes).find((note) => note.default === true)
 	return (
 		<>
-			{approval.changes.length > 0 && <Summary view={view} approval={approval} />}
+			{approval.changes.length > 0 && <Summary view={view} approval={approval} covered={covered} />}
 			{view.callers.length > 0 && (
 				<section>
 					<div className="section-head">
@@ -181,15 +176,44 @@ export function AccessChangeView({ view, approval }: { view: ApprovalView; appro
 }
 
 /**
- * The lines of a waiting run that the environment's approved plans cover now, as Control read them with the run: they
- * need no decision of this person, so they stay one step away. Approving the run approves it whole and uses no plan.
+ * The change as the person reads it, without the lines the environment's approved plans cover now (Control reads them
+ * with the run): those need no decision of this person, so they sit apart, one step away. Approving the run still
+ * approves it whole, on its digests, and uses no plan.
  */
-export function PlanCovered({ changes, plans, othersWait, crossOrigins }: {
+export function PlanAwareChange({ approval }: { approval: ApprovalDto }) {
+	const { uncovered, covered } = planCoverageSplit(approval)
+	const coverage = approval.planCoverage
+	if (coverage === undefined || covered.length === 0) return <AccessChangeView view={approvalView(approval.changes)} approval={approval} />
+	const all = uncovered.changes.length === 0
+	return (
+		<>
+			{all
+				? (
+					<section className="card change-summary">
+						<div className="card-body">
+							<p className="change-summary-lead">An approved plan covers every line of this change.</p>
+							<p className="muted">{outcomeSentence(approval)}</p>
+						</div>
+					</section>
+				)
+				: <AccessChangeView view={approvalView(uncovered.changes)} approval={uncovered} covered={covered.length} />}
+			<PlanCovered changes={covered} coverage={coverage} all={all} crossOrigins={approval.crossOrigins} />
+		</>
+	)
+}
+
+function PlanCovered({ changes, coverage, all, crossOrigins }: {
 	changes: readonly AccessChangeDto[]
-	plans: readonly string[]
-	othersWait: boolean
+	coverage: ApprovalPlanCoverageDto
+	all: boolean
 	crossOrigins: readonly string[] | undefined
 }) {
+	const one = coverage.plans.length === 1
+	const what = all
+		? 'every line of this change'
+		: changes.length === 1
+		? 'this line, which the change above leaves out'
+		: `these ${changes.length} lines, which the change above leaves out`
 	return (
 		<section>
 			<div className="section-head">
@@ -197,8 +221,8 @@ export function PlanCovered({ changes, plans, othersWait, crossOrigins }: {
 				<h2>Covered by an approved plan</h2>
 			</div>
 			<p className="hint">
-				{plans.length === 1 ? 'An approved plan' : 'Approved plans'} (
-				{plans.map((id, index) => (
+				{one ? 'An approved plan' : 'Approved plans'} (
+				{coverage.plans.map((id, index) => (
 					<span key={id}>
 						{index > 0 && ', '}
 						<Link to="approvals/plans/detail" params={{ id }}>
@@ -206,16 +230,15 @@ export function PlanCovered({ changes, plans, othersWait, crossOrigins }: {
 						</Link>
 					</span>
 				))}
-				) {plans.length === 1 ? 'covers' : 'cover'} {changes.length === 1 ? 'this line' : `these ${changes.length} lines`}, so the change above leaves
-				{' '}
-				{changes.length === 1 ? 'it' : 'them'} out. Approving this run approves it whole and uses no plan.
-				{!othersWait && ' Nothing else in it waits: a new deploy of this commit would publish through the plan without a decision.'}
+				) {one ? 'covers' : 'cover'} {what}. Approving this run approves it whole and uses no plan.
+				{coverage.publishes
+					&& ` Nothing else waits now: a new deploy of this commit would publish through the ${one ? 'plan' : 'plans'} without a decision.`}
 			</p>
 			<details className="every-line">
 				<summary>
-					Lines the plan covers <span className="muted">({changes.length})</span>
+					{one ? 'Lines the plan covers' : 'Lines the plans cover'} <span className="muted">({changes.length})</span>
 				</summary>
-				<ChangeList title="Covered by a plan" icon="check" changes={changes} crossOrigins={crossOrigins} />
+				<ChangeLines changes={changes} crossOrigins={crossOrigins} inRow={false} />
 			</details>
 		</section>
 	)
@@ -227,7 +250,7 @@ const REACH_ICONS: Record<string, IconName> = { anyone: 'globe', link: 'link', a
  * The head of the page, in plain words: what the change does to endpoints and to whom, what else it changes, whether it
  * waits, and the lines to check first, each with the reason it needs a closer look.
  */
-function Summary({ view, approval }: { view: ApprovalView; approval: ApprovalDto }) {
+function Summary({ view, approval, covered }: { view: ApprovalView; approval: ApprovalDto; covered: number }) {
 	const { summary, impact } = view
 	const reached = impact.callers.map((entry) => {
 		const count = entry.endpoints + entry.removedEndpoints + entry.removedMounts
@@ -248,6 +271,12 @@ function Summary({ view, approval }: { view: ApprovalView; approval: ApprovalDto
 						</>
 					)}
 				</p>
+				{covered > 0 && (
+					<p>
+						Beside these, an approved plan covers {covered === 1 ? '1 more line' : `${covered} more lines`}, listed under{' '}
+						<em>Covered by an approved plan</em>.
+					</p>
+				)}
 				{reached.length > 0 && (
 					<p>
 						Who reaches the endpoints: <Words text={reached.join(', ')} />.

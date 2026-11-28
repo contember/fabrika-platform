@@ -557,6 +557,8 @@ describe('a parked run shows what an approved plan covers of it, read when the r
 		const approved = await decidePlan(w, (await plan(w)).id, 'approve')
 		const read = await getApprovalUseCase(approvals(w), parked.runId)
 		expect(read.planCoverage?.plans).toEqual([approved.id])
+		// The new role still waits for a person, so a new deploy would park too.
+		expect(read.planCoverage?.publishes).toBe(false)
 		const covered = (read.planCoverage?.lines ?? []).map((index) => read.changes[index])
 		expect(covered.length).toBeGreaterThan(0)
 		expect(covered.every((change) => change?.subject?.kind === 'role' && change.subject.name === 'editor')).toBe(true)
@@ -572,7 +574,7 @@ describe('a parked run shows what an approved plan covers of it, read when the r
 		const parked = await deploy(w, PLANNED)
 		expect(parked.status).toBe('awaiting_approval')
 		const approved = await decidePlan(w, (await plan(w)).id, 'approve')
-		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage?.plans).toEqual([approved.id])
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toMatchObject({ plans: [approved.id], publishes: true })
 		await revokeApprovalPlanUseCase(plans(w), approved.id)
 		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toBeUndefined()
 
@@ -594,5 +596,35 @@ describe('a parked run shows what an approved plan covers of it, read when the r
 		const parked = await deploy(w, OTHER, true)
 		expect(parked.status).toBe('succeeded')
 		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toBeUndefined()
+	})
+
+	test('a line a plan holds is not covered once its category waits for a person', async () => {
+		const w = await world()
+		await published(w)
+		const parked = await deploy(w, PLANNED)
+		await decidePlan(w, (await plan(w)).id, 'approve')
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage?.lines.length).toBeGreaterThan(0)
+		await protectAsConsole(approvals(w), {
+			appId: 'notes',
+			env: 'prod',
+			protected: true,
+			policy: { ...PLAN_ROLES, 'role-actions': 'person' },
+			settings: STRICT_SETTINGS,
+		}, 'p-ada')
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toBeUndefined()
+	})
+
+	test('a deploy request waits for a person whatever a plan covers, and shows no coverage', async () => {
+		const w = await world()
+		await published(w)
+		await decidePlan(w, (await plan(w)).id, 'approve')
+		const asked = await triggerDeployUseCase({ ...runs(w), auth: agent(), admission: { request: request(true, 'p-ada') } }, {
+			appId: 'notes',
+			env: 'prod',
+			ref: PLANNED,
+		})
+		expect((await executeDeploy(deps(w, PLANNED), { runId: asked.id })).status).toBe('awaiting_approval')
+		expect((await w.db.runs.getRun(asked.id))?.park_reason).toBe('requested')
+		expect((await getApprovalUseCase(approvals(w), asked.id)).planCoverage).toBeUndefined()
 	})
 })
