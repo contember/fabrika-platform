@@ -14,9 +14,11 @@ grant ([release process](release-process.md)). The installation's IAM is the aut
 `fabrika-cli`, a public client without a metadata document, and serves it two resources:
 
 - `https://<console>/api/rpc`, Control's RPC;
-- `https://<console>/operations/api/rpc`, Operations' RPC.
+- `https://<console>/operations/api/rpc`, Operations' RPC;
+- `https://<IAM>/admin/rpc`, IAM's administration API, under the preset `admin` alone ([below](#iams-administration)).
+  IAM serves it itself wherever it serves OAuth; no deploy configures it.
 
-Each resource is served to one kind of client. These two go to the command-line client alone, through the device
+Each resource is served to one kind of client. These three go to the command-line client alone, through the device
 grant; `/mcp` goes to the managed MCP clients alone, through an authorization code.
 
 ## Obtaining a grant
@@ -43,6 +45,26 @@ the IAM session that approved it.
 A token never holds more than the person who approved it. No preset carries access approval, namespaces, source
 connections, mail or data content, and Control refuses a delegated token in every flow that needs the person
 themselves (`isPerson`).
+
+### IAM's administration
+
+```bash
+fabrika control auth device --preset=admin
+export FABRIKA_IAM_RPC_URL=https://<IAM's public origin>
+fabrika control external-apps list
+```
+
+`admin` holds `iam.admin` on IAM's `/admin/rpc`, at no application and with no `--app`. That is the whole
+installation's identity and access, and only a person who holds `iam.admin` gets a token that administers anything.
+The approval page warns about it before Allow and offers one hour, nothing longer. Every call the grant makes writes
+an `iam.admin.access` record, and every change its own record, under the person with the grant as the actor
+(`oauth:<grant id>`, `fabrika-cli`). IAM checks the grant at every call, so revoking it on the account page, or signing
+out, ends it at the next call. It is no console session: a procedure that needs the person in the console (passkeys,
+deciding a grant request, SCIM, a requested key) refuses it, as it refuses a `px_` key.
+
+The CLI finds IAM from the console's origin, as for the other presets, and keeps this refresh token under IAM's origin
+(`origin=<IAM's origin>` to the helper), beside a console grant. `fabrika control external-apps` uses it when
+`FABRIKA_IAM_PROVISIONING_KEY` is unset; `oauth-clients` takes the provisioning key alone.
 
 ## The credential helper
 

@@ -203,7 +203,9 @@ An installation administrator also registers external applications, which
 sign people in through IAM without a deploy target, under Access → External
 applications (`externalApps.*`, [ADR-0089](../decisions/0089-oauth-clients-are-registered-in-iam-at-runtime.md));
 the operator does the same with `fabrika control external-apps` and the
-provisioning key ([`mcp-authoring.md`](mcp-authoring.md#registering-an-external-application)).
+provisioning key ([`mcp-authoring.md`](mcp-authoring.md#registering-an-external-application)),
+and an installation administrator with a one-hour `admin` device grant
+([`cli-device-grant.md`](cli-device-grant.md#iams-administration)).
 
 Each registered application environment may carry an explicit canonical
 `publicOrigin`. It is independent of the provider routing domain and is the only

@@ -84,6 +84,23 @@ workspace its own running application, where one pinned service could show only 
      scopes parameterized by app. `deploy:alpha` holds its actions at `alpha` only. `create` holds `app.manage` wherever
      the person does, and the consent page warns about it.
    - No preset carries access approval, namespaces, source connections, mail or data content.
+   - **`admin` reaches IAM's administration API**, the one preset outside the console. Its resource is
+     `<issuer>/admin/rpc`, which IAM serves itself wherever it serves OAuth. No deploy configures it, and a configuration
+     that names it fails IAM's boot. The scope `admin` carries `iam.admin` and nothing else, so the token holds the
+     person's live `iam.admin` or nothing. Four rules bound it:
+     - The approval page offers one hour and nothing longer, and IAM refuses a longer approval. A grant written for
+       longer mints nothing.
+     - The page warns, before Allow, that the device administers the whole installation's identity and access.
+     - `/admin/rpc` accepts the grant's resource token beside the console's proxy token and a `px_` key. It checks the
+       grant live at every call: not revoked or expired, its IAM session usable, the person an active user. The token
+       counts as no session, so every procedure that needs the person in the console refuses it, as it refuses a key.
+     - Each call writes its `iam.admin.access` record, and each change its own record, under the person with the grant
+       as the actor (`oauth:<grant id>`, `fabrika-cli`).
+       The CLI keeps this grant's refresh token under IAM's origin, beside a console grant.
+
+     Why: an IAM administrator could hand an agent IAM's administration only as a `px_` key, which is long-lived and
+     needs a secret channel. The person approves this grant in the browser, it ends within an hour or with their
+     sign-in, and the account page lists and revokes it. Before this rule, no device grant reached `/admin/rpc`.
 
    **Each resource is served to one kind of client.** The two RPC resources go to `fabrika-cli`, through the device
    grant. `/mcp` goes to the managed clients, through an authorization code. So an MCP client never holds an RPC

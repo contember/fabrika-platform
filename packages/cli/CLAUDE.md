@@ -56,8 +56,10 @@ label the envelope a registration carries.
   bearer, the credential Control's own IAM provisioning client sends ([ADR-0089](../../docs/decisions/0089-oauth-clients-are-registered-in-iam-at-runtime.md)).
   The origin passes `credentialOrigin`, no redirect is followed, an answer that echoes the key is dropped and every
   error has the key cut out. `put` reads the whole record from `--file` and checks it with the contract's predicates
-  before anything is sent; `external-apps get` prints that same file. A person's device grant does not reach IAM's admin
-  API.
+  before anything is sent; `external-apps get` prints that same file. Without the key, `iamAdminClient` sends an access
+  token of the person's `admin` device grant (`auth device --preset=admin`, ADR-0049 rule 2), whose refresh token the
+  helper holds under IAM's origin and which is refreshed against IAM's own metadata (`iamAdminOAuthBearer`); the key
+  wins when both are set.
 - `namespaces create` commits the plan it just read, never a second derivation —
   the console's two-step form has the same rule for the same reason.
 - `apps variables` writes an app's operator-set values, and a name the app's

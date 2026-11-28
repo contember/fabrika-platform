@@ -678,8 +678,9 @@ and the issuer everywhere. The one dev bypass belongs to IAM: a login that requi
 and `LOCAL_DEV_LOGIN=true`. No environment admits a credential-less caller.
 
 **Invariant: IAM's `/admin/*` is bearer-only.** It accepts the proxy token Control's console gateway
-forwards as a bearer (its audience must be a registered admin gateway) or a `px_` key, and reads no
-session cookie. Admission for the console is the proxy's (rule 3, step 6); neither Control nor IAM keeps an
+forwards as a bearer (its audience must be a registered admin gateway), a `px_` key, or on `/admin/rpc` the resource
+token of the command-line client's `admin` device grant ([ADR-0049](0049-author-applications-through-mcp-in-control.md)
+rule 2), and reads no session cookie. Admission for the console is the proxy's (rule 3, step 6); neither Control nor IAM keeps an
 origin check. This relaxed Control's own guards for a bearer, which we accept: before, the Operations gateway and
 the GitHub connection mutations refused a bearer without the console's `Origin`, and the IAM gateway refused a
 bearer beside a cookie. A bearer is explicit authority, so none of these refusals stopped a forgery. An approval
