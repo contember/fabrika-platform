@@ -11,7 +11,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { ControlApiError } from '../api/domain'
 import { type RunsUseCaseContext, triggerDeployUseCase } from '../api/runs'
-import { type ApprovalUseCaseContext, completeApprovalUseCase } from '../approval/api'
+import { type ApprovalUseCaseContext, completeApprovalUseCase, getApprovalUseCase } from '../approval/api'
 import {
 	type ApprovalPlanContext,
 	challengeApprovalPlanUseCase,
@@ -534,5 +534,97 @@ describe('a plan covers only for a while, and only what it showed', () => {
 		const second = await decidePlan(w, (await plan(w, agent(), OTHER)).id, 'approve')
 		expect(second.entries.map((entry) => entry.subject)).toContain('role:owner')
 		expect((await deploy(w, OTHER)).status).toBe('succeeded')
+	})
+})
+
+describe('a parked run shows what an approved plan covers of it, read when the run is read', () => {
+	/** `EDITOR_DELETES` and a new role, which waits for a person whatever a plan says. */
+	const EDITOR_AND_READER = edited(
+		"editor: { grants: ['notes.read', 'notes.write', 'notes.delete']",
+		"reader: { grants: ['notes.read'] },\n\t\teditor: { grants: ['notes.read', 'notes.write', 'notes.delete']",
+		EDITOR_DELETES,
+	)
+
+	test('a plan approved after the run parked covers its `plan` lines; a `person` line stays uncovered', async () => {
+		const w = await world({ ...PLAN_ROLES, 'role-added': 'person' })
+		await published(w)
+		w.contracts.set(OTHER, EDITOR_AND_READER)
+		const parked = await deploy(w, OTHER)
+		expect(parked.status).toBe('awaiting_approval')
+		// Nothing covers it yet.
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toBeUndefined()
+
+		const approved = await decidePlan(w, (await plan(w)).id, 'approve')
+		const read = await getApprovalUseCase(approvals(w), parked.runId)
+		expect(read.planCoverage?.plans).toEqual([approved.id])
+		// The new role still waits for a person, so a new deploy would park too.
+		expect(read.planCoverage?.publishes).toBe(false)
+		const covered = (read.planCoverage?.lines ?? []).map((index) => read.changes[index])
+		expect(covered.length).toBeGreaterThan(0)
+		expect(covered.every((change) => change?.subject?.kind === 'role' && change.subject.name === 'editor')).toBe(true)
+		const uncovered = read.changes.filter((_, index) => !(read.planCoverage?.lines ?? []).includes(index))
+		expect(uncovered.some((change) => change.subject?.kind === 'role' && change.subject.name === 'reader')).toBe(true)
+		// Reading consumes nothing.
+		expect((await getApprovalPlanUseCase(plans(w), approved.id)).entries[0]?.state).toBe('active')
+	})
+
+	test('a revoked plan, a decided run, or a baseline that moved since the run parked shows no coverage', async () => {
+		const w = await world()
+		await published(w)
+		const parked = await deploy(w, PLANNED)
+		expect(parked.status).toBe('awaiting_approval')
+		const approved = await decidePlan(w, (await plan(w)).id, 'approve')
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toMatchObject({ plans: [approved.id], publishes: true })
+		await revokeApprovalPlanUseCase(plans(w), approved.id)
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toBeUndefined()
+
+		// A second plan of the same change covers the run again, until another change publishes first.
+		const again = await decidePlan(w, (await plan(w)).id, 'approve')
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage?.plans).toEqual([again.id])
+		w.contracts.set(OTHER, edited("'notes.delete': 'Delete notes' }", "'notes.delete': 'Delete notes', 'notes.admin': 'Administer notes' }"))
+		expect((await deploy(w, OTHER, true)).status).toBe('succeeded')
+		// The entry is still active: only the baseline moved, and the run will be compared again when it is approved.
+		expect((await getApprovalPlanUseCase(plans(w), again.id)).entries[0]?.state).toBe('active')
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toBeUndefined()
+	})
+
+	test('a run approved by a person shows no coverage', async () => {
+		const w = await world()
+		await published(w)
+		await decidePlan(w, (await plan(w)).id, 'approve')
+		w.contracts.set(OTHER, EDITOR_ADMINS)
+		const parked = await deploy(w, OTHER, true)
+		expect(parked.status).toBe('succeeded')
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toBeUndefined()
+	})
+
+	test('a line a plan holds is not covered once its category waits for a person', async () => {
+		const w = await world()
+		await published(w)
+		const parked = await deploy(w, PLANNED)
+		await decidePlan(w, (await plan(w)).id, 'approve')
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage?.lines.length).toBeGreaterThan(0)
+		await protectAsConsole(approvals(w), {
+			appId: 'notes',
+			env: 'prod',
+			protected: true,
+			policy: { ...PLAN_ROLES, 'role-actions': 'person' },
+			settings: STRICT_SETTINGS,
+		}, 'p-ada')
+		expect((await getApprovalUseCase(approvals(w), parked.runId)).planCoverage).toBeUndefined()
+	})
+
+	test('a deploy request waits for a person whatever a plan covers, and shows no coverage', async () => {
+		const w = await world()
+		await published(w)
+		await decidePlan(w, (await plan(w)).id, 'approve')
+		const asked = await triggerDeployUseCase({ ...runs(w), auth: agent(), admission: { request: request(true, 'p-ada') } }, {
+			appId: 'notes',
+			env: 'prod',
+			ref: PLANNED,
+		})
+		expect((await executeDeploy(deps(w, PLANNED), { runId: asked.id })).status).toBe('awaiting_approval')
+		expect((await w.db.runs.getRun(asked.id))?.park_reason).toBe('requested')
+		expect((await getApprovalUseCase(approvals(w), asked.id)).planCoverage).toBeUndefined()
 	})
 })

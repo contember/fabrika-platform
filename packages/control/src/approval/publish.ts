@@ -30,7 +30,7 @@ import { mailCustodyRefusal } from '../mail-transport'
 import { appEnvPolicy, appEnvSettings, isDefaultCategories } from './categories'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { relationGrantsRefusal } from './enforcement'
-import { coveringEntry, fragmentSource, type PlanCoverage, planCoverage } from './plans/coverage'
+import { activeCoverage } from './plans/parked'
 import { AppliedMigrationsChanged, ContractMissing, readAccessSnapshot, readLockfile, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
 import {
@@ -262,7 +262,7 @@ export async function publishRunSnapshot(
 		const approved = approves(run, classification)
 		// A plan counts only where nothing else lets the run through, so a run a person approved consumes no entry.
 		const coverage = classification.protected && !returning && !requested && !approved
-			? await coverageOf(deps.repositories, appEnv, active.snapshot, candidate)
+			? (await activeCoverage(deps.repositories, appEnv, active.snapshot, candidate))?.coverage ?? null
 			: null
 		if (
 			classification.protected && !returning
@@ -296,18 +296,6 @@ export async function publishRunSnapshot(
 		input.log('access: another publication, registry write or protection change landed first; classifying again')
 	}
 	throw new Error(`run ${input.run.id} lost the publication of its snapshot ${MAX_PUBLICATION_ATTEMPTS} times`)
-}
-
-/** The environment's active plan entries as coverage of this publication, under its `planBinding`. */
-async function coverageOf(
-	repositories: ControlRepositories,
-	appEnv: AppEnvRow,
-	baseline: AccessSnapshot,
-	candidate: AccessSnapshot,
-): Promise<PlanCoverage | null> {
-	const entries = await repositories.approvalPlans.activeEntries(appEnv.app_id, appEnv.env)
-	if (entries.length === 0) return null
-	return planCoverage(entries.map(coveringEntry), fragmentSource(baseline), fragmentSource(candidate), appEnvSettings(appEnv).planBinding)
 }
 
 function classify(active: ActiveSnapshot, candidate: AccessSnapshot, appEnv: AppEnvRow): StoredClassification {

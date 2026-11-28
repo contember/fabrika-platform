@@ -3,6 +3,7 @@
 
 import {
 	type AccessChangeDto,
+	type ApprovalDto,
 	type ApprovalPlanDto,
 	type ApprovalPlanLineDto,
 	type ApprovalPlanState,
@@ -91,4 +92,17 @@ export function planLines(plan: Pick<ApprovalPlanDto, 'lines' | 'entries'>): Pla
 /** How many entries of an approved plan still cover a deploy. */
 export function activeEntries(plan: Pick<ApprovalPlanDto, 'entries'>): number {
 	return plan.entries.filter((entry) => entry.state === 'active').length
+}
+
+/**
+ * A parked run split by what the environment's approved plans cover of it now (`ApprovalDto.planCoverage`): the run as
+ * the person reads it, with only the lines no plan lets through, and the covered lines on their own.
+ */
+export function planCoverageSplit(approval: ApprovalDto): { readonly uncovered: ApprovalDto; readonly covered: readonly AccessChangeDto[] } {
+	const lines = new Set(approval.planCoverage?.lines ?? [])
+	if (lines.size === 0) return { uncovered: approval, covered: [] }
+	return {
+		uncovered: { ...approval, changes: approval.changes.filter((_, index) => !lines.has(index)) },
+		covered: approval.changes.filter((_, index) => lines.has(index)),
+	}
 }

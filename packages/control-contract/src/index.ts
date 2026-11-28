@@ -1,6 +1,7 @@
 import type { EndpointKind, EndpointMethod } from '@fabrika/auth-core'
 import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
 import { z } from 'zod'
+import type { ApprovalPlanCoverageDto } from './approval-plans.js'
 import type { ApprovalCategory, ApprovalPolicy, ApprovalSettings, ReviewReason, StepUpMode } from './approval-policy.js'
 import type { ApprovalStepUp } from './approval-step-up.js'
 
@@ -818,6 +819,12 @@ export interface ApprovalDto {
 	 * a newer one (ADR-0050 §6). Only on one approval read, of a run that failed without starting.
 	 */
 	supersededBy?: string
+	/**
+	 * The lines the environment's approved plans cover now. Only on one approval read of a waiting run of a protected
+	 * environment that still publishes the snapshot the run was compared with, when a plan covers a line; absent from a
+	 * Control released before plans.
+	 */
+	planCoverage?: ApprovalPlanCoverageDto
 }
 
 /** Who asked to deploy a protected environment, and what (ADR-0050 §4). Text the agent wrote is marked so by its field. */

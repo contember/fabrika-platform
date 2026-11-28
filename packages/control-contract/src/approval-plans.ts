@@ -88,6 +88,20 @@ export interface ApprovalPlanDto {
 	createdAt: number
 }
 
+/**
+ * What the environment's approved plans cover of a waiting run's lines, read when the run is read: the lines a deploy of
+ * the same change would let through by a plan now, so the person approving the run reads only the rest (ADR-0050 §5).
+ * Approving the run itself consumes no entry.
+ */
+export interface ApprovalPlanCoverageDto {
+	/** The positions in `ApprovalDto.changes` of the lines an active entry covers, ascending. */
+	lines: number[]
+	/** The plans whose entries cover them, newest first. */
+	plans: string[]
+	/** Whether a new deploy of the same change would publish now: every line that waits under the policy now is covered. */
+	publishes: boolean
+}
+
 /** A plan of the commit's access change on one environment. */
 export interface CreateApprovalPlanInput {
 	appId: string
