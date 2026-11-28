@@ -23,6 +23,7 @@ import {
 	surfaceNotes,
 } from '../../lib/access-changes'
 import { type AccessChangeDto, api, type ApprovalDto, type DeployRequestDto, type SurfaceEndpointDto } from '../../lib/api'
+import { planCoverageSplit } from '../../lib/approval-plans'
 import { type DecisionFailure, decisionFailure, type PasskeyCheck, startDecision } from '../../lib/decision-step-up'
 import { changeWaits, requesterBlocks, requesterBlockText } from '../../lib/environment-protection'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
@@ -43,7 +44,9 @@ export default createPage()
 		const { approval } = data
 		const { run } = approval
 		const waiting = run.status === 'awaiting_approval'
-		const view = approvalView(approval.changes)
+		// The lines an approved plan covers now leave the reading of the change and get their own section.
+		const { uncovered, covered } = planCoverageSplit(approval)
+		const view = approvalView(uncovered.changes)
 		const stage = approvalStage(approval)
 
 		return (
@@ -102,7 +105,16 @@ export default createPage()
 					</div>
 				</section>
 
-				<AccessChangeView view={view} approval={approval} />
+				<AccessChangeView view={view} approval={uncovered} />
+
+				{covered.length > 0 && (
+					<PlanCovered
+						changes={covered}
+						plans={approval.planCoverage?.plans ?? []}
+						othersWait={changeWaits(uncovered)}
+						crossOrigins={approval.crossOrigins}
+					/>
+				)}
 
 				{approval.accessMap !== undefined && approval.accessMap.roles.length > 0 && (
 					<section>
@@ -165,6 +177,47 @@ export function AccessChangeView({ view, approval }: { view: ApprovalView; appro
 				? <EffectSections changes={view.unsorted} crossOrigins={crossOrigins} />
 				: <EveryLine changes={approval.changes} crossOrigins={crossOrigins} />}
 		</>
+	)
+}
+
+/**
+ * The lines of a waiting run that the environment's approved plans cover now, as Control read them with the run: they
+ * need no decision of this person, so they stay one step away. Approving the run approves it whole and uses no plan.
+ */
+export function PlanCovered({ changes, plans, othersWait, crossOrigins }: {
+	changes: readonly AccessChangeDto[]
+	plans: readonly string[]
+	othersWait: boolean
+	crossOrigins: readonly string[] | undefined
+}) {
+	return (
+		<section>
+			<div className="section-head">
+				<Icon name="check" size={15} />
+				<h2>Covered by an approved plan</h2>
+			</div>
+			<p className="hint">
+				{plans.length === 1 ? 'An approved plan' : 'Approved plans'} (
+				{plans.map((id, index) => (
+					<span key={id}>
+						{index > 0 && ', '}
+						<Link to="approvals/plans/detail" params={{ id }}>
+							plan <code>{id.slice(0, 8)}</code>
+						</Link>
+					</span>
+				))}
+				) {plans.length === 1 ? 'covers' : 'cover'} {changes.length === 1 ? 'this line' : `these ${changes.length} lines`}, so the change above leaves
+				{' '}
+				{changes.length === 1 ? 'it' : 'them'} out. Approving this run approves it whole and uses no plan.
+				{!othersWait && ' Nothing else in it waits: a new deploy of this commit would publish through the plan without a decision.'}
+			</p>
+			<details className="every-line">
+				<summary>
+					Lines the plan covers <span className="muted">({changes.length})</span>
+				</summary>
+				<ChangeList title="Covered by a plan" icon="check" changes={changes} crossOrigins={crossOrigins} />
+			</details>
+		</section>
 	)
 }
 

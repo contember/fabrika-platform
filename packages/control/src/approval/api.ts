@@ -46,6 +46,7 @@ import {
 	stricterGates,
 } from './categories'
 import { type ConsoleAdmission, requireHumanApprover, requireOtherThanRequester } from './human'
+import { parkedRunCoverage } from './plans/parked'
 import {
 	classificationCategories,
 	classificationPolicy,
@@ -445,7 +446,7 @@ function namedEndpoints(snapshot: AccessSnapshot | null, changes: readonly Acces
  * no longer parses must not take the whole list down with it.
  */
 async function toApprovalDto(
-	repositories: Pick<ControlRepositories, 'registry' | 'runs'>,
+	repositories: Pick<ControlRepositories, 'approvalPlans' | 'registry' | 'runs'>,
 	run: RunRow,
 	view: 'list' | 'detail' = 'detail',
 ): Promise<ApprovalDto> {
@@ -457,6 +458,7 @@ async function toApprovalDto(
 	const waiting = run.status === 'awaiting_approval'
 	const partial = waiting ? heldPartialApproval(run, classification) : null
 	const request = await toDeployRequestDto(repositories, run)
+	const planCoverage = snapshot === null ? undefined : await parkedRunCoverage(repositories, run, classification, snapshot)
 	return {
 		run: toRunDto(run),
 		outcome: classification.outcome,
@@ -472,6 +474,7 @@ async function toApprovalDto(
 		...(partial === null ? {} : { partialApproval: { principalId: partial.principalId, label: partial.label, approvedAt: partial.approvedAt } }),
 		...(waiting && run.approval_deadline !== null ? { deadline: run.approval_deadline } : {}),
 		...(request === undefined ? {} : { request }),
+		...(planCoverage === undefined ? {} : { planCoverage }),
 		approval: approval === null ? null : {
 			principalId: approval.principalId,
 			label: approval.label,

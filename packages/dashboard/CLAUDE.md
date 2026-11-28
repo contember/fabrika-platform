@@ -81,7 +81,9 @@ brief): its personas and tasks are approved by a person, and a screen is judged 
 - **A plan is decided at `/approvals/plans/:id`** (`routes/approvals/plans/detail.tsx`, `lib/approval-plans.ts`): its
   `plan` lines under the subject entry that covers them, its `person` lines as still waiting at the deploy, its `off`
   lines folded. The Approvals page lists pending plans and approved ones that still cover a deploy, so a person finds
-  one to revoke. `components/app-detail/PlanSettings.tsx` edits `planBinding` and `planTtlDays`.
+  one to revoke. `components/app-detail/PlanSettings.tsx` edits `planBinding` and `planTtlDays`. A parked run's page
+  reads only the lines no approved plan covers (`planCoverageSplit` over `ApprovalDto.planCoverage`, which Control
+  computes when it reads the run); the covered lines sit folded under the plans that cover them (`PlanCovered`).
 - **An application's page is one tab per task** (`components/app/AppFrame.tsx`, `routes/apps/*`): Overview, Deploys,
   Data, Secrets and variables, Access, Approvals, Settings. The frame reads the application and its environments
   (`app.manage` at the app, so `workspaceGate` opens `/apps/:id/*` to a manager of that one application), and each
