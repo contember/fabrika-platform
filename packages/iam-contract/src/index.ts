@@ -1036,8 +1036,9 @@ export interface IamAdminRpcContract {
 		apps: RpcProcedure<void, ListResponse<AdministeredAppDto>>
 		list: RpcProcedure<AppPeopleInput, AppPeopleDto>
 		/**
-		 * How many hold each role of the application, in one read: to an IAM administrator, who already reads every
-		 * principal's grants, and to the application's own administrator. IAM records each call (`iam.admin.access`).
+		 * How many hold each role of the application, in one read: to an IAM administration that manages the application
+		 * (an installation administrator, or a user administrator in its scope), and to the application's own
+		 * administrator. IAM records each call (`iam.admin.access`).
 		 */
 		holders: RpcProcedure<AppInput, RoleHoldersDto>
 		grant: RpcProcedure<GrantAppRoleRequest, GrantAppRoleResponse>

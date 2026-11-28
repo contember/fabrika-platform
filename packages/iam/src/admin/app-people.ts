@@ -37,7 +37,7 @@ import { recordAdminAccess } from './access'
 import { fail } from './context'
 import { grantsWait, requestGrantChange } from './grant-requests'
 import { IAM_APP, type ResolvedAdmin } from './router'
-import { administrationOf } from './user-admin'
+import { administrationOf, managesApp } from './user-admin'
 
 /** The person administering, as the console's token names it. */
 interface PeopleAdministrator {
@@ -162,18 +162,22 @@ export async function listAppPeople(ctx: IamAppContext, input: AppPeopleInput): 
 }
 
 /**
- * How many hold each role of the application, in one read, recorded once per call. An IAM administrator already reads
- * every principal's grants (`principals.get`), so it reads any application's counts, and `adminRpcAuth` recorded the call.
- * Anyone else is an application's own administrator, held to `appPeople.list`'s check and recorded here after it.
+ * How many hold each role of the application, in one read, recorded once per call. An IAM administration answers at an
+ * application it manages (`managesApp`), whose every grant it already reads; `adminRpcAuth` recorded that call. Anyone
+ * else must administer the application's people, as for `appPeople.list`; without an administration it is recorded
+ * here, after the check.
  */
 export async function listRoleHolders(ctx: IamAppContext, input: AppInput): Promise<RoleHoldersDto> {
 	const { membership } = ctx.services.repositories
-	if (ctx.admin !== null && administrationOf(ctx.admin) !== null) {
+	const administration = ctx.admin === null ? null : administrationOf(ctx.admin)
+	if (administration !== null && managesApp(ctx.services, administration, input.app)) {
 		return { app: input.app, roles: await membership.countAppRoleHolders(input.app) }
 	}
 	const admin = await administrator(ctx)
 	const administered = await requireAdministered(admin, input.app)
-	await recordAdminAccess(admin.services, admin.resolved, admin.requestId, { method: 'POST', route: '/admin/rpc', procedure: 'appPeople.holders' })
+	if (administration === null) {
+		await recordAdminAccess(admin.services, admin.resolved, admin.requestId, { method: 'POST', route: '/admin/rpc', procedure: 'appPeople.holders' })
+	}
 	return { app: administered.app, roles: await membership.countAppRoleHolders(administered.app) }
 }
 

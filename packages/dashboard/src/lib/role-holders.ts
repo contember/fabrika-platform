@@ -8,8 +8,8 @@ export type RoleHolders = ReadonlyMap<string, number>
 
 /**
  * The IAM application whose counts the Access tab reads for `env`, or null when it reads none: the environment must be
- * one of the application's, and the caller an IAM administrator (or unknown to be none) or one who administers the
- * environment's people. IAM decides again and records the read.
+ * one of the application's, and the caller administer IAM there (or be unknown to), or administer the environment's
+ * people. IAM decides again and records the read.
  */
 export function roleHoldersTarget(input: {
 	readonly appId: string
@@ -20,7 +20,9 @@ export function roleHoldersTarget(input: {
 }): string | null {
 	if (!input.envs.includes(input.env)) return null
 	const app = appEnvironmentId(input.appId, input.env)
-	return input.iam !== false || input.peopleApps.includes(app) ? app : null
+	const iam = input.iam
+	const administers = iam === null || (iam !== false && (iam.kind === 'installation' || iam.apps === null || iam.apps.includes(app)))
+	return administers || input.peopleApps.includes(app) ? app : null
 }
 
 /**

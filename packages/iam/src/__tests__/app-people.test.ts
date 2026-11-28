@@ -428,26 +428,50 @@ describe('how many hold each role of the application', () => {
 		expect(rows.map((row) => row.resource_id)).toEqual(['/admin/rpc#appPeople.holders'])
 	})
 
-	test('an IAM administrator reads the counts of an application whose people it does not administer, or that declares none', async () => {
+	test('an IAM administration reads the counts of an application it manages, whose people it need not administer', async () => {
 		const f = await people(NOTES_SCHEMA)
 		const iamAdmin = await f.person('iam-admin')
 		await f.repositories.grants.createGrant({ principalId: iamAdmin.id, roleKey: 'admin' })
 		await holding(f, 'staff', 'staff')
 		const read = await consoleRpc(f, iamAdmin.id, 'appPeople.holders', { app: APP })
 		expect([read.status, result(read.body)]).toEqual([200, { app: APP, roles: [{ role: 'staff', holders: 1 }] }])
-		// A user administrator too: its reads are installation-wide (ADR-0058).
-		const userAdmin = await f.person('user-admin')
-		await f.repositories.grants.createGrant({
-			principalId: userAdmin.id,
+		// A `px_` key holding `iam.admin`, presented to IAM directly, reads them as `principals.get` reads grants.
+		const key = 'px_iam-admin-key'
+		await f.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			principalId: iamAdmin.id,
 			app: IAM_APP_ID,
-			permissions: ['iam.users.manage'],
-			scopeType: 'app',
-			scopeValue: 'other@prod',
+			issuedBy: iamAdmin.id,
+			grants: [],
 		})
-		expect((await consoleRpc(f, userAdmin.id, 'appPeople.holders', { app: APP })).status).toBe(200)
-		for (const caller of [iamAdmin, userAdmin]) {
-			const rows = await f.repositories.audit.listAuditEvents({ action: 'iam.admin.access', principalId: caller.id, limit: 10 })
-			expect(rows.map((row) => row.resource_id)).toEqual(['/admin/rpc#appPeople.holders'])
+		expect((await bearerRpc(f, key, 'appPeople.holders', { app: APP })).status).toBe(200)
+		const rows = await f.repositories.audit.listAuditEvents({ action: 'iam.admin.access', principalId: iamAdmin.id, limit: 10 })
+		expect(rows.map((row) => [row.app, row.resource_id]).sort()).toEqual([
+			[IAM_APP_ID, '/admin/rpc#appPeople.holders'],
+			[CONSOLE_APP, '/admin/rpc#appPeople.holders'],
+		])
+
+		// A user administrator reads them only in its scope; elsewhere it gets the 404 of an application it does not manage.
+		const userAdmin = async (name: string, scope: string) => {
+			const person = await f.person(name)
+			await f.repositories.grants.createGrant({
+				principalId: person.id,
+				app: IAM_APP_ID,
+				permissions: ['iam.users.manage'],
+				scopeType: 'app',
+				scopeValue: scope,
+			})
+			return person
+		}
+		const inScope = await userAdmin('user-admin-notes', APP)
+		expect((await consoleRpc(f, inScope.id, 'appPeople.holders', { app: APP })).status).toBe(200)
+		const elsewhere = await userAdmin('user-admin-other', 'other@prod')
+		const refused = await consoleRpc(f, elsewhere.id, 'appPeople.holders', { app: APP })
+		expect([refused.status, errorType(refused.body)]).toEqual([404, 'not_found'])
+		// The gateway recorded each call once, the refused one too, as it records every request of an administrator.
+		for (const caller of [inScope, elsewhere]) {
+			const recorded = await f.repositories.audit.listAuditEvents({ action: 'iam.admin.access', principalId: caller.id, limit: 10 })
+			expect(recorded.map((row) => row.resource_id)).toEqual(['/admin/rpc#appPeople.holders'])
 		}
 	})
 })

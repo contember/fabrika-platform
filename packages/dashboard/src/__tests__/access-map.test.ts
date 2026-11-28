@@ -172,6 +172,10 @@ describe('reading the holders of each role', () => {
 		expect(target({ peopleApps: ['notes@stage'] })).toBeNull()
 		expect(target({ peopleApps: ['notes@prod'] })).toBe('notes@prod')
 		expect(target({ iam: { kind: 'installation' } })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'users', apps: null } })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'users', apps: ['notes@prod'] } })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'users', apps: ['notes@stage'] } })).toBeNull()
+		expect(target({ iam: { kind: 'users', apps: ['notes@stage'] }, peopleApps: ['notes@prod'] })).toBe('notes@prod')
 		// IAM's `me` did not answer: ask, and IAM decides.
 		expect(target({ iam: null })).toBe('notes@prod')
 		expect(target({ iam: { kind: 'installation' }, env: 'dev' })).toBeNull()

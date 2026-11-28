@@ -85,7 +85,7 @@ brief): its personas and tasks are approved by a person, and a screen is judged 
   `/apps/:id/data/:env`; a data reader without `app.manage` gets it without the frame, and the old
   `/apps/:id/environments/:env/data` redirects to it. The Access tab is `/apps/:id/access/:env`, and `/apps/:id/access`
   opens prod, else the first environment. Its roles show how many hold each one (`lib/role-holders.ts`) to an IAM
-  administrator or a caller who administers that environment's people: one `appPeople.holders` read per environment
+  administration that manages the environment or a caller who administers its people: one `appPeople.holders` read per environment
   opened, which IAM records.
 - **An application's page offers an IAM administrator "Grant me Admin" per environment** (`lib/self-admin.ts`,
   `components/app-detail/AdminAccessSection.tsx`): an ordinary `grants.create` of the built-in `admin` to the caller,
