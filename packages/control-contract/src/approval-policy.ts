@@ -580,8 +580,9 @@ export interface ProtectionChoice {
 /**
  * The categories whose deciding takes a passkey under `held` that a change to `after` lets more through (ADR-0050 §5):
  * the environment unprotected, the passkey dropped, the mode lowered, fewer approvers, the requester's person let
- * approve, for `deploy-request` an unmerged commit admitted, or for `credentials` a key no longer bounded by its
- * requester. Such a change takes a passkey too, so a driven browser cannot loosen the setting and then decide without
+ * approve, for `deploy-request` an unmerged commit admitted, for `credentials` a key no longer bounded by its
+ * requester, or a plan bound to its result alone, which widens what entries approved with a passkey already cover
+ * (a longer `planTtlDays` is not one: an entry's expiry is fixed when it is approved). Such a change takes a passkey too, so a driven browser cannot loosen the setting and then decide without
  * one. An unprotected environment decides requests under `STRICT_SETTINGS` (ADR-0083 §2), so protecting it with less is
  * a weakening too.
  */
@@ -602,6 +603,7 @@ export function weakensStepUp(held: ProtectionChoice, after: ProtectionChoice): 
 			|| (next.requesterMayApprove[category] && !before.requesterMayApprove[category])
 			|| (category === 'deploy-request' && before.deployRequestCommits === 'merged' && next.deployRequestCommits === 'any')
 			|| (category === 'credentials' && before.credentialCeiling === 'requester' && next.credentialCeiling === 'approver')
+			|| (before.planBinding === 'transition' && next.planBinding === 'after-state')
 			|| (held.protected && (!after.protected || RANK[after.policy[category]] < RANK[held.policy[category]]))
 		)
 	)
