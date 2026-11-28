@@ -13,6 +13,7 @@ import {
 import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
 import {
 	type AgentWriteGate,
+	IAM_ADMIN_GRANT_MAX_LIFETIME_SECONDS,
 	IAM_BINDING_PREFIX,
 	isOAuthDeviceGrantLifetime,
 	OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS,
@@ -28,7 +29,7 @@ import { currentSession } from './auth/sessions'
 import { type PrincipalRow, principalStatus } from './db'
 import { escapeHtml } from './html'
 import { installationBrand } from './installation-brand'
-import { scopeCeiling, servesClient } from './oauth'
+import { isIamAdminResource, scopeCeiling, servesClient } from './oauth'
 import type { OAuthConfig } from './oauth-config'
 import { attemptRequest, enterUserCode, formatUserCode, normalizeUserCode, OAUTH_DEVICE_PATH, userCodeHash } from './oauth-device'
 import { assertionSchema, issueAssertionChallenge, relyingParty, verifyPasskeyAssertion } from './passkeys'
@@ -85,6 +86,9 @@ export async function handleDevicePage(request: Request, services: Services, con
 	}
 	const lifetime = Number(form?.get('lifetime'))
 	if (decision !== 'approve' || !isOAuthDeviceGrantLifetime(lifetime)) return page(services, 'Not allowed', '<p>The decision is missing.</p>', 400)
+	if (lifetime > maxLifetime(services, entry.attempt)) {
+		return page(services, 'Not allowed', '<p>Administration access lasts one hour at most.</p>', 400)
+	}
 	// An agent's grant is approved at the scope the page offered, never wider than the request (ADR-0090 §2).
 	let scopes: string | undefined
 	let passkey: PasskeyConfirmation | undefined
@@ -173,7 +177,10 @@ async function consentPage(
 		const permissions = narrowPermissions(authority.permissions, scopeCeiling(resource, request.scopes) ?? [])
 		return `<h2>${escapeHtml(resourceLabel(resource))}</h2><p class="uri">${escapeHtml(resource.resource)}</p>${permissionList(permissions)}`
 	})
-	const unbounded = request.scopes.filter((token) => resources.some((resource) => isUnbounded(resource, token)))
+	const admin = resources.some((resource) => isIamAdminResource(services, resource.resource))
+	const unbounded = request.scopes.filter((token) =>
+		resources.some((resource) => !isIamAdminResource(services, resource.resource) && isUnbounded(resource, token))
+	)
 	const warning = unbounded.length === 0
 		? ''
 		: `<p role="alert"><strong>Warning:</strong> ${
@@ -188,18 +195,36 @@ async function consentPage(
 		<strong>${new Date(attempt.created_at * 1000).toISOString()}</strong> with the code <code>${escapeHtml(formatUserCode(userCode))}</code>.
 		Allow it only if you started it yourself.</p>
 		<p>Scopes: ${request.scopes.map((token) => `<code>${escapeHtml(token)}</code>`).join(' ')}</p>
+		${admin ? ADMIN_WARNING : ''}
 		${warning}
 		<p>At most these permissions, and only while you hold them yourself:</p>
 		${sections.join('')}
 		<form method="post" action="${OAUTH_DEVICE_PATH}">
 		<input type="hidden" name="user_code" value="${escapeHtml(formatUserCode(userCode))}">
-		${decisionFields()}</form>`,
+		${decisionFields(maxLifetime(services, attempt))}</form>`,
 	)
 }
 
-/** The lifetime choices, the closing note and the two buttons every device consent ends with. */
-function decisionFields(): string {
-	const lifetimes = OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS.map((seconds, index) =>
+/**
+ * What the person reads before giving a device IAM's administration (ADR-0049 rule 2): the scope reaches the whole
+ * installation, which no other preset does.
+ */
+const ADMIN_WARNING = `<div role="alert" class="error"><div><p><strong>This gives the device full administration of identity and access
+		on this installation (<code>iam.admin</code>) for up to one hour.</strong></p>
+		<p>Acting as you, it can grant and revoke any role to anyone, invite and disable people and end their sessions, issue
+		and revoke keys, and register and remove external applications. Each call it makes is recorded under your name and
+		this grant.</p>
+		<p>Allow it only for a device you started yourself, for the task in front of you.</p></div></div>`
+
+/** The longest grant the attempt may be approved for: one hour when it reaches IAM's administration. */
+function maxLifetime(services: Services, attempt: OAuthDeviceAuthorizationRow): number {
+	const resources = attemptRequest(attempt)?.resources ?? []
+	return resources.some((uri) => isIamAdminResource(services, uri)) ? IAM_ADMIN_GRANT_MAX_LIFETIME_SECONDS : Number.POSITIVE_INFINITY
+}
+
+/** The lifetime choices up to `longest`, the closing note and the two buttons every device consent ends with. */
+function decisionFields(longest = Number.POSITIVE_INFINITY): string {
+	const lifetimes = OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS.filter((seconds) => seconds <= longest).map((seconds, index) =>
 		`<label class="choice"><input type="radio" name="lifetime" value="${seconds}"${index === 0 ? ' checked' : ''}> ${LIFETIME_LABELS[seconds]}</label>`
 	)
 	return `<fieldset><legend>Access lasts</legend>${lifetimes.join('')}</fieldset>

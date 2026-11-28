@@ -10,6 +10,8 @@ import {
 	type PermissionEntry,
 } from '@fabrika/auth-core'
 import {
+	IAM_ADMIN_GRANT_MAX_LIFETIME_SECONDS,
+	IAM_ADMIN_RPC_PATH,
 	OAUTH_DEVICE_CODE_GRANT_TYPE,
 	OAUTH_IDENTITY_SCOPE,
 	type OAuthAuthorizationRequest,
@@ -402,6 +404,13 @@ async function grantCeiling(
 	const resource = config.resources.find((entry) =>
 		entry.resource === resourceUri && entry.app === grant.app && servesClient(entry, cli ? 'cli' : 'managed')
 	)
+	// The approval page offers an administration grant one hour at most; a longer one mints nothing, however it was written.
+	if (
+		resource !== undefined && isIamAdminResource(services, resource.resource)
+		&& grant.expires_at - grant.created_at > IAM_ADMIN_GRANT_MAX_LIFETIME_SECONDS
+	) {
+		return null
+	}
 	const permissions = resource === undefined ? null : scopeCeiling(resource, scopes)
 	return permissions === null ? null : { kind: 'scoped', permissions }
 }
@@ -431,6 +440,11 @@ export async function heldIdentityRoles(
 	if (keys.length === 0) return null
 	const ends = [...held.values()].filter((until): until is number => until !== null)
 	return { keys, until: ends.length === 0 ? null : Math.min(...ends) }
+}
+
+/** Whether `resourceUri` is this IAM's own administration resource (ADR-0049 rule 2). */
+export function isIamAdminResource(services: Services, resourceUri: string): boolean {
+	return resourceUri === `${services.config.issuer}${IAM_ADMIN_RPC_PATH}`
 }
 
 function sameScopes(scopes: readonly string[], expected: readonly string[]): boolean {

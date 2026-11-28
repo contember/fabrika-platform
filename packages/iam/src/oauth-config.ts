@@ -1,4 +1,5 @@
 import {
+	iamAdminOAuthResource,
 	isHttpsDocumentUrl,
 	type OAuthManagedClient,
 	type OAuthResourceDto,
@@ -48,6 +49,19 @@ export function parseOAuthConfig(raw: string | undefined): OAuthConfig | null {
 		resources.push(resource)
 	}
 	return { resources, hosts }
+}
+
+/**
+ * The configured resources plus IAM's own administration resource for the command-line client (ADR-0049 rule 2), which
+ * IAM serves wherever it serves OAuth. A configuration that names that resource itself fails the boot.
+ */
+export function withIamAdminResource(config: OAuthConfig | null, issuer: string): OAuthConfig | null {
+	if (config === null) return null
+	const admin = iamAdminOAuthResource(issuer)
+	if (config.resources.some((resource) => resource.resource === admin.resource)) {
+		throw new Error(`OAUTH_CONFIG must not name ${admin.resource}: IAM serves its administration resource itself`)
+	}
+	return { ...config, resources: [...config.resources, admin] }
 }
 
 /**
