@@ -19,6 +19,9 @@ jobs:
   publish:
     needs: verify
     runs-on: ubuntu-latest
+    # why: npm trusted publishing is bound to this environment, which admits only `v*` tags, so a workflow edited on a
+    # branch cannot publish.
+    environment: release
     # why: the job took 6–15 minutes over the last 20 releases, most of it in release:registry-smoke, whose wait for npm
     # to serve the new tarballs may run to 30 minutes (REGISTRY_DEADLINE_MS).
     timeout-minutes: 45
