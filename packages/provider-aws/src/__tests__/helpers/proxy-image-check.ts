@@ -24,8 +24,9 @@ import { AWS_PROXY_DOCKERFILE, AWS_PROXY_MANIFEST_PATH } from '../../proxy-build
 import { awsNamespaceProxyManifest } from '../../proxy-manifest'
 
 const ROOT = resolve(import.meta.dir, '..', '..', '..', '..', '..')
-const TAG = 'fabrika-proxy-check:local'
-const CONTAINER = 'fabrika-proxy-check'
+/** Names of this run's own, so a concurrent check keeps its container and image when this one cleans up. */
+const TAG = `fabrika-proxy-check:${process.pid}`
+const CONTAINER = `fabrika-proxy-check-${process.pid}`
 /** The health listener of the recipe (`caddy.ts`'s default). */
 const HEALTH_PORT = 8081
 const HEALTH_ATTEMPTS = 30
@@ -57,9 +58,13 @@ async function run(command: readonly string[], cwd: string = ROOT): Promise<void
 	if (code !== 0) throw new Error(`${command.slice(0, 2).join(' ')} exited ${code}`)
 }
 
-/** Runs a command and answers its standard output, or null on a non-zero exit. */
-async function read(command: readonly string[]): Promise<string | null> {
-	const child = track(Bun.spawn([...command], { cwd: ROOT, stdout: 'pipe', stderr: 'ignore' }))
+/**
+ * Runs a command and answers its standard output, or null on a non-zero exit. A cleanup's command runs in a session of
+ * its own, out of the process group a further Ctrl-C reaches, and no interrupt ends it.
+ */
+async function read(command: readonly string[], cleanup = false): Promise<string | null> {
+	const spawned = Bun.spawn([...command], { cwd: ROOT, stdout: 'pipe', stderr: 'ignore', detached: cleanup })
+	const child = cleanup ? spawned : track(spawned)
 	const [code, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()])
 	return code === 0 ? stdout.trim() : null
 }
@@ -112,14 +117,14 @@ async function healthAnswers(): Promise<boolean> {
 
 /** Removes the container, the image and the build context; each removal may run again, as an interrupt repeats them. */
 async function cleanUp(context: string): Promise<void> {
-	await read(['docker', 'rm', '--force', CONTAINER])
-	await read(['docker', 'image', 'rm', TAG])
+	await read(['docker', 'rm', '--force', CONTAINER], true)
+	await read(['docker', 'image', 'rm', TAG], true)
 	await rm(context, { recursive: true, force: true })
 }
 
-/** Ends the commands in flight (a cleanup's own included), waits for them, cleans up and exits as the signal would have. */
+/** Ends the commands in flight, waits for them, cleans up and exits as the signal would have. */
 function interrupt(context: string, signal: 'SIGINT' | 'SIGTERM'): void {
-	// A second Ctrl-C would otherwise kill the cleanup halfway.
+	// One Ctrl-C arrives twice: from the terminal and from `bun run --filter`, which forwards it.
 	if (interrupted) return
 	interrupted = true
 	const children = [...inFlight]
