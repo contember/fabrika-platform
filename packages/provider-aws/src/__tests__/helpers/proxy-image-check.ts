@@ -9,11 +9,13 @@
 //   (`ldd`, `caddy validate`).
 // - The image is then started with no secrets (placeholders for what the auth service refuses to boot without). Caddy's
 //   health listener must answer, and so must the auth service on its loopback port: `start.sh`, both processes and the
-//   unprivileged user work together. The container and the image are removed afterwards.
+//   unprivileged user work together. The container and the image are removed afterwards, also when SIGINT or SIGTERM
+//   interrupts the check (a Ctrl-C in `check:ci` reaches every process of its group, this one included).
 
 import { contractDigest } from '@fabrika/auth-core'
+import type { Subprocess } from 'bun'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { constants, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { schemaFromContract } from '../../../../app/src/contract/platform'
 import { notesArtifact } from '../../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -35,16 +37,29 @@ const AUTH_PORT = 9000
  */
 const PLACEHOLDER_ENV: readonly string[] = ['FABRIKA_IAM_ISSUER=https://iam.example.com', 'FABRIKA_IAM_KEY=check-only']
 
+/** The commands in flight: an interrupt ends them before it cleans up, so an interrupted `docker run` cannot outlive the removal. */
+const inFlight = new Set<Subprocess>()
+/** Set by SIGINT or SIGTERM: the check is being cleaned up, and its failure is no failure to report. */
+let interrupted = false
+
+function track<Child extends Subprocess>(child: Child): Child {
+	inFlight.add(child)
+	void child.exited.finally(() => inFlight.delete(child))
+	return child
+}
+
 /** Runs a command at the repository root with its output shown, and fails on a non-zero exit. */
 async function run(command: readonly string[], cwd: string = ROOT): Promise<void> {
-	const child = Bun.spawn([...command], { cwd, stdout: 'inherit', stderr: 'inherit' })
+	// A step between two commands would otherwise start the next one, `docker run` included, after the cleanup.
+	if (interrupted) throw new Error('interrupted')
+	const child = track(Bun.spawn([...command], { cwd, stdout: 'inherit', stderr: 'inherit' }))
 	const code = await child.exited
 	if (code !== 0) throw new Error(`${command.slice(0, 2).join(' ')} exited ${code}`)
 }
 
 /** Runs a command and answers its standard output, or null on a non-zero exit. */
 async function read(command: readonly string[]): Promise<string | null> {
-	const child = Bun.spawn([...command], { cwd: ROOT, stdout: 'pipe', stderr: 'ignore' })
+	const child = track(Bun.spawn([...command], { cwd: ROOT, stdout: 'pipe', stderr: 'ignore' }))
 	const [code, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()])
 	return code === 0 ? stdout.trim() : null
 }
@@ -71,11 +86,11 @@ function manifest(): string {
  */
 async function authServiceAnswers(): Promise<boolean> {
 	for (let attempt = 0; attempt < HEALTH_ATTEMPTS; attempt++) {
-		const child = Bun.spawn(['docker', 'exec', CONTAINER, 'wget', '-q', '-S', '-O', '/dev/null', `http://127.0.0.1:${AUTH_PORT}/`], {
+		const child = track(Bun.spawn(['docker', 'exec', CONTAINER, 'wget', '-q', '-S', '-O', '/dev/null', `http://127.0.0.1:${AUTH_PORT}/`], {
 			cwd: ROOT,
 			stdout: 'ignore',
 			stderr: 'pipe',
-		})
+		}))
 		const [, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
 		if (/^\s*HTTP\/1\.[01] \d{3}/m.test(stderr)) return true
 		await Bun.sleep(1000)
@@ -95,8 +110,29 @@ async function healthAnswers(): Promise<boolean> {
 	return false
 }
 
+/** Removes the container, the image and the build context; each removal may run again, as an interrupt repeats them. */
+async function cleanUp(context: string): Promise<void> {
+	await read(['docker', 'rm', '--force', CONTAINER])
+	await read(['docker', 'image', 'rm', TAG])
+	await rm(context, { recursive: true, force: true })
+}
+
+/** Ends the commands in flight (a cleanup's own included), waits for them, cleans up and exits as the signal would have. */
+function interrupt(context: string, signal: 'SIGINT' | 'SIGTERM'): void {
+	// A second Ctrl-C would otherwise kill the cleanup halfway.
+	if (interrupted) return
+	interrupted = true
+	const children = [...inFlight]
+	for (const child of children) child.kill(signal)
+	void Promise.all(children.map((child) => child.exited))
+		.then(() => cleanUp(context))
+		.finally(() => process.exit(128 + constants.signals[signal]))
+}
+
 async function main(): Promise<void> {
 	const context = await mkdtemp(join(tmpdir(), 'fabrika-proxy-image-'))
+	process.on('SIGINT', () => interrupt(context, 'SIGINT'))
+	process.on('SIGTERM', () => interrupt(context, 'SIGTERM'))
 	try {
 		await run(['sh', '-c', `git archive --format=tar HEAD | tar -x -C '${context}'`])
 		const manifestPath = join(context, AWS_PROXY_MANIFEST_PATH)
@@ -119,9 +155,7 @@ async function main(): Promise<void> {
 		}
 		console.info(`proxy image: built for linux/amd64; Caddy serves its health route on :${HEALTH_PORT} and the auth service answers on :${AUTH_PORT}`)
 	} finally {
-		await read(['docker', 'rm', '--force', CONTAINER])
-		await read(['docker', 'image', 'rm', TAG])
-		await rm(context, { recursive: true, force: true })
+		await cleanUp(context)
 	}
 }
 
@@ -129,7 +163,10 @@ if (import.meta.main) {
 	try {
 		await main()
 	} catch (error) {
-		console.error(`proxy-image:check failed: ${error instanceof Error ? error.message : String(error)}`)
-		process.exit(1)
+		// After an interrupt the failure is the ended command's; the handler exits once the cleanup is done.
+		if (!interrupted) {
+			console.error(`proxy-image:check failed: ${error instanceof Error ? error.message : String(error)}`)
+			process.exit(1)
+		}
 	}
 }
