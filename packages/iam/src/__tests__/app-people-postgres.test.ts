@@ -171,3 +171,20 @@ describe.skipIf(!hasPostgres)("an application's delegated role changes on Postgr
 		expect(await recorded(f, administrator)).toBe(2)
 	})
 })
+
+describe.skipIf(!hasPostgres)('how many hold each role, on Postgres', () => {
+	test('the counts are numbers, one per role, for the application asked about only', async () => {
+		const { f, name } = await racing()
+		// Every test of this file shares one schema and `APP`, so this one counts its own environment.
+		const app = name('notes@holders')
+		expect((await f.putSchema(PEOPLE_SCHEMA, app)).status).toBe(200)
+		const administrator = await f.person(name('holders-administrator'))
+		await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: administrator.id, app, roleKey: 'administrator' })
+		for (const base of ['holders-staff-a', 'holders-staff-b']) {
+			await f.repositories.grants.createRoleGrantUnlessHeld({ principalId: (await f.person(name(base))).id, app, roleKey: 'staff' })
+		}
+		const read = await consoleRpc(f, administrator.id, 'appPeople.holders', { app })
+		expect(read.status).toBe(200)
+		expect(read.body).toEqual({ result: { app, roles: [{ role: 'administrator', holders: 1 }, { role: 'staff', holders: 2 }] } })
+	})
+})

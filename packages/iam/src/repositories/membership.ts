@@ -277,6 +277,22 @@ export class MembershipRepository {
 		return results.map((row) => row.principal_id)
 	}
 
+	/** Per role of `app`, the principals not disabled that hold it (`APP_MEMBER_GRANT`); a role nobody holds is absent. */
+	async countAppRoleHolders(app: string): Promise<{ role: string; holders: number }[]> {
+		const { results } = await this.db
+			.prepare(`SELECT g.role_key, COUNT(DISTINCT g.principal_id) AS holders
+				FROM grants g
+				JOIN principals p ON p.id = g.principal_id
+				JOIN roles r ON r.app = g.app AND r.role_key = g.role_key
+				WHERE ${APP_MEMBER_GRANT} AND p.disabled_at IS NULL
+				GROUP BY g.role_key
+				ORDER BY g.role_key`)
+			.bind(app, unixNow())
+			.all<{ role_key: string; holders: number | string }>()
+		// Postgres answers COUNT as int8, which Bun decodes as a string.
+		return results.map((row) => ({ role: row.role_key, holders: Number(row.holders) }))
+	}
+
 	/** The grants of `principalIds` that make them people of `app` (`APP_MEMBER_GRANT`), with each principal. */
 	async listAppMemberGrants(app: string, principalIds: readonly string[]): Promise<AppMemberGrantRow[]> {
 		if (principalIds.length === 0) return []

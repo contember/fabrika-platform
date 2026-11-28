@@ -150,6 +150,7 @@ const INPUTS: Record<string, unknown> = {
 	'terminals.revoke': { terminalId: 'nobody' },
 	'appPeople.apps': null,
 	'appPeople.list': { app: 'nowhere@prod' },
+	'appPeople.holders': { app: 'nowhere@prod' },
 	'appPeople.grant': { app: 'nowhere@prod', role: 'staff', email: 'nobody@example.com' },
 	'appPeople.revoke': { app: 'nowhere@prod', role: 'staff', principalId: 'nobody' },
 	'brand.get': null,

@@ -634,7 +634,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   access cannot be recorded answers 503 and does not run. A refused REST route is recorded too: a 405 under its
   template, a path that names no operation under the fixed `/admin/*`, never the raw path. An administrator is an
   installation admin or a user administrator (`administrationOf`). An RPC caller with neither reaches no procedure but
-  `appPeople.*`, and is not recorded; each change it makes there is. A mutation therefore writes two rows: the access and the
+  `appPeople.*`, and is not recorded; each change it makes there is, and so is its `appPeople.holders` read (the role
+  holder counts of one `<app>@<env>`, which an IAM administration reads where `managesApp`), which writes the same
+  access row itself after its check, once per call. A mutation therefore writes two rows: the access and the
   change. `audit.list` with `changesOnly` leaves these rows out before the page is cut, so a feed of changes is one call.
 - **RETENTION IS AN IAM SETTING, IN DAYS** (`src/retention.ts`, `Config.retention`): `AUTH_LOG_RETENTION_DAYS` (deploy
   var `FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS`, default 30) and `AUDIT_RETENTION_DAYS` (`FABRIKA_IAM_AUDIT_RETENTION_DAYS`,

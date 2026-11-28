@@ -1,11 +1,13 @@
 import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
 import { BuzolaProvider } from '@buzola/router/react'
+import type { RpcFetch } from '@fabrika/app'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { roleSummary } from '../components/AccessMap'
 import { AccessMapSection } from '../components/app-detail/AccessMapSection'
 import type { AccessMapActionDto, AccessMapDto, AccessMapRoleDto, AppEnvDto } from '../lib/api'
+import { readRoleHolders, type RoleHolders, roleHoldersTarget } from '../lib/role-holders'
 
 const EDITOR: AccessMapRoleDto = {
 	role: 'editor',
@@ -75,14 +77,14 @@ const environment = (env: string, accessMap: AccessMapDto | undefined): AppEnvDt
 })
 
 // The real route of the people page, so the link to who holds the roles resolves to the path the console serves.
-const section = (env: AppEnvDto, people = false): string =>
+const section = (env: AppEnvDto, people = false, holders: RoleHolders | null = null): string =>
 	renderToStaticMarkup(createElement(BuzolaProvider, {
 		router: new Router({
 			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
 			adapter: createMemoryNavigationAdapter(),
 			pageRegistry: { people: '/people' },
 		}),
-	}, createElement(AccessMapSection, { env, people })))
+	}, createElement(AccessMapSection, { env, people, holders })))
 
 describe('the access map in the console', () => {
 	test('a role says where it is granted, who assigns it and how many actions it holds', () => {
@@ -129,5 +131,53 @@ describe('the access map in the console', () => {
 	test('who holds the roles links to the people of that environment, for a caller who administers people', () => {
 		expect(section(environment('prod', MAP), true)).toContain('<a href="/people?app=notes%40prod">Who holds them</a>')
 		expect(section(environment('prod', MAP), false)).not.toContain('Who holds them')
+	})
+
+	test('each role says how many hold it when IAM counted them, and nothing about holders when it did not', () => {
+		const html = section(environment('prod', MAP), true, new Map([['editor', 3]]))
+		expect(html).toContain('<span class="muted">3 holders</span>')
+		expect(html).toContain('<span class="muted">no holders</span>')
+		expect(section(environment('prod', MAP), true, new Map([['editor', 1], ['admin', 2]]))).toContain('<span class="muted">1 holder</span>')
+		expect(section(environment('prod', MAP), true)).not.toContain('holder')
+	})
+})
+
+describe('reading the holders of each role', () => {
+	const calls: unknown[] = []
+	const answering = (response: () => Response): RpcFetch => async (_input, init) => {
+		calls.push(typeof init?.body === 'string' ? JSON.parse(init.body) : null)
+		return response()
+	}
+
+	test('one IAM read answers every role of the environment', async () => {
+		calls.length = 0
+		const holders = await readRoleHolders(
+			'notes@prod',
+			answering(() => Response.json({ result: { app: 'notes@prod', roles: [{ role: 'editor', holders: 3 }, { role: 'admin', holders: 1 }] } })),
+		)
+		expect(holders === null ? null : [...holders]).toEqual([['editor', 3], ['admin', 1]])
+		expect(calls).toEqual([{ method: 'appPeople.holders', input: { app: 'notes@prod' } }])
+	})
+
+	test('is null when IAM refuses or is down, so the roles show without counts', async () => {
+		const notFound = () => Response.json({ error: { type: 'not_found', message: 'no application whose people you administer' } }, { status: 404 })
+		expect(await readRoleHolders('notes@prod', answering(notFound))).toBeNull()
+		expect(await readRoleHolders('notes@prod', answering(() => new Response('down', { status: 503 })))).toBeNull()
+	})
+
+	test('the Access tab reads counts only for one of the application environments, and only for a caller who may see them', () => {
+		const target = (over: Partial<Parameters<typeof roleHoldersTarget>[0]>) =>
+			roleHoldersTarget({ appId: 'notes', env: 'prod', envs: ['prod', 'stage'], iam: false, peopleApps: [], ...over })
+		expect(target({})).toBeNull()
+		expect(target({ peopleApps: ['notes@stage'] })).toBeNull()
+		expect(target({ peopleApps: ['notes@prod'] })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'installation' } })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'users', apps: null } })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'users', apps: ['notes@prod'] } })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'users', apps: ['notes@stage'] } })).toBeNull()
+		expect(target({ iam: { kind: 'users', apps: ['notes@stage'] }, peopleApps: ['notes@prod'] })).toBe('notes@prod')
+		// IAM's `me` did not answer: ask, and IAM decides.
+		expect(target({ iam: null })).toBe('notes@prod')
+		expect(target({ iam: { kind: 'installation' }, env: 'dev' })).toBeNull()
 	})
 })
